@@ -7,7 +7,7 @@ from app.execution import Execution, guard, guard_company
 from app.identity import Identity, assert_access, owned
 from app.sources import read_source, validate_refs
 from app.tasks import _revision, current_in
-from app.values import digest, jsonb, uid
+from app.values import INVOICE_ID_PATTERN, digest, jsonb, uid
 
 
 def _validate_patch(patch: dict) -> None:
@@ -193,7 +193,7 @@ def update_invoice(
                 )
             _validate_target_scope(conn, auth, source, company_id, execution)
             mentioned_ids = set(
-                re.findall(r"(?<![A-Za-z0-9])F[0-9]{3}(?![0-9])", source["content"])
+                re.findall(rf"(?<![A-Za-z0-9]){INVOICE_ID_PATTERN}(?![0-9])", source["content"])
             )
             if mentioned_ids and invoice_id not in mentioned_ids:
                 raise AppError("NEEDS_CLARIFICATION", "修改票号与本轮用户明确指令不一致。", 422)

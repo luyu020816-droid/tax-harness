@@ -112,6 +112,22 @@ class ToolExecutor:
 
     def _dispatch(self, execution, name, args):
         db, auth = self.db, execution.auth
+        if name in ("prepare_invoice_import", "get_invoice_import"):
+            execution.import_context = True
+        if name in ("update_invoice", "change_task") or (
+            name == "manage_preference" and args.get("action") != "list"
+        ):
+            with db.transaction(readonly=True) as conn:
+                attached = conn.execute(
+                    "SELECT cardinality(upload_ids)>0 AS attached FROM turns WHERE turn_id=%s",
+                    (execution.turn_id,),
+                ).fetchone()["attached"]
+            if attached or execution.import_context:
+                raise AppError(
+                    "NEEDS_CLARIFICATION",
+                    "附件办理轮次只允许预览、查询和界面确认追加。请在单独消息中明确修改任务、偏好或既有发票。",
+                    409,
+                )
         if name == "query_month":
             return business.query_month(db, auth, **args)
         if name == "find_invoices":
@@ -151,16 +167,27 @@ class ToolExecutor:
                 execution=execution,
                 request_id=f"tool:{execution.source_id}:{digest(args)}",
             )
+        if name == "prepare_invoice_import":
+            from app.invoice_imports import InvoiceImports
+
+            return InvoiceImports(db).prepare(execution, **args)
+        if name == "get_invoice_import":
+            from app.invoice_imports import InvoiceImports
+
+            return InvoiceImports(db).get(auth, args["batch_id"], args.get("cursor", 0))
         return memory.search_history(db, auth, **args)
 
     def _record(self, execution, call_id, name, arguments, output):
         with self.db.transaction() as conn:
             guard(conn, execution)
             companies = []
-            if arguments.get("company_id"):
+            result_company = arguments.get("company_id") or (output.get("data") or {}).get(
+                "company_id"
+            )
+            if result_company:
                 try:
-                    assert_access(conn, execution.auth, arguments["company_id"])
-                    companies = [arguments["company_id"]]
+                    assert_access(conn, execution.auth, result_company)
+                    companies = [result_company]
                 except AppError:
                     pass
             source = add_source(

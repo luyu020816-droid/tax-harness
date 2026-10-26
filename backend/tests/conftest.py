@@ -13,7 +13,9 @@ from app.values import uid
 
 @pytest.fixture(scope="session")
 def settings():
-    result = Settings()
+    from app.config import ROOT
+
+    result = Settings(_env_file=ROOT / ".env")
     if not result.test_database_url or "tax_harness_test" not in result.test_database_url:
         pytest.fail("Configure the isolated tax_harness_test database before running tests.")
     initialize(result, test=True)
@@ -95,3 +97,46 @@ def execution_factory(db, source_factory):
         )
 
     return create
+
+
+@pytest.fixture(scope="session")
+def extended_settings():
+    from app.config import ROOT
+
+    config = Settings(_env_file=ROOT / ".env.extended")
+    if "tax_harness_extended_test" not in config.test_database_url:
+        pytest.fail("Run python -m app.cli init-extended before extension tests.")
+    return config.model_copy(
+        update={
+            "database_url": config.test_database_url,
+            "ingest_database_url": make_conninfo(
+                config.ingest_database_url, dbname="tax_harness_extended_test"
+            ),
+        }
+    )
+
+
+@pytest.fixture
+def extended_admin(extended_settings):
+    with psycopg.connect(
+        make_conninfo(extended_settings.admin_database_url, dbname="tax_harness_extended_test"),
+        row_factory=dict_row,
+        autocommit=True,
+    ) as conn:
+        conn.execute("TRUNCATE users,companies,import_batches,rule_versions CASCADE")
+        yield conn
+
+
+@pytest.fixture
+def extended(extended_settings, extended_admin):
+    from app.invoice_imports import InvoiceImports
+
+    initialize(extended_settings, test=True, extended=True)
+    db = Database(extended_settings.database_url)
+    ingest = Database(extended_settings.ingest_database_url)
+    db.open()
+    ingest.open()
+    service = InvoiceImports(db, ingest)
+    yield service
+    db.close()
+    ingest.close()

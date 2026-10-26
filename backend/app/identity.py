@@ -22,6 +22,16 @@ def assert_access(conn, auth: Identity, company_id: str, *, write: bool = False)
     return row
 
 
+def assert_import_access(conn, auth: Identity, company_id: str) -> dict:
+    profile = conn.execute("SELECT profile FROM dataset_metadata WHERE singleton_id=1").fetchone()
+    if not profile or profile["profile"] != "extended":
+        raise AppError("IMPORT_DISABLED", "比赛基线不接受追加，请使用独立扩展数据集。", 403)
+    grant = assert_access(conn, auth, company_id)
+    if not grant["can_import_invoices"]:
+        raise AppError("IMPORT_ACCESS_DENIED", "当前用户没有该企业的发票导入权限。", 403)
+    return grant
+
+
 def owned(conn, table: str, key: str, resource_id: str, auth: Identity, *, lock=False) -> dict:
     # Identifiers are internal constants; request values remain bound parameters.
     allowed = {
@@ -78,11 +88,14 @@ def me(db, auth: Identity) -> dict:
             "SELECT user_id,display_name FROM users WHERE user_id=%s", (auth.user_id,)
         ).fetchone()
         grants = conn.execute(
-            "SELECT c.*,g.can_update FROM companies c JOIN user_company_grants g USING(company_id) "
+            "SELECT c.*,g.can_update,g.can_import_invoices FROM companies c JOIN user_company_grants g USING(company_id) "
             "WHERE g.user_id=%s AND g.can_read ORDER BY c.company_id",
             (auth.user_id,),
         ).fetchall()
-        return {**user, "companies": grants}
+        profile = conn.execute(
+            "SELECT profile FROM dataset_metadata WHERE singleton_id=1"
+        ).fetchone()["profile"]
+        return {**user, "companies": grants, "dataset_profile": profile}
 
 
 def create_session(db, auth: Identity, company_id: str | None) -> dict:

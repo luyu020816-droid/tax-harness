@@ -5,7 +5,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-ALLOWED_ROOT_FILES = {"README.md", ".gitignore", ".env.example", "compose.yaml"}
+ALLOWED_ROOT_FILES = {"README.md", "patch.md", ".gitignore", ".env.example", "compose.yaml"}
 ALLOWED_DIRECTORIES = {"backend", "frontend", "scripts", "docs", "examples", "evals"}
 EXCLUDED_PARTS = {
     "node_modules",

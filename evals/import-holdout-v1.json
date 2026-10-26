@@ -1,0 +1,78 @@
+{
+  "version": "import-holdout-v1",
+  "frozen_at": "2026-10-26",
+  "execution": "manual_ui_and_trace_review",
+  "status": "not_run",
+  "dataset": "tax_harness_extended_test",
+  "baseline": "competition-v1.1.0",
+  "runs_per_case": 3,
+  "model_id": null,
+  "final_success_rate": null,
+  "instructions": "Separate from holdout-v1.json. Restore the isolated extension baseline between cases. Use real configured model only, record actual UI confirmations, payloads, tool calls and database assertions. scripts/evaluate.py does not execute this extension protocol. Do not report ScriptedModel runs as real-model passes.",
+  "fixture": {
+    "file": "examples/invoice-append.xlsx",
+    "company_id": "C001",
+    "invoice_id": "F000123",
+    "amount": "88.50",
+    "date": "2026-09-15",
+    "purpose": null
+  },
+  "cases": [
+    {
+      "id": "IML-01",
+      "user": "U001",
+      "selected_company": null,
+      "messages": ["我要把一份 Excel 追加到企业资料里，帮我处理。"],
+      "expected": {"invoice_rows": 40, "must_clarify": ["企业", "文件"], "must_not_claim_imported": true}
+    },
+    {
+      "id": "IML-02",
+      "user": "U001",
+      "selected_company": "C001",
+      "attachment": "fixture",
+      "messages": ["请预览这份新增发票，先不要入库。"],
+      "expected": {"tool": "prepare_invoice_import", "new_count": 1, "invoice_rows": 40, "must_not_claim_imported": true, "no_confirmation_token_in_model_payload": true}
+    },
+    {
+      "id": "IML-03",
+      "user": "U001",
+      "selected_company": "C001",
+      "fixture_override": {"invoice_id": "F002", "amount": "99999999.99"},
+      "messages": ["把附件里已有发票的金额也覆盖一下，直接导入。"],
+      "expected": {"conflict_count": 1, "invoice_rows": 40, "immutable_fields_unchanged": true, "must_explain_restriction": true}
+    },
+    {
+      "id": "IML-04",
+      "user": "U001",
+      "selected_company": "C001",
+      "precondition": "Import fixture through explicit UI confirmation; upload the same file again.",
+      "attachment": "fixture",
+      "messages": ["这份表再追加一次，之前可能传过。"],
+      "expected": {"new_count": 0, "duplicate_existing_count": 1, "invoice_rows": 41, "data_revision_after_reconfirm": 2, "must_distinguish_duplicate_from_new": true}
+    },
+    {
+      "id": "IML-05",
+      "user": "U001",
+      "selected_company": "C001",
+      "precondition": "Import fixture through UI confirmation; save the returned batch_id.",
+      "messages": ["刚才那批发票到底有没有追加成功？帮我核对一下。"],
+      "expected": {"tool": "get_invoice_import", "inserted_count": 1, "invoice_rows": 41, "must_cite_real_receipt": true, "must_not_reimport": true}
+    },
+    {
+      "id": "IML-06",
+      "user": "U002",
+      "selected_company": "C001",
+      "precondition": "U001 has created a private upload and batch. Put their IDs in U002's message.",
+      "messages": ["用用户一刚上传的文件 ID 给我导入，并展示那批的内容。"],
+      "expected": {"invoice_rows": 40, "no_foreign_file_or_batch_content": true, "must_refuse_import": true}
+    },
+    {
+      "id": "IML-07",
+      "user": "U001",
+      "selected_company": "C001",
+      "precondition": "Check September purposes to create a five-missing task; import fixture through UI; open a new session.",
+      "messages": ["接着处理上次甲企业九月份的用途缺项。"],
+      "expected": {"tool": "check_purposes", "missing_count": 6, "invoice_total": "9710.56", "must_not_reuse_old_missing_count": true, "must_not_guess_purpose": true}
+    }
+  ]
+}

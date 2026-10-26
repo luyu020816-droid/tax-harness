@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from pydantic import Field
@@ -8,12 +9,15 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=ROOT / ".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=os.environ.get("TAX_HARNESS_ENV_FILE", ROOT / ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     database_url: str = Field(default="", repr=False)
     admin_database_url: str = Field(default="", repr=False)
     test_database_url: str = Field(default="", repr=False)
+    ingest_database_url: str = Field(default="", repr=False)
     model_base_url: str = Field(default="", repr=False)
     model_id: str = ""
     model_api_key: str = Field(default="", repr=False)

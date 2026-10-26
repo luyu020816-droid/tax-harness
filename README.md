@@ -8,7 +8,7 @@
 
 ## 当前状态
 
-已实现数据库及工具、任务/偏好管理、上下文预算与摘要、安全保存、租约恢复、规则 CLI、工作台和追溯界面。验证记录见 [实施记录](docs/IMPLEMENTATION.md) 与 [测试报告](docs/TEST_REPORT.md)。
+已实现数据库及工具、任务/偏好管理、上下文预算与摘要、安全保存、租约恢复、规则 CLI、工作台和追溯界面，以及独立扩展实例中的 Excel 发票追加。验证记录见 [实施记录](docs/IMPLEMENTATION.md)、[测试报告](docs/TEST_REPORT.md) 与 [追加功能验证](docs/PATCH001_TEST_REPORT.md)。
 
 **模型凭据尚未配置。** 程序测试使用明确标记的 ScriptedModel，并不代表真实模型理解质量或比赛成功率。真实模型 40 例 × 3 次、完整故障矩阵、正式模型演示录屏仍是提交前验收项，不能把当前工程称为已全部验收。
 
@@ -63,7 +63,26 @@ MODEL_EXTRA_BODY={}
 | `.local/postgres/data` | 本机数据库；不进入源码包 |
 | `.local/evidence` | 本地测试证据；不默认公开 |
 
-金额使用 Decimal/NUMERIC；发票唯一键是企业与发票号组合。运行数据库角色只具有 `purpose`、`note`、`revision` 的发票更新权限，银行表无写权限。实际修改记录保存在 operations；Excel 只用于显式初始化。
+金额使用 Decimal/NUMERIC；发票唯一键是企业与发票号组合。运行数据库角色只具有 `purpose`、`note`、`revision` 的发票更新权限，银行表无写权限。实际修改记录保存在 operations。比赛实例的 Excel 只用于显式初始化；扩展实例通过独立入库角色追加新发票。
+
+## Excel 发票追加（独立扩展实例）
+
+比赛基线继续使用 `.env` 与 `tax_harness`。追加功能使用物理隔离的 `tax_harness_extended`，测试使用 `tax_harness_extended_test`；前端没有把比赛实例改成扩展模式的开关。
+
+```powershell
+# 仅首次创建，不覆盖已有配置或数据库
+.\.venv\Scripts\python.exe -m app.cli init-extended
+# 在另一终端启动，原比赛实例可继续使用 8100
+.\scripts\start.ps1 -EnvFile .env.extended -Port 8102
+```
+
+已有工程升级须先停止应用并做一致备份，再执行 `.\.venv\Scripts\python.exe -m app.cli init`，应用迁移 003；已有比赛数据不会重新导入。扩展实例已创建时也需要升级，可先设置 `$env:TAX_HARNESS_ENV_FILE='.env.extended'` 后执行同一命令；完成后移除该环境变量。初始化扩展实例时默认只授予 U001 甲、乙企业导入权限，U002 保持只读。
+
+打开 `http://127.0.0.1:8102`，选择企业，点击输入区附件图标。使用 [示例模板](examples/invoice-append.xlsx) 或界面下载模板，按“上传 → 预览 → 明确确认 → 回执”追加；运行记录中的“数据导入”可以核对已有批次。文件上限 5 MiB、单批最多 2000 行、单企业；仅接受标准 `.xlsx` 模板。不会覆盖已有金额、日期、用途、备注或银行记录。错误或冲突默认阻止确认；可明确选择跳过后重新预览。
+
+模型未连接时上述流程仍可操作。配置模型后可携带附件发送消息，由 `prepare_invoice_import` 生成预览，最终入库仍由用户在界面确认。完整文件和行回执在数据库保存，模型只接收受控元信息与分页明细。追加会使旧企业查询/任务快照过期，后续需要重新检查。详细契约见 [patch.md](patch.md)。
+
+`.env.extended` 包含独立数据库凭据，已被 Git 排除。它在首次初始化时复制模型配置；后续修改 `.env` 不会自动同步，需按实际启动实例本地配置并重启。
 
 规则维护需要本机管理员入口：
 
@@ -83,14 +102,16 @@ MODEL_EXTRA_BODY={}
 .\scripts\test.ps1
 ```
 
-后端测试只使用 `tax_harness_test`，会清空并重建该隔离库的模拟数据。不要把 TEST_DATABASE_URL 指向业务库。测试包含真实 PostgreSQL 的权限、金额、事务、来源、版本和恢复断言；ScriptedModel 只验证程序循环。
+首次运行全量测试前先执行 `init-extended`。后端测试只使用 `tax_harness_test` 和 `tax_harness_extended_test`，会清空并重建这两个隔离库的模拟数据。不要把 TEST_DATABASE_URL 指向业务库。测试包含真实 PostgreSQL 的权限、金额、事务、来源、版本和恢复断言；ScriptedModel 只验证程序循环。
 
 真实 Chrome 浏览器验收使用独立测试服务：
 
 ```powershell
 # 终端一：会重置隔离测试库；不要与 pytest 同时执行
 .\.venv\Scripts\python.exe backend/tests/ui_server.py
-# 终端二
+# 终端二：追加功能的隔离测试服务（同样会重置对应测试库）
+.\.venv\Scripts\python.exe backend/tests/import_ui_server.py
+# 终端三
 cd frontend
 npm run test:ui
 ```
@@ -108,6 +129,8 @@ npm run test:ui
 ```
 
 备份使用 PostgreSQL 导出的同一事务快照，包含正式数据、来源、修订、删除代次、操作账本、规则与处理水位；记录恢复点、表计数/校验与 dump 哈希。checkpoint 是独立状态核对回执，应另存到可靠位置；它不能代替数据副本，也不能由待恢复的旧备份生成来冒充最新回执。
+
+扩展实例备份/恢复前设置 `$env:TAX_HARNESS_ENV_FILE='D:\tax-harness\.env.extended'`，完成后移除该环境变量。`--test` 根据该配置的 TEST_DATABASE_URL 选择白名单隔离库；不要同时运行对应测试服务或 pytest。
 
 恢复前写维护标记，拒绝其他活动连接。恢复后分别核对备份恢复点和外部回执，只有两者都匹配才开放。旧备份缺少后来的更正/删除时返回 RECOVERY_POINT_BEHIND，并保持 API 与 worker 关闭；需要可靠日志/更新副本补齐后再核对，不应删除维护标记来冒称恢复完成。没有承诺单机磁盘损毁后的最新数据零丢失。隔离恢复演练添加 `--test`。
 

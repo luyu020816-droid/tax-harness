@@ -7,7 +7,7 @@ from pathlib import Path
 from app import recovery
 from app.config import Settings
 from app.errors import AppError
-from psycopg.conninfo import make_conninfo
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 
 def main():
@@ -18,11 +18,12 @@ def main():
     parser.add_argument("--expect-checkpoint", type=Path)
     args = parser.parse_args()
     settings = Settings()
-    dsn = (
-        make_conninfo(settings.admin_database_url, dbname="tax_harness_test")
-        if args.test
-        else settings.admin_database_url
-    )
+    dsn = settings.admin_database_url
+    if args.test:
+        target = conninfo_to_dict(settings.test_database_url).get("dbname")
+        if target not in ("tax_harness_test", "tax_harness_extended_test"):
+            parser.error("--test requires an explicitly allowed isolated test database")
+        dsn = make_conninfo(settings.admin_database_url, dbname=target)
     try:
         if args.action == "backup":
             result = recovery.backup(dsn, args.path)

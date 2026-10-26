@@ -1,7 +1,8 @@
-param([int]$Port = 8100, [switch]$SkipDatabaseStart)
+param([int]$Port = 8100, [switch]$SkipDatabaseStart, [string]$EnvFile = '.env')
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $projectRoot
+$env:TAX_HARNESS_ENV_FILE = Join-Path $projectRoot $EnvFile
 $projectPython = Join-Path $projectRoot '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $projectPython)) { throw 'Run scripts/setup.ps1 first.' }
 if (-not $SkipDatabaseStart -and (Test-Path -LiteralPath '.tools\pgsql\bin\pg_ctl.exe')) {

@@ -16,3 +16,6 @@ artifacts/private/
 *.egg-info/
 frontend/test-results/
 frontend/playwright-report/
+
+.env.*
+!.env.example

@@ -28,7 +28,7 @@ def configure(root: Path = ROOT) -> None:
         f"DATABASE_URL=postgresql://tax_app:{quote(runtime_password)}@127.0.0.1:54337/tax_harness\n"
         f"TEST_DATABASE_URL=postgresql://tax_app:{quote(runtime_password)}@127.0.0.1:54337/tax_harness_test\n"
         "MODEL_BASE_URL=\nMODEL_ID=\nMODEL_API_KEY=\nMODEL_CONTEXT_LIMIT=0\n"
-        "MODEL_EXTRA_BODY={}\nTOKEN_COUNTER=conservative_utf8\nOUTPUT_RESERVE=2048\n"
+        "INGEST_DATABASE_URL=\nMODEL_EXTRA_BODY={}\nTOKEN_COUNTER=conservative_utf8\nOUTPUT_RESERVE=2048\n"
         "INPUT_BUDGET=16000\nMAX_MODEL_STEPS=8\nMAX_TOOL_CALLS=16\nTURN_TIMEOUT=180\nDEMO_MODE=true\n"
     )
     path.write_text(text, encoding="utf-8")
@@ -53,6 +53,9 @@ def _grant_runtime(conn, settings: Settings) -> None:
     conn.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(role))
     conn.execute(sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA public TO {}").format(role))
     tables = [
+        "file_uploads",
+        "invoice_import_batches",
+        "invoice_import_rows",
         "login_sessions",
         "sessions",
         "turns",
@@ -83,16 +86,79 @@ def _grant_runtime(conn, settings: Settings) -> None:
         )
     )
     conn.execute(sql.SQL("GRANT DELETE ON history_index TO {}").format(role))
+    conn.execute(sql.SQL("GRANT DELETE ON invoice_import_rows TO {}").format(role))
     conn.execute(sql.SQL("GRANT UPDATE(next_source_seq,memory_epoch) ON users TO {}").format(role))
     conn.execute(sql.SQL("GRANT UPDATE(data_revision) ON company_heads TO {}").format(role))
     conn.execute(sql.SQL("GRANT UPDATE(purpose,note,revision) ON invoices TO {}").format(role))
 
 
-def initialize(settings: Settings, *, test=False) -> dict:
+def _grant_ingest(conn, settings):
+    if not settings.ingest_database_url:
+        return
+    if (
+        conn.execute("SELECT profile FROM dataset_metadata WHERE singleton_id=1").fetchone()[
+            "profile"
+        ]
+        != "extended"
+    ):
+        raise AppError("IMPORT_DISABLED", "专用入库角色只能在扩展库授权。", 403)
+    details = conninfo_to_dict(settings.ingest_database_url)
+    role = sql.Identifier(details["user"])
+    if not conn.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (details["user"],)).fetchone():
+        conn.execute(
+            sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+                role, sql.Literal(details["password"])
+            )
+        )
+    conn.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(role))
+    reads = [
+        "dataset_metadata",
+        "invoices",
+        "users",
+        "companies",
+        "user_company_grants",
+        "company_heads",
+        "sessions",
+        "file_uploads",
+        "invoice_import_batches",
+        "invoice_import_rows",
+        "memory_change_ops",
+        "sources",
+        "source_assessments",
+        "source_progress",
+        "summaries",
+    ]
+    conn.execute(
+        sql.SQL("GRANT SELECT ON {} TO {}").format(
+            sql.SQL(",").join(map(sql.Identifier, reads)), role
+        )
+    )
+    conn.execute(
+        sql.SQL(
+            "GRANT INSERT ON invoices,sources,source_scopes,source_assessments,source_progress,history_index,memory_change_ops TO {}"
+        ).format(role)
+    )
+    conn.execute(
+        sql.SQL(
+            "GRANT UPDATE ON invoice_import_batches,source_assessments,source_progress,summaries TO {}"
+        ).format(role)
+    )
+    conn.execute(sql.SQL("GRANT UPDATE(next_source_seq,memory_epoch) ON users TO {}").format(role))
+    conn.execute(sql.SQL("GRANT UPDATE(data_revision) ON company_heads TO {}").format(role))
+    conn.execute(sql.SQL("GRANT UPDATE ON memory_change_ops TO {}").format(role))
+
+
+def initialize(settings: Settings, *, test=False, extended=False) -> dict:
     admin = settings.admin_database_url
     if not admin:
         raise AppError("CONFIGURATION_REQUIRED", "先运行 configure 生成本地数据库配置。")
-    database = "tax_harness_test" if test else conninfo_to_dict(admin)["dbname"]
+    database = (
+        conninfo_to_dict(settings.test_database_url)["dbname"]
+        if test
+        else conninfo_to_dict(admin)["dbname"]
+    )
+    if test and database not in ("tax_harness_test", "tax_harness_extended_test"):
+        raise AppError("INVALID_ARGUMENT", "只允许初始化命名隔离测试库。")
     if test:
         with psycopg.connect(make_conninfo(admin, dbname="postgres"), autocommit=True) as conn:
             if not conn.execute(
@@ -116,8 +182,79 @@ def initialize(settings: Settings, *, test=False) -> dict:
         result = import_samples(
             conn, materials / "02_示例数据.xlsx", materials / "03_业务规则.docx"
         )
+        if extended:
+            if database not in ("tax_harness_extended", "tax_harness_extended_test"):
+                raise AppError("IMPORT_DISABLED", "不能将比赛库改为扩展模式。", 403)
+            conn.execute("UPDATE dataset_metadata SET profile='extended' WHERE singleton_id=1")
+            conn.execute(
+                "UPDATE user_company_grants SET can_import_invoices=true WHERE user_id='U001'"
+            )
         _grant_runtime(conn, settings)
+        if settings.ingest_database_url:
+            _grant_ingest(conn, settings)
         return {"database": database, "import": result}
+
+
+def initialize_extended(settings):
+    from dotenv import dotenv_values
+
+    path = ROOT / ".env.extended"
+    if path.exists():
+        raise AppError(
+            "CONFIGURATION_EXISTS", ".env.extended 已存在，未覆盖配置或已有数据库。", 409
+        )
+    with psycopg.connect(
+        make_conninfo(settings.admin_database_url, dbname="postgres"), autocommit=True
+    ) as conn:
+        if conn.execute(
+            "SELECT 1 FROM pg_database WHERE datname=ANY(%s)",
+            (["tax_harness_extended", "tax_harness_extended_test"],),
+        ).fetchone():
+            raise AppError("DATABASE_EXISTS", "扩展库已存在，未执行覆盖或重置。", 409)
+        conn.execute("CREATE DATABASE tax_harness_extended")
+        conn.execute("CREATE DATABASE tax_harness_extended_test")
+    app_password, ingest_password = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
+    connection = conninfo_to_dict(settings.admin_database_url)
+    host, port = connection.get("host", "127.0.0.1"), connection.get("port", "54337")
+
+    def url(user, password, database):
+        return f"postgresql://{quote(user)}:{quote(password)}@{host}:{port}/{database}"
+
+    app_url = url("tax_app_extended", app_password, "tax_harness_extended")
+    ingest_url = url("tax_ingest", ingest_password, "tax_harness_extended")
+    config = {
+        k: v for k, v in dotenv_values(Settings.model_config["env_file"]).items() if v is not None
+    }
+    config.update(
+        ADMIN_DATABASE_URL=make_conninfo(
+            settings.admin_database_url, dbname="tax_harness_extended"
+        ),
+        DATABASE_URL=app_url,
+        TEST_DATABASE_URL=url("tax_app_extended", app_password, "tax_harness_extended_test"),
+        INGEST_DATABASE_URL=ingest_url,
+    )
+    extended_settings = settings.model_copy(
+        update={
+            "admin_database_url": config["ADMIN_DATABASE_URL"],
+            "database_url": app_url,
+            "test_database_url": config["TEST_DATABASE_URL"],
+            "ingest_database_url": ingest_url,
+        }
+    )
+    initialize(extended_settings, extended=True)
+    initialize(extended_settings, test=True, extended=True)
+    # Quote all values for dotenv without expanding or printing their contents.
+    path.write_text(
+        "".join(
+            f"{key}={json.dumps(value, ensure_ascii=False)}\n" for key, value in config.items()
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "database": "tax_harness_extended",
+        "test_database": "tax_harness_extended_test",
+        "configuration": str(path),
+    }
 
 
 def rules_command(args, settings: Settings):
@@ -145,6 +282,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Tax Harness local administration")
     subs = parser.add_subparsers(dest="command", required=True)
     subs.add_parser("configure")
+    subs.add_parser("init-extended")
     init = subs.add_parser("init")
     init.add_argument("--test", action="store_true")
     r = subs.add_parser("rules").add_subparsers(dest="rule_action", required=True)
@@ -161,11 +299,14 @@ def main() -> None:
         configure()
         return
     try:
-        result = (
-            initialize(Settings(), test=args.test)
-            if args.command == "init"
-            else rules_command(args, Settings())
-        )
+        if args.command == "init-extended":
+            result = initialize_extended(Settings())
+        else:
+            result = (
+                initialize(Settings(), test=args.test)
+                if args.command == "init"
+                else rules_command(args, Settings())
+            )
         print(json.dumps(safe_json(result), ensure_ascii=False, indent=2))
     except AppError as exc:
         print(json.dumps(exc.as_dict(), ensure_ascii=False))

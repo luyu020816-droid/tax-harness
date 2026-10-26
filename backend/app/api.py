@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 from uuid import UUID
@@ -7,13 +8,16 @@ import psycopg
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from psycopg.conninfo import conninfo_to_dict
 from pydantic import Field
 
 from app import business, identity, preferences, rules, tasks, trace, turns
+from app.api_imports import UploadBodyLimit, import_router
 from app.config import ROOT, Settings
 from app.db import Database
 from app.errors import AppError
 from app.identity import Identity
+from app.invoice_imports import InvoiceImports
 from app.model import HttpModel
 from app.runtime import Runtime
 from app.tool_schemas import StrictModel
@@ -31,6 +35,7 @@ class SessionBody(StrictModel):
 class TurnBody(StrictModel):
     client_request_id: str = Field(min_length=1, max_length=200)
     text: str = Field(min_length=1, max_length=16000)
+    upload_ids: list[UUID] = Field(default_factory=list, max_length=1)
 
 
 class ControlBody(StrictModel):
@@ -57,17 +62,31 @@ class ViewBody(StrictModel):
     event_seq: int = Field(ge=1)
 
 
-def create_app(settings=None, db=None, model=None, *, start_workers=True) -> FastAPI:
+def create_app(
+    settings=None, db=None, model=None, *, start_workers=True, ingest_db=None
+) -> FastAPI:
     settings = settings or Settings()
     own_database = db is None
     db = db or Database(settings.database_url)
     model = model or HttpModel(settings)
     runtime = Runtime(db, settings, model)
+    own_ingest = ingest_db is None and bool(settings.ingest_database_url)
+    ingest_db = ingest_db or (Database(settings.ingest_database_url) if own_ingest else None)
+    imports = InvoiceImports(db, ingest_db)
+    connection = conninfo_to_dict(settings.database_url)
+    database_name = connection.get("dbname", "")
+    # Cookies are shared across localhost ports. Keep independent instances isolated.
+    cookie_name = "tax_session"
+    if database_name not in ("tax_harness", "tax_harness_test"):
+        instance = "|".join(connection.get(key, "") for key in ("host", "port", "dbname"))
+        cookie_name += "_" + hashlib.sha256(instance.encode()).hexdigest()[:12]
 
     @asynccontextmanager
     async def lifespan(app):
         if own_database:
             db.open()
+        if own_ingest:
+            ingest_db.open()
         if start_workers:
             await runtime.start()
         try:
@@ -77,14 +96,19 @@ def create_app(settings=None, db=None, model=None, *, start_workers=True) -> Fas
                 await runtime.stop()
             if own_database:
                 db.close()
+            if own_ingest:
+                ingest_db.close()
 
     app = FastAPI(title="财税连续办理助手", version="0.1.0", lifespan=lifespan)
     app.state.db, app.state.runtime, app.state.settings = db, runtime, settings
 
     def auth(request: Request) -> Identity:
-        return identity.authenticate(db, request.cookies.get("tax_session"))
+        return identity.authenticate(db, request.cookies.get(cookie_name))
 
     auth_dependency = Depends(auth)
+    app.include_router(import_router(imports, auth_dependency))
+    app.add_middleware(UploadBodyLimit)
+    app.state.imports = imports
 
     @app.middleware("http")
     async def same_origin(request, call_next):
@@ -144,6 +168,7 @@ def create_app(settings=None, db=None, model=None, *, start_workers=True) -> Fas
                 "model": settings.model_configured,
                 "model_mode": model.mode,
                 "maintenance": maintenance,
+                "invoice_import_ready": imports.available(),
             },
             status_code=200 if database_ready and not maintenance else 503,
         )
@@ -163,7 +188,7 @@ def create_app(settings=None, db=None, model=None, *, start_workers=True) -> Fas
             raise AppError("ACCESS_DENIED", "模拟登录已关闭。", 403)
         response = JSONResponse({"user_id": body.user_id})
         response.set_cookie(
-            "tax_session",
+            cookie_name,
             identity.login(db, body.user_id),
             httponly=True,
             secure=settings.cookie_secure,
@@ -178,6 +203,7 @@ def create_app(settings=None, db=None, model=None, *, start_workers=True) -> Fas
             **identity.me(db, current),
             "model_ready": settings.model_configured,
             "model_mode": model.mode,
+            "invoice_import_ready": imports.available(),
         }
 
     @app.get("/api/v1/sessions")
@@ -203,7 +229,14 @@ def create_app(settings=None, db=None, model=None, *, start_workers=True) -> Fas
         for secret in (settings.model_api_key, urlparse(settings.database_url).password):
             if secret and len(secret) >= 8 and secret in body.text:
                 raise AppError("INVALID_ARGUMENT", "消息包含本地配置凭据，请移除后发送。")
-        result = turns.accept_turn(db, current, str(session_id), body.client_request_id, body.text)
+        result = turns.accept_turn(
+            db,
+            current,
+            str(session_id),
+            body.client_request_id,
+            body.text,
+            upload_ids=[str(x) for x in body.upload_ids],
+        )
         return {**result, "events_url": f"/api/v1/turns/{result['turn_id']}/events"}
 
     @app.get("/api/v1/turns/{turn_id}")

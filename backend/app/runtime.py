@@ -403,6 +403,8 @@ class Runtime:
             output = json.loads(row["content"])
             data = output.get("data") or {}
             if not output.get("ok") or data.get("kind") not in (
+                "import_preview",
+                "import_receipt",
                 "monthly_summary",
                 "purpose_check",
                 "operation",

@@ -17,6 +17,7 @@ import {
   Menu,
   MessageSquare,
   Plus,
+  Paperclip,
   ShieldCheck,
   Square,
   X,
@@ -26,7 +27,7 @@ import { Details } from './Details';
 import { MemoryView } from './MemoryView';
 import { Results } from './Results';
 import { RunsView } from './RunsView';
-import type { Detail, Session, Task, Turn, User } from './types';
+import type { Detail, Session, Task, Turn, User, UploadedInvoice } from './types';
 
 type Page = 'chat' | 'memory' | 'runs';
 
@@ -40,6 +41,7 @@ export default function App() {
   const [turnList, setTurns] = useState<Turn[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  const [attachment, setAttachment] = useState<UploadedInvoice | null>(null);
   const [error, setError] = useState('');
   const [detail, setDetail] = useState<Detail | null>(null);
   const [navigationOpen, setNavigationOpen] = useState(false);
@@ -54,7 +56,12 @@ export default function App() {
   const scrollArea = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const composing = useRef(false);
-  const retryRequest = useRef<{ id: string; text: string; session: string } | null>(null);
+  const retryRequest = useRef<{
+    id: string;
+    text: string;
+    session: string;
+    upload: string | null;
+  } | null>(null);
   const acknowledged = useRef(new Set<string>());
 
   const changed = useCallback(() => setVersion((v) => v + 1), []);
@@ -68,6 +75,7 @@ export default function App() {
     setActiveId(null);
     setCurrentTask(null);
     setDetail(null);
+    setAttachment(null);
     setDraft('');
     setError('');
     setSending(false);
@@ -82,6 +90,7 @@ export default function App() {
       `/sessions/${item.session_id}/messages`
     );
     if (stamp !== generation.current) return;
+    setAttachment(null);
     setSession(item);
     setCompany(item.selected_company_id);
     setTurns(messages.turns);
@@ -157,6 +166,7 @@ export default function App() {
     setActiveId(null);
     setCurrentTask(null);
     setDetail(null);
+    setAttachment(null);
     setDraft('');
     setError('');
     setSending(false);
@@ -308,9 +318,16 @@ export default function App() {
     const stamp = generation.current,
       text = draft;
     const identity =
-      retryRequest.current?.text === text && retryRequest.current.session === session.session_id
+      retryRequest.current?.text === text &&
+      retryRequest.current.session === session.session_id &&
+      retryRequest.current.upload === (attachment?.upload_id ?? null)
         ? retryRequest.current
-        : { id: requestId(), text, session: session.session_id };
+        : {
+            id: requestId(),
+            text,
+            session: session.session_id,
+            upload: attachment?.upload_id ?? null,
+          };
     retryRequest.current = identity;
     setSending(true);
     setError('');
@@ -318,7 +335,11 @@ export default function App() {
     try {
       const accepted = await api<Turn>(`/sessions/${session.session_id}/turns`, {
         method: 'POST',
-        body: body({ client_request_id: identity.id, text }),
+        body: body({
+          client_request_id: identity.id,
+          text,
+          upload_ids: attachment ? [attachment.upload_id] : [],
+        }),
       });
       if (stamp !== generation.current) return;
       setTurns((previous) =>
@@ -327,6 +348,7 @@ export default function App() {
           : [...previous, accepted]
       );
       setDraft('');
+      setAttachment(null);
       retryRequest.current = null;
       if (['queued', 'running'].includes(accepted.status)) {
         setStage('已收到，正在办理');
@@ -490,6 +512,7 @@ export default function App() {
                 setTurns([]);
                 setActiveId(null);
                 setDetail(null);
+                setAttachment(null);
                 setError('');
                 void openSession(item, user).catch((err) => setError(err.message));
               }}
@@ -507,6 +530,11 @@ export default function App() {
         </footer>
       </aside>
       <main className="workspace">
+        {user.dataset_profile === 'extended' && (
+          <div className="extension-banner">
+            扩展数据集 · 新增发票可预览后追加，官方比赛基线独立保留
+          </div>
+        )}
         {user.model_mode === 'test' && (
           <div className="test-banner">程序测试模式 · 用于验证界面与流程，非真实模型评测</div>
         )}
@@ -581,7 +609,12 @@ export default function App() {
           </div>
         ) : page === 'runs' ? (
           <div className="page-scroll">
-            <RunsView key={`${user.user_id}/${company}`} company={company} onDetail={setDetail} />
+            <RunsView
+              key={`${user.user_id}/${company}`}
+              company={company}
+              showImports={user.dataset_profile === 'extended'}
+              onDetail={setDetail}
+            />
           </div>
         ) : (
           <>
@@ -775,6 +808,19 @@ export default function App() {
                   模型暂未连接，完成本地配置并重启服务后即可办理。
                 </p>
               )}
+              {attachment && (
+                <div className="attachment-chip">
+                  <Paperclip size={14} />
+                  <span>{attachment.original_name}</span>
+                  <button
+                    className="icon-button"
+                    aria-label="移除附件引用"
+                    onClick={() => setAttachment(null)}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              )}
               <form
                 className="composer"
                 onSubmit={(event) => {
@@ -798,6 +844,19 @@ export default function App() {
                   aria-label="输入办理需求"
                 />
                 <div className="composer-toolbar">
+                  {user.dataset_profile === 'extended' &&
+                    user.companies.find((c) => c.company_id === company)?.can_import_invoices && (
+                      <button
+                        type="button"
+                        className="icon-button"
+                        aria-label="导入发票 Excel"
+                        title="上传并预览新增发票"
+                        disabled={!session || !user.invoice_import_ready || Boolean(activeId)}
+                        onClick={() => setDetail({ kind: 'import' })}
+                      >
+                        <Paperclip size={18} />
+                      </button>
+                    )}
                   <span>
                     {draft.length > 12000
                       ? `${draft.length.toLocaleString()} / 16,000 字符`
@@ -845,10 +904,20 @@ export default function App() {
       {detail && (
         <Details
           key={
-            detail.kind === 'run' || detail.kind === 'source'
+            detail.kind === 'run' || detail.kind === 'source' || detail.kind === 'import'
               ? `${detail.kind}/${detail.id}`
               : detail.kind
           }
+          company={company}
+          sessionId={session?.session_id ?? null}
+          onUploaded={setAttachment}
+          onImportChanged={(batch) => {
+            if (['committed', 'no_change'].includes(batch.status))
+              setAttachment((previous) =>
+                previous?.upload_id === batch.upload_id ? null : previous
+              );
+            changed();
+          }}
           detail={detail}
           onClose={() => setDetail(null)}
         />

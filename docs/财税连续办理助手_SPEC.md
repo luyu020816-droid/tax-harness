@@ -766,3 +766,48 @@ UI-01—UI-14 均为本项目用户要求的 P0 验收，当前未执行。由�
 | UI-14 | 人工视觉评审与交付证据 | 指定场景截图及 60—90 秒 UI 办理录屏齐全；确认视觉中心明确、间距统一、信息密度适中，无严重视觉问题 |
 
 WP-06 至少交付空态、金额查询、缺项清单、保存核验、记忆管理、运行详情与窄屏七组实际截图。录屏可复用正式 ≤5 分钟比赛演示的片段，不要求新增对主办方的提交项。前端实现完成后先修复功能/状态与布局问题，再对品牌、对齐和留白做一次人工视觉收敛。
+
+## 18. PATCH-001 实现补充：发票增量接入
+
+本节按 [patch.md](../patch.md) 扩展 §4/5/8/9/10/11/13/14/17。比赛基线原契约保留；以下仅在独立 extended 实例启用。实现与验证状态见 [PATCH001_TEST_REPORT](PATCH001_TEST_REPORT.md)。
+
+### 18.1 存储与权限
+
+迁移 `003_invoice_imports.sql` 增加 `dataset_metadata`、`file_uploads`、`invoice_import_batches`、`invoice_import_rows` 四表，以及 `user_company_grants.can_import_invoices` 和 `turns.upload_ids`。文件 BYTEA、SHA-256、拥有者/企业/会话/来源与请求身份同时保存；计划按原始行号保存规范化值、行哈希、分类、原因和比较版本；回执保存真实插入集合与前后 data_revision。
+
+模式由数据库持久记录，不能从请求或模型参数切换。`init-extended` 仅新建物理隔离的业务/测试库与 `.env.extended`，已有配置或同名数据库时拒绝覆盖。普通运行角色没有发票 INSERT 权限；扩展确认使用独立 `tax_ingest` 连接，只允许新增发票及完成账本所需的最小权限，不得 UPDATE/DELETE 发票或写银行表。连接必须匹配同一数据库实例 UUID；不回退管理员连接。不同实例使用独立登录 Cookie。
+
+### 18.2 解析、预览与确认
+
+`xlsx_invoices.py` 仅处理格式和规范化，不调用模型或数据库。受控表头、单企业、编号文本 `F` 加 3—12 位数字、Decimal 两位小数、合法日期与长度限制均由程序检查。ZIP 原始上限 5 MiB、展开 50 MiB/2000 项、工作表物理行号不超过 10000、列不超过 16；禁止公式、宏、加密与外部内容。
+
+`invoice_imports.py` 在可重复读快照中比较已有记录并生成确定性计划。文件同键不同值整组冲突；完全相同去重；既有用途/备注遇到空输入保留；任何非空差异都进入冲突。strict 默认有问题不发可用令牌；显式 skip_issues 重做预览后仅计划中的 new 行可追加。完整预览 hash 包含文件、策略、company head 和逐行结果。
+
+确认事务按拥有者→company head→批次顺序加锁，校验当前权限、会话企业、revision、hash、15 分钟令牌、资料/规则版本、来源/行哈希，再 INSERT 新集合，写终态回执、来源、水位和幂等记录。存在新增时 data_revision 只增 1；no_change 不增加企业数据版本。任一步失败回滚全部内容；连接异常返回 IMPORT_STATUS_UNKNOWN 与原 batch_id，前端引导核对。终态重复确认返回原回执，不重复 INSERT。
+
+令牌仅预览 POST 返回界面，库中只保存哈希，不进入 GET、模型工具结果或来源日志。过期通过派生 `confirmation_expired` 与确认错误体现，必须重新预览。完整回执保留在库中，接口每页最多返回 20 行并标明分页。
+
+### 18.3 API 与工具
+
+| 接口 | 契约 |
+|---|---|
+| `GET /api/v1/invoice-import-template` | 登录后下载受控模拟模板 |
+| `POST /api/v1/uploads/invoices` | FormData：company_id、session_id、client_request_id、file；先限制实际请求字节，再解析 multipart |
+| `POST /api/v1/invoice-imports` | upload_id、session_id、client_request_id；只能使用本人授权文件 |
+| `GET /api/v1/invoice-imports` | 当前用户、可选 company_id、整数分页 cursor |
+| `GET /api/v1/invoice-imports/{batch_id}` | 本人批次摘要及分页明细，不返回令牌 |
+| `POST .../{batch_id}/preview` | session_id、expected_revision、client_request_id、policy（默认 strict）；生成当前确认版本 |
+| `POST .../{batch_id}/confirm` | 上述身份字段以及 preview_hash、confirmation_token；唯一入库入口 |
+| `POST .../{batch_id}/cancel` | expected_revision、client_request_id；仅取消未提交批次 |
+
+`POST /sessions/{id}/turns` 支持最多一个 upload_id，受理时校验拥有者和当前企业，并将附件身份纳入原消息幂等 hash。模型新增 `prepare_invoice_import(company_id,upload_id)` 与 `get_invoice_import(batch_id,cursor)`；不提供提交工具。附件轮次或导入工具读取后，直接修改任务/偏好/旧发票的模型工具返回 NEEDS_CLARIFICATION，需独立明确消息或现有管理 UI 办理。
+
+### 18.4 Harness、容量与界面
+
+每次 `load_core` 的快照包含已选企业 head、最近最多 5 条未终结批次摘要及其 revision；实际 payload/manifest 纳入这些状态与受控附件元信息。发送/完成前核对 company head，防止另一用户导入后提交旧模型答复。上传/预览/取消/提交按既有来源水位、epoch 与摘要失效机制执行；本轮模型工具引起的 epoch 由执行身份跟进。
+
+checked_data_revision 落后的任务返回 snapshot_current=false，core 标记 needs_refresh 并排除旧 task_evidence；重新检查后沿用现有任务 CAS 更新。不重开历史完成任务，不用旧列表序号修改新数据。每用户限制新上传 20 次/小时、20 个未终结批次及原文件合计 100 MiB；拥有者锁下占用配额，不自动删除已有来源。
+
+前端新增 `InvoiceImportDialog`、`ImportReceipt`，复用单一 Modal/Details；附件只在 extended 且有导入权和入库连接时显示。数据导入列表分页；错误/未知/已提交明确区分；关闭或切换后的迟到响应不得写回新范围。窄屏全屏抽屉，表格局部滚动；无模型也可导入。后端 `_snapshot` 对 BYTEA 使用哈希和长度做核对，pg_dump 仍保存完整字节，恢复重新授予对应最小角色权限。
+
+程序验收位于 `test_invoice_imports.py`、`test_import_api.py`；Chrome 验收位于 `frontend/tests/import.spec.ts`。真实模型新增冻结案例位于 `evals/import-holdout-v1.json`，与原 40 例严格分开，未配置模型时不得生成通过率。

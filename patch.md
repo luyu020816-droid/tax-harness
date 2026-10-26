@@ -1,10 +1,10 @@
 # PATCH-001：用户上传 Excel 与发票增量接入
 
-版本：1.0；日期：2026-10-26；代码基线：`9bb7f07`；关联文档：PRD / SPEC 1.2。
+版本：1.1；日期：2026-10-26；代码基线：`9bb7f07`；关联文档：PRD / SPEC 1.2 + PATCH-001。
 
 依据：[现有 PRD](docs/财税连续办理助手_PRD.md)、[现有 SPEC](docs/财税连续办理助手_SPEC.md)、[原始参赛说明](docs/赛题二：财税Harness初赛材料包-v1.1.0/01_参赛说明.docx)。本文的导入权限、扩展数据集和交互约束是本项目的补充设计，不是对比赛规则的新解释。
 
-状态：设计补丁，尚未实现。本文描述下一阶段开发契约，不能计入现有 62 项测试的通过范围。本轮只新增本文，不修改业务代码或执行数据库迁移。
+状态：已实现代码与独立扩展数据库，程序/UI 验证见 [PATCH-001 测试报告](docs/PATCH001_TEST_REPORT.md)。原 62 项测试保留，新增测试单独纳入全量回归。用户选择稍后配置模型，因此真实模型对话验收尚未执行，不能据此宣称完成全部发布门槛。
 
 ## 1. 目的与结论
 
@@ -250,6 +250,10 @@ flowchart LR
 
 模型触发预览后，界面打开批次时通过正式 preview 接口生成当前可确认版本和令牌；不能从模型工具结果或旧卡片中取得授权。跨会话恢复可读取本人批次，但必须重新预览并绑定当前会话后确认。
 
+实现约定：当前轮带有附件或已调用导入工具后，模型直接调用 `update_invoice`、`change_task` 或偏好写入返回 NEEDS_CLARIFICATION。用户需要在单独的明确消息或已有管理界面办理这些修改；由真实业务检查维护任务进度的程序路径照常使用。此约束避免把文件文字解释为已有资料修改或长期记忆授权。
+
+完整插入行回执在数据库持久保存；HTTP 与模型工具按原始行号每页最多返回 20 行，避免大批次耗尽上下文。令牌过期通过 `confirmation_expired` 派生标志与确认错误表示，不依赖后台定时把批次改成 expired 状态。不同数据库实例使用独立登录 Cookie，避免同一 localhost 的不同端口互相覆盖身份。
+
 首版错误码固定如下：`IMPORT_DISABLED`（比赛模式）、`IMPORT_ACCESS_DENIED`（导入权限不足）、`UPLOAD_TOO_LARGE`、`WORKBOOK_UNSUPPORTED`、`IMPORT_VALIDATION_FAILED`、`IMPORT_PREVIEW_STALE`、`IMPORT_CONFIRMATION_EXPIRED`、`IMPORT_STATE_CONFLICT`、`IMPORT_STATUS_UNKNOWN`、`IDEMPOTENCY_CONFLICT`。范围/数据错误不能返回零条成功；状态未知须携带 batch_id，引导核对已有账本。
 
 ## 9. 与 Harness 的衔接
@@ -307,7 +311,7 @@ flowchart LR
 
 ## 12. 验收矩阵
 
-以下均为新增用例，初始状态全部未执行。程序测试在 `tax_harness_extended_test` 上运行；真实模型质量、浏览器体验和 PostgreSQL 一致性分别报告，不互相替代。
+以下为设计验收矩阵；实际执行范围与尚未验证项以 [PATCH-001 测试报告](docs/PATCH001_TEST_REPORT.md) 为准，不能按编号推定整行所有故障变体都已覆盖。程序测试在 `tax_harness_extended_test` 上运行；真实模型质量、浏览器体验和 PostgreSQL 一致性分别报告，不互相替代。
 
 | 编号 | 场景 | 必须满足的独立断言 |
 |---|---|---|

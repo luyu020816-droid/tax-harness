@@ -14,6 +14,14 @@ def load_core(db, auth: Identity, session_id: str) -> dict:
         company = session["selected_company_id"]
         if company:
             assert_access(conn, auth, company)
+        company_head = (
+            conn.execute(
+                "SELECT data_revision,rules_epoch FROM company_heads WHERE company_id=%s",
+                (company,),
+            ).fetchone()
+            if company
+            else None
+        )
         user = conn.execute(
             "SELECT memory_epoch FROM users WHERE user_id=%s", (auth.user_id,)
         ).fetchone()
@@ -84,6 +92,8 @@ def load_core(db, auth: Identity, session_id: str) -> dict:
                 task["checked_data_revision"] == head["data_revision"]
                 and task["checked_rules_epoch"] == head["rules_epoch"]
             )
+            if not task["snapshot_current"]:
+                task["unresolved_json"] = {**task["unresolved_json"], "needs_refresh": True}
             if task["snapshot_current"] and task["last_check_ref"]:
                 evidence = read_source(
                     conn, auth, str(task["last_check_ref"]), allow_suppressed=True
@@ -128,8 +138,22 @@ def load_core(db, auth: Identity, session_id: str) -> dict:
                 and (not company or p["pending_clarification"]["company_id"] == company)
             )
         ]
+        imports = (
+            conn.execute(
+                "SELECT batch_id,company_id,status,revision,counts_json FROM invoice_import_batches WHERE user_id=%s AND company_id=%s AND status IN ('draft','validation_failed','preview_ready') ORDER BY created_at DESC LIMIT 5",
+                (auth.user_id, company),
+            ).fetchall()
+            if company
+            else []
+        )
+        dependencies.extend(
+            {"kind": "invoice_import", "id": str(row["batch_id"]), "revision": row["revision"]}
+            for row in imports
+        )
         return safe_json(
             {
+                "company_heads": {company: company_head} if company_head else {},
+                "pending_imports": imports,
                 "user_id": auth.user_id,
                 "selected_company_id": company,
                 "memory_epoch": user["memory_epoch"],

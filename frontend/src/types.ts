@@ -3,12 +3,15 @@ export interface Company {
   name: string;
   aliases: string[];
   can_update: boolean;
+  can_import_invoices: boolean;
 }
 export interface User {
   user_id: string;
   display_name: string;
   companies: Company[];
   model_ready: boolean;
+  dataset_profile: 'competition' | 'extended';
+  invoice_import_ready: boolean;
   model_mode: string;
 }
 export interface Session {
@@ -81,7 +84,7 @@ export interface RulesCard extends CardBase {
   kind: 'rules';
   rules: Rule[];
 }
-export type ResultCard = SummaryCard | ListCard | OperationCard | RulesCard;
+export type ResultCard = SummaryCard | ListCard | OperationCard | RulesCard | ImportBatch;
 export interface Turn {
   turn_id: string;
   source_seq: number;
@@ -168,7 +171,56 @@ export interface Source {
   created_at: string;
 }
 export type Detail =
+  | { kind: 'import'; id?: string }
   | { kind: 'rule'; data: Rule }
   | { kind: 'run'; id: string }
   | { kind: 'task'; data: Task }
   | { kind: 'source'; id: string };
+
+export interface UploadedInvoice {
+  upload_id: string;
+  original_name: string;
+  company_id: string;
+  file_sha256: string;
+}
+export interface ImportCounts {
+  new?: number;
+  duplicate_existing?: number;
+  duplicate_in_file?: number;
+  conflict?: number;
+  invalid?: number;
+  total?: number;
+  new_amount?: string;
+  error?: { code: string; message: string };
+}
+export interface ImportBatch extends CardBase {
+  kind: 'import_preview' | 'import_receipt';
+  batch_id: string;
+  upload_id: string;
+  revision: number;
+  status: string;
+  policy: string;
+  preview_hash: string | null;
+  counts: ImportCounts;
+  confirmation_token?: string;
+  confirmation_expired: boolean;
+  receipt: { inserted_count: number; skipped_count: number; after_data_revision: number } | null;
+  rows: {
+    row_number: number;
+    normalized_values: Partial<Invoice>;
+    classification: 'new' | 'duplicate_existing' | 'duplicate_in_file' | 'conflict' | 'invalid';
+    reason_message: string | null;
+  }[];
+  created_at: string;
+  committed_at: string | null;
+  has_more: boolean;
+  next_cursor: number | null;
+}
+export interface ImportSummary {
+  batch_id: string;
+  company_id: string;
+  status: string;
+  revision: number;
+  original_name: string;
+  created_at: string;
+}

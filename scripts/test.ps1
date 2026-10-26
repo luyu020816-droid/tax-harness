@@ -1,6 +1,9 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $projectPython = Join-Path $projectRoot '.venv\Scripts\python.exe'
+if (-not (Test-Path -LiteralPath (Join-Path $projectRoot '.env.extended'))) {
+    throw 'Initialize isolated extension databases first: .\.venv\Scripts\python.exe -m app.cli init-extended'
+}
 Push-Location (Join-Path $projectRoot 'backend')
 try {
     & $projectPython -m ruff check .

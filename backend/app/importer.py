@@ -46,7 +46,7 @@ def import_samples(conn, workbook: Path, rules_file: Path) -> dict:
             conn.execute("INSERT INTO users(user_id,display_name) VALUES(%s,%s)", (row[0], row[1]))
             for company, permission in zip(["C001", "C002"], row[2:4], strict=True):
                 conn.execute(
-                    "INSERT INTO user_company_grants VALUES(%s,%s,%s,%s)",
+                    "INSERT INTO user_company_grants(user_id,company_id,can_read,can_update) VALUES(%s,%s,%s,%s)",
                     (
                         row[0],
                         company,

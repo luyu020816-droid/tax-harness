@@ -6,6 +6,7 @@ from psycopg_pool import ConnectionPool
 
 class Database:
     def __init__(self, dsn: str):
+        self.dsn = dsn
         self.pool = ConnectionPool(
             dsn,
             min_size=0,
@@ -33,4 +34,4 @@ class Database:
             row = conn.execute(
                 "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
             ).fetchone()
-            return bool(row and row["version"] == 2)
+            return bool(row and row["version"] == 3)

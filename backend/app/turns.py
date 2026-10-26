@@ -15,13 +15,27 @@ def mentioned_companies(conn, text: str) -> list[str]:
     ]
 
 
-def accept_turn(db, auth: Identity, session_id: str, client_request_id: str, text: str) -> dict:
+def accept_turn(
+    db, auth: Identity, session_id: str, client_request_id: str, text: str, *, upload_ids=None
+) -> dict:
     if not text.strip() or len(text) > 16000 or len(client_request_id) > 200:
         raise AppError("INVALID_ARGUMENT", "消息不能为空且最多 16000 字符，请求编号最多 200 字符。")
-    fingerprint = digest([session_id, text])
+    upload_ids = list(upload_ids or [])
+    if len(upload_ids) > 1:
+        raise AppError("INVALID_ARGUMENT", "每轮最多附一个发票文件。")
+    fingerprint = (
+        digest([session_id, text, upload_ids]) if upload_ids else digest([session_id, text])
+    )
     with db.transaction() as conn:
         conn.execute("SELECT * FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,))
-        owned(conn, "sessions", "session_id", session_id, auth)
+        session = owned(conn, "sessions", "session_id", session_id, auth)
+        if upload_ids:
+            from app.invoice_imports import upload_metadata
+
+            if not session["selected_company_id"]:
+                raise AppError("IMPORT_ACCESS_DENIED", "请先选择附件所属企业。", 403)
+            for upload_id in upload_ids:
+                upload_metadata(conn, auth, upload_id, session["selected_company_id"])
         previous = conn.execute(
             "SELECT * FROM turns WHERE user_id=%s AND client_request_id=%s",
             (auth.user_id, client_request_id),
@@ -47,6 +61,7 @@ def accept_turn(db, auth: Identity, session_id: str, client_request_id: str, tex
             "INSERT INTO turns(turn_id,session_id,user_id,client_request_id,request_hash,source_seq,text) VALUES(%s,%s,%s,%s,%s,%s,%s)",
             (turn_id, session_id, auth.user_id, client_request_id, fingerprint, sequence, text),
         )
+        conn.execute("UPDATE turns SET upload_ids=%s WHERE turn_id=%s", (upload_ids, turn_id))
         source = add_source(
             conn, auth, text, turn_id=turn_id, source_seq=sequence, companies=accessible
         )

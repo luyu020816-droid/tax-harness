@@ -3,6 +3,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.values import INVOICE_ID_PATTERN
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_max_length=16000)
@@ -52,7 +54,7 @@ class SelectionRef(StrictModel):
 
 
 class UpdateInvoice(Scope):
-    invoice_id: str = Field(min_length=1, max_length=32)
+    invoice_id: str = Field(pattern="^" + INVOICE_ID_PATTERN + "$")
     patch: InvoicePatch
     expected_revision: int = Field(ge=1)
     source_refs: list[SourceRef] = Field(min_length=1, max_length=6)
@@ -106,7 +108,24 @@ class FinalReply(StrictModel):
     displayed_view_ids: list[UUID] = Field(default_factory=list, max_length=4)
 
 
+class PrepareInvoiceImport(Scope):
+    upload_id: UUID
+
+
+class GetInvoiceImport(StrictModel):
+    batch_id: UUID
+    cursor: int = Field(default=0, ge=0)
+
+
 TOOLS = {
+    "prepare_invoice_import": (
+        PrepareInvoiceImport,
+        "为本轮附件生成发票追加预览，不执行入库；说明用户需要在界面确认。",
+    ),
+    "get_invoice_import": (
+        GetInvoiceImport,
+        "读取本人导入批次的真实状态、逐行原因和回执，不将预览说成已提交。",
+    ),
     "query_month": (
         QueryMonth,
         "查询当前保存数据的月度发票总额、银行收入和支出；三项独立计算，并返回规则依据。",

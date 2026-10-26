@@ -48,7 +48,22 @@ def _snapshot(conn) -> dict:
         rows = conn.execute(
             sql.SQL("SELECT * FROM public.{}").format(sql.Identifier(name))
         ).fetchall()
-        hashes = sorted(digest(safe_json(row)) for row in rows)
+        hashes = sorted(
+            digest(
+                safe_json(
+                    {
+                        key: {
+                            "binary_sha256": hashlib.sha256(value).hexdigest(),
+                            "bytes": len(value),
+                        }
+                        if isinstance(value, (bytes, memoryview))
+                        else value
+                        for key, value in row.items()
+                    }
+                )
+            )
+            for row in rows
+        )
         result[name] = {"rows": len(rows), "hash": digest(hashes)}
     return {"tables": result, "fingerprint": digest(result)}
 
@@ -216,6 +231,16 @@ def restore(dsn: str, directory: Path, expected_checkpoint: Path, settings) -> d
         from app.cli import _grant_runtime
 
         _grant_runtime(conn, settings)
+        if (
+            conn.execute("SELECT profile FROM dataset_metadata WHERE singleton_id=1").fetchone()[
+                "profile"
+            ]
+            == "extended"
+            and settings.ingest_database_url
+        ):
+            from app.cli import _grant_ingest
+
+            _grant_ingest(conn, settings)
         actual = _snapshot(conn)
     if actual["fingerprint"] != manifest["fingerprint"]:
         raise AppError("RESTORE_INCOMPLETE", "恢复结果不匹配备份恢复点，保持维护模式。", 503)

@@ -2,6 +2,8 @@
 
 日期：2026-10-26。环境：Windows、Python 3.12.14、Node 24.14.1、原生 PostgreSQL 16.15、真实本机 Chrome。所有测试只使用比赛模拟资料。
 
+下表为首版 62 项的历史验收记录。PATCH-001 新增发票追加后的全量结果为 **99 passed**，详细证据、浏览器结果和新增能力的剩余门槛见 [PATCH001_TEST_REPORT](PATCH001_TEST_REPORT.md)。首版未完成的真实模型与完整故障矩阵继续有效。
+
 | 检查 | 实际结果 | 范围 |
 |---|---|---|
 | 后端全量回归 | **62 passed**，58.42 秒 | `backend/tests`；真实隔离 PostgreSQL，无 SQLite/内存替代 |

@@ -1,3 +1,4 @@
+import { ImportReceipt } from './ImportReceipt';
 import {
   ArrowUpRight,
   Banknote,
@@ -35,6 +36,10 @@ export function Results({
   onDraft: (text: string) => void;
   onDetail: (detail: Detail) => void;
 }) {
+  if (card.kind === 'import_preview' || card.kind === 'import_receipt')
+    return (
+      <ImportReceipt batch={card} onOpen={() => onDetail({ kind: 'import', id: card.batch_id })} />
+    );
   const range = (
     <div className="result-range">
       <span>{companyName(card.company_id)}</span>

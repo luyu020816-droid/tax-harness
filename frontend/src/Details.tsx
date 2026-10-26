@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Download, FileText, ShieldCheck } from 'lucide-react';
 import { companyName, dateTime, statusName, taskName } from './api';
+import { InvoiceImportDialog } from './InvoiceImportDialog';
 import { Modal } from './Modal';
 import { useResource } from './useResource';
-import type { Detail, RunDetail, Source } from './types';
+import type { Detail, RunDetail, Source, UploadedInvoice, ImportBatch } from './types';
 
 function RunContent({ id }: { id: string }) {
   const { data, error, loading } = useResource<RunDetail>('/runs/' + id);
@@ -102,7 +103,32 @@ function SourceContent({ id }: { id: string }) {
   );
 }
 
-export function Details({ detail, onClose }: { detail: Detail; onClose: () => void }) {
+export function Details({
+  detail,
+  onClose,
+  company,
+  sessionId,
+  onUploaded,
+  onImportChanged,
+}: {
+  detail: Detail;
+  onClose: () => void;
+  company?: string | null;
+  sessionId?: string | null;
+  onUploaded?: (upload: UploadedInvoice) => void;
+  onImportChanged?: (batch: ImportBatch) => void;
+}) {
+  if (detail.kind === 'import')
+    return (
+      <InvoiceImportDialog
+        company={company ?? null}
+        sessionId={sessionId ?? null}
+        initialBatchId={detail.id}
+        onClose={onClose}
+        onUploaded={onUploaded}
+        onChanged={onImportChanged}
+      />
+    );
   const title = { rule: '规则依据', run: '办理记录', task: '任务详情', source: '历史来源原文' }[
     detail.kind
   ];
@@ -143,7 +169,7 @@ export function Details({ detail, onClose }: { detail: Detail; onClose: () => vo
             <div>
               <dt>待处理</dt>
               <dd>
-                {detail.data.unresolved_json.needs_refresh
+                {detail.data.unresolved_json.needs_refresh || detail.data.snapshot_current === false
                   ? '当前资料待重新检查'
                   : detail.data.unresolved_json.missing_count !== undefined
                     ? `${detail.data.unresolved_json.missing_count} 张待补（最近一次检查）`

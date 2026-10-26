@@ -8,6 +8,8 @@ from psycopg.types.json import Jsonb
 
 from app.errors import AppError
 
+INVOICE_ID_PATTERN = r"F[0-9]{3,12}"
+
 
 def uid() -> str:
     return str(uuid4())
