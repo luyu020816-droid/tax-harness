@@ -1,0 +1,15 @@
+{
+  "rule_code": "R003",
+  "business_version": "2.0",
+  "companies": [
+    "C002"
+  ],
+  "effective_from": "2026-09-01",
+  "effective_to": null,
+  "full_text": "单张发票金额大于或等于 1500.00 元时必须填写用途；低于此金额可以不填。空白或只有空白字符视为未填写，备注不能代替用途。",
+  "display_name": "乙企业用途填写规则",
+  "condition_json": {
+    "kind": "purpose_threshold",
+    "threshold": "1500.00"
+  }
+}

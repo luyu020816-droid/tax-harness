@@ -1,0 +1,236 @@
+"""Run the frozen cases against the configured real model, never a scripted adapter.
+
+Automatic invariants and human review are deliberately reported separately.
+Run only with the isolated test database and no concurrent tests/UI test server.
+"""
+
+import argparse
+import asyncio
+import json
+import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
+
+import psycopg
+from app.business import acknowledge_view
+from app.cli import initialize
+from app.config import ROOT, Settings
+from app.db import Database
+from app.identity import Identity, create_session
+from app.model import HttpModel
+from app.runtime import Runtime
+from app.trace import read_run
+from app.turns import accept_turn, read_turn
+from app.values import canonical, digest, safe_json, uid
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+
+def capture(db):
+    with db.transaction(readonly=True) as conn:
+        invoices = conn.execute(
+            "SELECT * FROM invoices ORDER BY company_id,invoice_id"
+        ).fetchall()
+        banks = conn.execute(
+            "SELECT * FROM bank_entries ORDER BY company_id,bank_id"
+        ).fetchall()
+    protected = [
+        {k: v for k, v in row.items() if k not in ("purpose", "note", "revision")}
+        for row in invoices
+    ]
+    return {"invoices": invoices, "protected_hash": digest([protected, banks])}
+
+
+def assertions(db, case, result, before, after, user):
+    expected, failures = case["expected"], []
+    if before["protected_hash"] != after["protected_hash"]:
+        failures.append("Immutable invoice/bank fields changed")
+    if result["status"] not in ("completed", "waiting_user"):
+        failures.append(f"Turn ended with {result['status']}")
+    if expected.get("status") and result["status"] != expected["status"]:
+        failures.append("Expected clarification/status missing")
+    if expected.get("card") and not any(
+        all(card.get(k) == v for k, v in expected["card"].items())
+        for card in result["final_cards"]
+    ):
+        failures.append("Required factual result card missing or incorrect")
+    allowed = expected.get("invoice") or {}
+    for old, new in zip(before["invoices"], after["invoices"], strict=True):
+        selected = new["company_id"] == allowed.get("company_id") and new[
+            "invoice_id"
+        ] == allowed.get("invoice_id")
+        for field in ("purpose", "note"):
+            target = allowed[field] if selected and field in allowed else old[field]
+            if new[field] != target:
+                failures.append(
+                    f"Unexpected {new['company_id']}/{new['invoice_id']}/{field}"
+                )
+    with db.transaction(readonly=True) as conn:
+        if (
+            expected.get("no_writes")
+            and conn.execute(
+                "SELECT 1 FROM operations WHERE state='committed' LIMIT 1"
+            ).fetchone()
+        ):
+            failures.append("Unexpected committed invoice write")
+        for key, table, clause in [
+            ("active_tasks", "tasks", "status IN ('active','waiting_user')"),
+            ("active_preferences", "preferences", "status='active'"),
+        ]:
+            if key in expected:
+                count = conn.execute(
+                    f"SELECT count(*) AS n FROM {table} WHERE user_id=%s AND {clause}",
+                    (user,),
+                ).fetchone()["n"]
+                if count != expected[key]:
+                    failures.append(
+                        f"{key}: expected {expected[key]}, observed {count}"
+                    )
+    return failures
+
+
+async def run_case(settings, case, repetition, directory):
+    admin_dsn = make_conninfo(settings.admin_database_url, dbname="tax_harness_test")
+    with psycopg.connect(admin_dsn, autocommit=True) as conn:
+        active = conn.execute(
+            "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid()"
+        ).fetchone()[0]
+        if active:
+            raise SystemExit(
+                "Stop other test database connections before evaluation; no data was reset."
+            )
+        conn.execute("TRUNCATE users,companies,import_batches,rule_versions CASCADE")
+    initialize(settings, test=True)
+    actual = settings.model_copy(update={"database_url": settings.test_database_url})
+    db = Database(actual.database_url)
+    db.open()
+    runtime = Runtime(db, actual, HttpModel(actual))
+    transcript, sessions = [], {}
+    before = capture(db)
+    try:
+        result = None
+        for step in case["steps"]:
+            user = step.get("user", "U001")
+            company = step.get("company", case["company"])
+            auth = Identity(user)
+            key = (user, company)
+            if key not in sessions or step.get("new_session"):
+                sessions[key] = create_session(db, auth, company)
+            turn = accept_turn(
+                db, auth, str(sessions[key]["session_id"]), uid(), step["text"]
+            )
+            execution = runtime.claim()
+            if not execution or execution.turn_id != turn["turn_id"]:
+                raise RuntimeError("Evaluation work ownership mismatch")
+            await runtime.run(execution)
+            result = read_turn(db, auth, turn["turn_id"])
+            for card in result["final_cards"]:
+                if card.get("view_id"):
+                    acknowledge_view(
+                        db,
+                        auth,
+                        str(card["view_id"]),
+                        turn["turn_id"],
+                        result["next_event_seq"],
+                    )
+            transcript.append(
+                {
+                    "input": step,
+                    "result": result,
+                    "trace": read_run(db, auth, execution.run_id),
+                }
+            )
+        failures = assertions(db, case, result, before, capture(db), user)
+        record = safe_json(
+            {
+                "case_id": case["id"],
+                "category": case["category"],
+                "repetition": repetition,
+                "automatic_pass": not failures,
+                "automatic_failures": failures,
+                "human_review": "pending",
+                "manual_criteria": case["manual_criteria"],
+                "transcript": transcript,
+            }
+        )
+        (directory / f"{case['id']}-run-{repetition}.json").write_text(
+            canonical(record), encoding="utf-8"
+        )
+        return {
+            k: record[k]
+            for k in (
+                "case_id",
+                "category",
+                "repetition",
+                "automatic_pass",
+                "automatic_failures",
+                "human_review",
+                "manual_criteria",
+            )
+        }
+    finally:
+        db.close()
+
+
+async def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--runs", type=int, default=3, choices=range(1, 4))
+    parser.add_argument("--case", action="append")
+    args = parser.parse_args()
+    settings = Settings()
+    if not settings.model_configured:
+        raise SystemExit(
+            "MODEL_* is not configured. No model request made; no test data reset."
+        )
+    if conninfo_to_dict(settings.test_database_url).get("dbname") != "tax_harness_test":
+        raise SystemExit("Only the isolated tax_harness_test database is permitted.")
+    catalog = ROOT / "evals/holdout-v1.json"
+    suite = json.loads(catalog.read_text(encoding="utf-8"))
+    cases = [
+        case for case in suite["cases"] if not args.case or case["id"] in args.case
+    ]
+    if not cases or (args.case and set(args.case) - {c["id"] for c in cases}):
+        raise SystemExit("Unknown case selection")
+    args.output.mkdir(parents=True, exist_ok=False)
+    revision = await asyncio.to_thread(
+        subprocess.run,
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    files = sorted((ROOT / "backend/app").glob("*.py"))
+    report = {
+        "started_at": datetime.now(UTC).isoformat(),
+        "case_set_sha256": digest(suite),
+        "model_id": settings.model_id,
+        "mode": "live",
+        "model_extra_body": settings.model_extra_body,
+        "input_budget": settings.context_budget,
+        "code_commit": revision.stdout.strip() if not revision.returncode else None,
+        "code_fingerprint": digest(
+            {p.name: p.read_text(encoding="utf-8") for p in files}
+        ),
+        "full_40_by_3": len(cases) == 40 and args.runs == 3,
+        "final_success_rate": None,
+        "runs": [],
+    }
+    for case in cases:
+        for repetition in range(1, args.runs + 1):
+            record = await run_case(settings, case, repetition, args.output)
+            report["runs"].append(record)
+            report["automatic_passes"] = sum(
+                r["automatic_pass"] for r in report["runs"]
+            )
+            (args.output / "report.json").write_text(
+                canonical(report), encoding="utf-8"
+            )
+            print(
+                f"{case['id']} run {repetition}: automatic={'pass' if record['automatic_pass'] else 'fail'}, human=pending",
+                flush=True,
+            )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

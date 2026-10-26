@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: tax_admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run scripts/setup.ps1 first}
+      POSTGRES_DB: tax_harness
+    ports:
+      - "127.0.0.1:54337:5432"
+    volumes:
+      - tax_harness_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tax_admin -d tax_harness"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  tax_harness_pgdata:
+
