@@ -1,14 +1,5 @@
 import { ImportReceipt } from './ImportReceipt';
-import {
-  ArrowUpRight,
-  Banknote,
-  CheckCheck,
-  ChevronRight,
-  CircleAlert,
-  FileCheck2,
-  ReceiptText,
-  Wallet,
-} from 'lucide-react';
+import { ArrowUpRight, CheckCheck, ChevronRight, CircleAlert } from 'lucide-react';
 import { companyName, dateTime, money } from './api';
 import type { Detail, ResultCard, Rule } from './types';
 
@@ -63,28 +54,22 @@ export function Results({
               value: card.invoice_total,
               count: card.invoice_count,
               unit: '张发票',
-              Icon: ReceiptText,
             },
             {
               label: '银行收入',
               value: card.bank_income,
               count: card.income_count,
               unit: '笔收入',
-              Icon: Wallet,
             },
             {
               label: '银行支出',
               value: card.bank_expense,
               count: card.expense_count,
               unit: '笔支出',
-              Icon: Banknote,
             },
-          ].map(({ label, value, count, unit, Icon }) => (
+          ].map(({ label, value, count, unit }) => (
             <div className="metric" key={label}>
-              <span className="metric-label">
-                <Icon size={16} />
-                {label}
-              </span>
+              <span className="metric-label">{label}</span>
               <strong>
                 {money(value)}
                 <small>元</small>
@@ -104,9 +89,6 @@ export function Results({
       <section className="result-card list-card">
         {range}
         <div className="result-title">
-          <div className="title-icon">
-            <FileCheck2 size={19} />
-          </div>
           <div>
             <h3>
               {card.kind === 'purpose_check' ? (

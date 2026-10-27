@@ -15,6 +15,20 @@ test('real browser: results, saves, memory, traces, responsive and identity', as
   await expect(page.getByText('程序测试模式', { exact: false })).toBeVisible();
   await expect(page.getByRole('button', { name: '发送消息' })).toBeDisabled();
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  for (const width of [1366, 1440, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(page.getByRole('heading', { name: '今天需要处理什么？' })).toBeVisible();
+    const welcome = await page.locator('.welcome').boundingBox();
+    const composer = await page.locator('.composer').boundingBox();
+    const sidebar = await page.locator('.sidebar').boundingBox();
+    expect(sidebar!.width).toBe(248);
+    expect(composer!.width).toBeLessThanOrEqual(800);
+    expect(composer!.y - (welcome!.y + welcome!.height)).toBeLessThan(100);
+    expect(composer!.y + composer!.height).toBeLessThan(900);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await shot(page, `00-empty-${width}`);
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
   await shot(page, '01-empty-desktop');
   const input = page.getByRole('textbox', { name: '输入办理需求' });
   await input.fill('查询甲企业2026年9月月度资料');
@@ -36,6 +50,7 @@ test('real browser: results, saves, memory, traces, responsive and identity', as
   await page.getByRole('button', { name: /记住.*偏好/ }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveCSS('background-color', 'rgb(255, 255, 255)');
   await dialog.getByRole('textbox').fill('以后请先列出需要补用途的发票');
   await dialog.getByRole('button', { name: '保存偏好' }).click();
   await expect(page.getByText('以后请先列出需要补用途的发票')).toBeVisible();
@@ -57,7 +72,7 @@ test('real browser: results, saves, memory, traces, responsive and identity', as
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.getByRole('button', { name: '对话', exact: true }).click();
-  for (const width of [1280, 768, 390, 360]) {
+  for (const width of [1366, 1440, 1920, 768, 390, 360]) {
     await page.setViewportSize({ width, height: width < 500 ? 844 : 720 });
     await expect(input).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

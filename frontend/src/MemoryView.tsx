@@ -1,14 +1,5 @@
 import { useRef, useState, type FormEvent } from 'react';
-import {
-  ArrowUpRight,
-  BrainCircuit,
-  ClipboardList,
-  Clock3,
-  FileText,
-  Pencil,
-  Plus,
-  Trash2,
-} from 'lucide-react';
+import { ArrowUpRight, FileText, Pencil, Plus, Trash2 } from 'lucide-react';
 import { api, body, companyName, requestId, statusName, taskName } from './api';
 import { Modal } from './Modal';
 import { useResource } from './useResource';
@@ -333,9 +324,6 @@ export function MemoryView({
   const ended = tasksList.filter((t) => !['active', 'waiting_user'].includes(t.status));
   const taskRow = (task: Task) => (
     <article className="memory-row" key={task.task_id}>
-      <div className="memory-icon">
-        <ClipboardList size={20} />
-      </div>
       <div className="memory-content">
         <button className="row-title" onClick={() => onDetail({ kind: 'task', data: task })}>
           {taskName(task.intent)}
@@ -390,7 +378,6 @@ export function MemoryView({
     <section className="management-page">
       <div className="page-heading">
         <div>
-          <span className="eyebrow">连续办理</span>
           <h1>记忆管理</h1>
           <p>查看当前进度，让系统按你的最新要求继续。</p>
         </div>
@@ -430,7 +417,6 @@ export function MemoryView({
             <div className="memory-list">{active.map(taskRow)}</div>
           ) : (
             <div className="empty-panel">
-              <ClipboardList size={32} />
               <h3>当前没有未完成任务</h3>
               <p>开始一次检查或提出查询后，进度会在需要时保存。</p>
             </div>
@@ -450,9 +436,6 @@ export function MemoryView({
           <div className="memory-list">
             {prefs.map((pref) => (
               <article className="memory-row" key={pref.preference_id}>
-                <div className="memory-icon">
-                  <BrainCircuit size={20} />
-                </div>
                 <div className="memory-content">
                   <strong>{pref.value}</strong>
                   <p>
@@ -499,7 +482,6 @@ export function MemoryView({
           </div>
         ) : (
           <div className="empty-panel">
-            <BrainCircuit size={32} />
             <h3>还没有长期偏好</h3>
             <p>明确告诉我以后怎样回复，也可以在这里添加。</p>
             <button className="secondary" onClick={() => setPrefForm('new')}>
@@ -515,9 +497,6 @@ export function MemoryView({
           <div className="memory-list">
             {pending.map((item) => (
               <article className="memory-row" key={item.turn_id}>
-                <div className="memory-icon">
-                  <Clock3 size={20} />
-                </div>
                 <div className="memory-content">
                   <strong>{item.pending_clarification.summary}</strong>
                   <p>
@@ -555,7 +534,6 @@ export function MemoryView({
           </div>
         ) : (
           <div className="empty-panel">
-            <Clock3 size={32} />
             <h3>没有需要澄清的事项</h3>
             <p>信息不足时，我会只询问办理所缺的内容。</p>
           </div>
