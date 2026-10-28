@@ -172,7 +172,7 @@ def search_history(
     db,
     auth: Identity,
     *,
-    company_id: str | None,
+    company_id: str | None = None,
     query: str,
     cursor=None,
     entity: str | None = None,

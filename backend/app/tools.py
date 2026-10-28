@@ -9,6 +9,7 @@ from app.execution import Execution, guard
 from app.identity import assert_access
 from app.sources import add_source, assess, read_source
 from app.tool_schemas import TOOLS
+from app.turns import mentioned_companies
 from app.values import digest, jsonb, safe_json
 
 
@@ -31,7 +32,18 @@ class ToolExecutor:
             error = (
                 exc
                 if isinstance(exc, AppError)
-                else AppError("INVALID_ARGUMENT", "工具参数不符合 schema，请修正缺失或多余字段。")
+                else AppError(
+                    "INVALID_ARGUMENT",
+                    "工具参数不符合 schema，请修正缺失或多余字段。",
+                    details={
+                        "fields": [
+                            {"field": ".".join(str(x) for x in e["loc"]), "message": e["msg"]}
+                            for e in exc.errors(include_input=False, include_url=False)
+                        ]
+                    }
+                    if isinstance(exc, ValidationError)
+                    else {},
+                )
             )
             return self._record(
                 execution,
@@ -79,6 +91,20 @@ class ToolExecutor:
                 execution.expected_epoch = result["memory_epoch"]
             output = {"ok": True, "data": safe_json(result)}
         except AppError as exc:
+            if name == "manage_preference" and exc.code in (
+                "RESOURCE_NOT_FOUND",
+                "VERSION_CONFLICT",
+            ):
+                visible = preferences.list_preferences(
+                    self.db,
+                    execution.auth,
+                    arguments.get("scope") if arguments.get("scope") != "@user" else None,
+                )
+                exc.details = {
+                    **exc.details,
+                    "current_preferences": safe_json(visible),
+                    "instruction": "使用当前列表中的准确 preference_id、scope_key、revision 重试；没有匹配项则说明未完成，不能猜对象 ID。",
+                }
             output = {"ok": False, "error": exc.as_dict()}
         if output["ok"] and name == "update_invoice" and task_before:
             self._refresh_after_save(execution, call_id, arguments, output, task_before)
@@ -112,6 +138,27 @@ class ToolExecutor:
 
     def _dispatch(self, execution, name, args):
         db, auth = self.db, execution.auth
+        if args.get("company_id") and name in (
+            "query_month",
+            "find_invoices",
+            "get_rules",
+            "check_purposes",
+            "get_task",
+            "search_history",
+        ):
+            with db.transaction(readonly=True) as conn:
+                source = read_source(conn, auth, execution.source_id, allow_suppressed=True)
+                requested = mentioned_companies(conn, source["content"])
+                if requested and args["company_id"] not in requested:
+                    raise AppError(
+                        "TARGET_SCOPE_MISMATCH",
+                        "查询企业与本轮用户明确指定的企业不一致，不能替换为其他企业。",
+                        422,
+                        details={
+                            "requested_company_ids": requested,
+                            "actual_company_id": args["company_id"],
+                        },
+                    )
         if name in ("prepare_invoice_import", "get_invoice_import"):
             execution.import_context = True
         if name in ("update_invoice", "change_task") or (
