@@ -1,7 +1,7 @@
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.values import INVOICE_ID_PATTERN
 
@@ -74,9 +74,16 @@ class ChangeTask(Scope):
 class ManagePreference(StrictModel):
     action: Literal["list", "remember", "update", "delete"]
     scope: str = "@user"
-    key: str | None = None
+    key: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]{0,63}$",
+        description="稳定英文键，例如 response_style、result_order、list_format；不能用中文。",
+    )
     value: str | None = Field(default=None, max_length=1000)
-    target_id: UUID | None = None
+    target_id: UUID | None = Field(
+        default=None,
+        description="从当前正式偏好或 list 结果逐字复制 preference_id，不得自行生成或改写。",
+    )
     expected_revision: int | None = None
     source_refs: list[SourceRef] = Field(default_factory=list, max_length=6)
 
@@ -106,6 +113,20 @@ class FinalReply(StrictModel):
     clarification: Clarification | None = None
     resume_turn_id: UUID | None = None
     displayed_view_ids: list[UUID] = Field(default_factory=list, max_length=4)
+    preference_action: Literal["remember", "update", "delete"] | None
+    preference_status: Literal["not_requested", "committed", "not_committed", "needs_clarification"]
+
+    @model_validator(mode="after")
+    def consistent_state(self):
+        if self.status == "waiting_user" and self.clarification is None:
+            raise ValueError(
+                "waiting_user 必须提供 clarification；权限拒绝或操作失败但不缺用户信息时使用 completed。"
+            )
+        if self.status == "completed" and self.clarification is not None:
+            raise ValueError("completed 的 clarification 必须为 null。")
+        if (self.preference_action is None) != (self.preference_status == "not_requested"):
+            raise ValueError("偏好操作必须同时声明 preference_action 和 preference_status。")
+        return self
 
 
 class PrepareInvoiceImport(Scope):

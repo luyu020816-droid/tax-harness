@@ -50,7 +50,14 @@ def final(text, **extra):
     return {
         "role": "assistant",
         "content": json.dumps(
-            {"message": text, "status": "completed", **extra}, ensure_ascii=False
+            {
+                "message": text,
+                "status": "completed",
+                "preference_action": None,
+                "preference_status": "not_requested",
+                **extra,
+            },
+            ensure_ascii=False,
         ),
     }
 

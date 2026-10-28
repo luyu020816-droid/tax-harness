@@ -204,7 +204,7 @@ class Runtime:
         tool_count = 0
         retry_used = False
         stale_retry = False
-        format_retry = False
+        reply_retries = 0
         budget = None
         compaction_attempted = False
         for step in range(1, self.settings.max_model_steps + 1):
@@ -287,7 +287,6 @@ class Runtime:
             calls = message.get("tool_calls") or []
             if calls:
                 results, refs, tool_messages = [], [], []
-                prior_epoch = execution.expected_epoch
                 for call in calls:
                     tool_count += 1
                     if tool_count > self.settings.max_tool_calls:
@@ -307,9 +306,10 @@ class Runtime:
                         "messages": [message, *tool_messages],
                         "sources": refs,
                         "results": results,
-                        "memory_epoch": execution.expected_epoch
-                        if len(calls) == 1
-                        else prior_epoch,
+                        # Each tool is guarded against external memory changes. Own writes
+                        # advance expected_epoch; retain the closed batch at its final epoch.
+                        # Source revisions and business heads are still checked by assemble.
+                        "memory_epoch": execution.expected_epoch,
                     }
                 )
                 continue
@@ -317,21 +317,36 @@ class Runtime:
                 reply = FinalReply.model_validate_json(message.get("content") or "")
                 await asyncio.to_thread(self.finish, execution, reply, payload, manifest)
                 return
-            except (ValidationError, json.JSONDecodeError) as exc:
-                if format_retry:
+            except (ValidationError, json.JSONDecodeError, AppError) as exc:
+                if isinstance(exc, AppError) and exc.code != "REPLY_EVIDENCE_MISSING":
+                    raise
+                if reply_retries >= 2:
                     raise AppError(
                         "MODEL_PROTOCOL_UNSUPPORTED",
                         "模型最终答复格式无效，未把它当作成功结果。",
                         422,
                     ) from exc
-                format_retry = True
+                reply_retries += 1
+                if isinstance(exc, ValidationError):
+                    feedback = [
+                        {"field": ".".join(str(x) for x in e["loc"]), "message": e["msg"]}
+                        for e in exc.errors(include_input=False, include_url=False)
+                    ]
+                else:
+                    feedback = (
+                        exc.as_dict()
+                        if isinstance(exc, AppError)
+                        else {"message": "仅接受一个合法 JSON 对象。"}
+                    )
                 groups.append(
                     {
                         "messages": [
+                            {"role": "assistant", "content": message.get("content") or ""},
                             {
                                 "role": "system",
-                                "content": "请保留实际结果，将最终答复修正为约定的 JSON 对象。",
-                            }
+                                "content": "最终答复未通过校验，尚未交付用户。请按错误修正，仅输出约定 JSON；如缺少保存证据，应先调用工具完成用户明确要求，不能只改措辞声称成功。错误："
+                                + canonical(feedback),
+                            },
                         ],
                         "sources": [],
                         "results": [],
@@ -431,6 +446,22 @@ class Runtime:
             context.validate(self.db, execution, payload, manifest, conn=conn)
             # Upgrade the same locks before committing state, answer and events atomically.
             guard(conn, execution)
+            if reply.preference_status == "committed":
+                evidence = conn.execute(
+                    "SELECT result_ref FROM memory_change_ops WHERE user_id=%s AND target_type='preference' AND action=%s AND state='committed' AND request_id LIKE %s",
+                    (
+                        execution.auth.user_id,
+                        reply.preference_action,
+                        f"tool:{execution.source_id}:%",
+                    ),
+                ).fetchall()
+                if not evidence:
+                    raise AppError(
+                        "REPLY_EVIDENCE_MISSING",
+                        "本轮没有该偏好操作的成功记录，不能声称已记住、更正或删除。",
+                        422,
+                        details={"action": reply.preference_action},
+                    )
             if reply.resume_turn_id:
                 old = owned(
                     conn, "turns", "turn_id", str(reply.resume_turn_id), execution.auth, lock=True

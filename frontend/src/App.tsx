@@ -3,16 +3,13 @@ import ReactMarkdown from 'react-markdown';
 import {
   ArrowRight,
   ArrowUp,
-  BookOpen,
   BrainCircuit,
-  Building2,
   CheckCheck,
   ChevronDown,
   ChevronRight,
   CircleAlert,
   ClipboardCheck,
   History,
-  Layers3,
   LoaderCircle,
   Menu,
   MessageSquare,
@@ -23,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import { api, ApiError, body, companyName, requestId, statusName, taskName } from './api';
+import { BrandMark } from './BrandMark';
 import { Details } from './Details';
 import { MemoryView } from './MemoryView';
 import { Results } from './Results';
@@ -396,9 +394,7 @@ export default function App() {
   if (booting && !user)
     return (
       <div className="boot-screen">
-        <div className="brand-symbol">
-          <Layers3 size={23} />
-        </div>
+        <BrandMark />
         <LoaderCircle className="spinning" size={20} />
         <p>正在连接工作台</p>
       </div>
@@ -407,15 +403,13 @@ export default function App() {
     return (
       <div className="login-page">
         <div className="login-brand">
-          <div className="brand-symbol">
-            <Layers3 size={24} />
-          </div>
-          <span>财税连续办理助手</span>
+          <BrandMark />
+          <span>财税助手</span>
         </div>
         <section className="login-card">
           <span className="eyebrow">比赛模拟环境</span>
-          <h1>资料有依据，办理有进度。</h1>
-          <p>查询、补充、检查，让每一步都能接着办。</p>
+          <h1>选择工作身份</h1>
+          <p>选择测试用户，进入财税工作台。</p>
           <div className="login-options">
             <button onClick={() => login('U001')}>
               <span className="user-avatar">一</span>
@@ -454,12 +448,9 @@ export default function App() {
       )}
       <aside className={`sidebar ${navigationOpen ? 'open' : ''}`}>
         <div className="sidebar-brand">
-          <div className="brand-symbol">
-            <Layers3 size={21} />
-          </div>
+          <BrandMark />
           <div>
             <strong>财税助手</strong>
-            <span>连续办理 · 有据可查</span>
           </div>
           <button
             className="icon-button mobile-close"
@@ -492,7 +483,6 @@ export default function App() {
             >
               <Icon size={18} />
               <span>{label}</span>
-              {page === id && <span className="nav-dot" />}
             </button>
           ))}
         </nav>
@@ -547,7 +537,6 @@ export default function App() {
             >
               <Menu size={20} />
             </button>
-            <Building2 size={18} />
             <label className="select-label">
               <span className="sr-only">当前企业</span>
               <select
@@ -649,254 +638,237 @@ export default function App() {
                 )}
               </div>
             )}
-            <div
-              className="conversation-scroll"
-              ref={scrollArea}
-              onScroll={() => {
-                const area = scrollArea.current;
-                if (area) {
-                  stickToBottom.current =
-                    area.scrollHeight - area.scrollTop - area.clientHeight < 90;
-                  if (stickToBottom.current) setNewMessages(false);
-                }
-              }}
-            >
-              <div className="conversation-content">
-                {turnList.length === 0 ? (
-                  <section className="welcome">
-                    <span className="welcome-mark">
-                      <Layers3 size={29} />
-                    </span>
-                    <span className="eyebrow">财税连续办理助手</span>
-                    <h1>
-                      把资料理清，
-                      <br />
-                      让办理接得上。
-                    </h1>
-                    <p>
-                      查询有依据，补充可核验。
-                      <br className="mobile-break" />
-                      下次回来，也能接着处理。
-                    </p>
-                    <div className="starter-actions">
-                      {[
-                        {
-                          Icon: BookOpen,
-                          title: '查询月度资料',
-                          description: '发票金额与银行收支',
-                          text: '查询当前企业的月度发票金额与银行收支',
-                        },
-                        {
-                          Icon: ClipboardCheck,
-                          title: '检查发票用途',
-                          description: '按适用规则找出缺项',
-                          text: '检查当前企业的发票用途填写情况',
-                        },
-                        {
-                          Icon: History,
-                          title: '继续上次任务',
-                          description: '恢复进度，再核对当前资料',
-                          text: '继续处理当前企业的未完成任务',
-                        },
-                      ].map(({ Icon, title, description, text }) => (
-                        <button key={title} onClick={() => prepareDraft(text)}>
-                          <span className="starter-icon">
-                            <Icon size={20} />
-                          </span>
-                          <strong>{title}</strong>
-                          <small>{description}</small>
-                          <ArrowRight size={15} />
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-                ) : (
-                  turnList.map((turn) => (
-                    <article className="turn" key={turn.turn_id}>
-                      <div className="user-message">{turn.text}</div>
-                      <div className="assistant-message">
-                        <span className="assistant-avatar">
-                          <Layers3 size={16} />
-                        </span>
-                        <div className="assistant-content">
-                          {turn.final_message ? (
-                            <>
-                              <div className="prose">
-                                <ReactMarkdown>{turn.final_message}</ReactMarkdown>
-                              </div>
-                              {turn.final_cards?.map((card, index) => (
-                                <Results
-                                  key={`${card.kind}/${index}`}
-                                  card={card}
-                                  canUpdate={
-                                    user.companies.find((c) => c.company_id === card.company_id)
-                                      ?.can_update ?? false
-                                  }
-                                  onDraft={prepareDraft}
-                                  onDetail={setDetail}
-                                />
-                              ))}
-                              <div className="answer-footer">
-                                <CheckCheck size={13} />
-                                <span>{statusName(turn.status)}</span>
-                                {turn.runs?.at(-1) && (
-                                  <button
-                                    onClick={() =>
-                                      setDetail({ kind: 'run', id: turn.runs!.at(-1)!.run_id })
-                                    }
-                                  >
-                                    查看办理记录
-                                    <ChevronRight size={12} />
-                                  </button>
-                                )}
-                              </div>
-                            </>
-                          ) : turn.error ? (
-                            <div className="turn-error">
-                              <CircleAlert size={17} />
-                              <div>
-                                <strong>本轮未能完成</strong>
-                                <p>{turn.error.message}</p>
-                                {turn.runs?.at(-1) && (
-                                  <button
-                                    className="text-button"
-                                    onClick={() =>
-                                      setDetail({ kind: 'run', id: turn.runs!.at(-1)!.run_id })
-                                    }
-                                  >
-                                    核对已提交操作
-                                    <ChevronRight size={13} />
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          ) : ['cancelled', 'interrupted'].includes(turn.status) ? (
-                            <p className="muted">本轮已停止，已提交的资料仍可在记录中核对。</p>
-                          ) : (
-                            <div className="processing">
-                              <LoaderCircle size={16} className="spinning" />
-                              <span>{turn.turn_id === activeId ? stage : '等待处理'}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </article>
-                  ))
-                )}
-              </div>
-            </div>
-            <div className="composer-area">
-              {newMessages && (
-                <button
-                  className="new-message-pill"
-                  onClick={() => {
-                    stickToBottom.current = true;
-                    scrollArea.current?.scrollTo({
-                      top: scrollArea.current.scrollHeight,
-                      behavior: 'smooth',
-                    });
-                    setNewMessages(false);
-                  }}
-                >
-                  查看新消息
-                  <ChevronDown size={13} />
-                </button>
-              )}
-              {!user.model_ready && (
-                <p className="model-notice">
-                  <CircleAlert size={14} />
-                  模型暂未连接，完成本地配置并重启服务后即可办理。
-                </p>
-              )}
-              {attachment && (
-                <div className="attachment-chip">
-                  <Paperclip size={14} />
-                  <span>{attachment.original_name}</span>
-                  <button
-                    className="icon-button"
-                    aria-label="移除附件引用"
-                    onClick={() => setAttachment(null)}
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-              )}
-              <form
-                className="composer"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void send();
+            <div className={`chat-workspace${turnList.length === 0 ? ' is-empty' : ''}`}>
+              <div className="welcome-backdrop" aria-hidden="true" />
+              <div
+                className="conversation-scroll"
+                ref={scrollArea}
+                onScroll={() => {
+                  const area = scrollArea.current;
+                  if (area) {
+                    stickToBottom.current =
+                      area.scrollHeight - area.scrollTop - area.clientHeight < 90;
+                    if (stickToBottom.current) setNewMessages(false);
+                  }
                 }}
               >
-                <textarea
-                  ref={composer}
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  onKeyDown={onKeyDown}
-                  onCompositionStart={() => {
-                    composing.current = true;
-                  }}
-                  onCompositionEnd={() => {
-                    composing.current = false;
-                  }}
-                  placeholder="告诉我需要查询或补充什么…"
-                  rows={2}
-                  aria-label="输入办理需求"
-                />
-                <div className="composer-toolbar">
-                  {user.dataset_profile === 'extended' &&
-                    user.companies.find((c) => c.company_id === company)?.can_import_invoices && (
-                      <button
-                        type="button"
-                        className="icon-button"
-                        aria-label="导入发票 Excel"
-                        title="上传并预览新增发票"
-                        disabled={!session || !user.invoice_import_ready || Boolean(activeId)}
-                        onClick={() => setDetail({ kind: 'import' })}
-                      >
-                        <Paperclip size={18} />
-                      </button>
-                    )}
-                  <span>
-                    {draft.length > 12000
-                      ? `${draft.length.toLocaleString()} / 16,000 字符`
-                      : 'Enter 发送 · Shift + Enter 换行'}
-                  </span>
-                  {activeId ? (
-                    <button
-                      type="button"
-                      className="stop-button"
-                      aria-label="停止本轮处理"
-                      onClick={stop}
-                    >
-                      <Square size={13} />
-                      停止
-                    </button>
+                <div className="conversation-content">
+                  {turnList.length === 0 ? (
+                    <section className="welcome">
+                      <div className="welcome-brand">
+                        <span className="welcome-emblem" aria-hidden="true">
+                          <BrandMark className="brand-mark-welcome" />
+                        </span>
+                        <span className="workspace-label">财税助手</span>
+                      </div>
+                      <h1>今天需要处理什么？</h1>
+                      <p>查询企业资料、核对发票或继续之前的任务。</p>
+                      <div className="starter-actions" aria-label="快捷办理建议">
+                        {[
+                          {
+                            title: '查询月度资料',
+                            text: '查询当前企业的月度发票金额与银行收支',
+                          },
+                          {
+                            title: '检查发票用途',
+                            text: '检查当前企业的发票用途填写情况',
+                          },
+                          {
+                            title: '继续上次任务',
+                            text: '继续处理当前企业的未完成任务',
+                          },
+                        ].map(({ title, text }) => (
+                          <button key={title} onClick={() => prepareDraft(text)}>
+                            {title}
+                          </button>
+                        ))}
+                      </div>
+                    </section>
                   ) : (
-                    <button
-                      className="send-button"
-                      aria-label="发送消息"
-                      disabled={
-                        !session ||
-                        sending ||
-                        !draft.trim() ||
-                        draft.length > 16000 ||
-                        !user.model_ready
-                      }
-                    >
-                      {sending ? (
-                        <LoaderCircle size={18} className="spinning" />
-                      ) : (
-                        <ArrowUp size={20} />
-                      )}
-                    </button>
+                    turnList.map((turn) => (
+                      <article className="turn" key={turn.turn_id}>
+                        <div className="user-message">{turn.text}</div>
+                        <div className="assistant-message">
+                          <span className="assistant-avatar">
+                            <BrandMark compact className="brand-mark-message" />
+                          </span>
+                          <div className="assistant-content">
+                            {turn.final_message ? (
+                              <>
+                                <div className="prose">
+                                  <ReactMarkdown>{turn.final_message}</ReactMarkdown>
+                                </div>
+                                {turn.final_cards?.map((card, index) => (
+                                  <Results
+                                    key={`${card.kind}/${index}`}
+                                    card={card}
+                                    canUpdate={
+                                      user.companies.find((c) => c.company_id === card.company_id)
+                                        ?.can_update ?? false
+                                    }
+                                    onDraft={prepareDraft}
+                                    onDetail={setDetail}
+                                  />
+                                ))}
+                                <div className="answer-footer">
+                                  <CheckCheck size={13} />
+                                  <span>{statusName(turn.status)}</span>
+                                  {turn.runs?.at(-1) && (
+                                    <button
+                                      onClick={() =>
+                                        setDetail({ kind: 'run', id: turn.runs!.at(-1)!.run_id })
+                                      }
+                                    >
+                                      查看办理记录
+                                      <ChevronRight size={12} />
+                                    </button>
+                                  )}
+                                </div>
+                              </>
+                            ) : turn.error ? (
+                              <div className="turn-error">
+                                <CircleAlert size={17} />
+                                <div>
+                                  <strong>本轮未能完成</strong>
+                                  <p>{turn.error.message}</p>
+                                  {turn.runs?.at(-1) && (
+                                    <button
+                                      className="text-button"
+                                      onClick={() =>
+                                        setDetail({ kind: 'run', id: turn.runs!.at(-1)!.run_id })
+                                      }
+                                    >
+                                      核对已提交操作
+                                      <ChevronRight size={13} />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ) : ['cancelled', 'interrupted'].includes(turn.status) ? (
+                              <p className="muted">本轮已停止，已提交的资料仍可在记录中核对。</p>
+                            ) : (
+                              <div className="processing">
+                                <LoaderCircle size={16} className="spinning" />
+                                <span>{turn.turn_id === activeId ? stage : '等待处理'}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </article>
+                    ))
                   )}
                 </div>
-              </form>
-              <p className="composer-footnote">
-                <ShieldCheck size={12} />
-                比赛模拟资料 · 保存状态以实际核验结果为准
-              </p>
+              </div>
+              <div className="composer-area">
+                {newMessages && (
+                  <button
+                    className="new-message-pill"
+                    onClick={() => {
+                      stickToBottom.current = true;
+                      scrollArea.current?.scrollTo({
+                        top: scrollArea.current.scrollHeight,
+                        behavior: 'smooth',
+                      });
+                      setNewMessages(false);
+                    }}
+                  >
+                    查看新消息
+                    <ChevronDown size={13} />
+                  </button>
+                )}
+                {attachment && (
+                  <div className="attachment-chip">
+                    <Paperclip size={14} />
+                    <span>{attachment.original_name}</span>
+                    <button
+                      className="icon-button"
+                      aria-label="移除附件引用"
+                      onClick={() => setAttachment(null)}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                )}
+                <form
+                  className="composer"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void send();
+                  }}
+                >
+                  <textarea
+                    ref={composer}
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onKeyDown={onKeyDown}
+                    onCompositionStart={() => {
+                      composing.current = true;
+                    }}
+                    onCompositionEnd={() => {
+                      composing.current = false;
+                    }}
+                    placeholder="输入需要查询或办理的事项……"
+                    rows={2}
+                    aria-label="输入办理需求"
+                  />
+                  <div className="composer-toolbar">
+                    {user.dataset_profile === 'extended' &&
+                      user.companies.find((c) => c.company_id === company)?.can_import_invoices && (
+                        <button
+                          type="button"
+                          className="icon-button"
+                          aria-label="导入发票 Excel"
+                          title="上传并预览新增发票"
+                          disabled={!session || !user.invoice_import_ready || Boolean(activeId)}
+                          onClick={() => setDetail({ kind: 'import' })}
+                        >
+                          <Paperclip size={18} />
+                        </button>
+                      )}
+                    <span>
+                      {draft.length > 12000
+                        ? `${draft.length.toLocaleString()} / 16,000 字符`
+                        : 'Enter 发送 · Shift + Enter 换行'}
+                    </span>
+                    {activeId ? (
+                      <button
+                        type="button"
+                        className="stop-button"
+                        aria-label="停止本轮处理"
+                        onClick={stop}
+                      >
+                        <Square size={13} />
+                        停止
+                      </button>
+                    ) : (
+                      <button
+                        className="send-button"
+                        aria-label="发送消息"
+                        disabled={
+                          !session ||
+                          sending ||
+                          !draft.trim() ||
+                          draft.length > 16000 ||
+                          !user.model_ready
+                        }
+                      >
+                        {sending ? (
+                          <LoaderCircle size={18} className="spinning" />
+                        ) : (
+                          <ArrowUp size={20} />
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </form>
+                {!user.model_ready && (
+                  <p className="model-notice">
+                    <CircleAlert size={14} />
+                    模型暂未连接，完成本地配置并重启服务后即可办理。
+                  </p>
+                )}
+                <p className="composer-footnote">比赛模拟资料 · 保存状态以实际核验结果为准</p>
+              </div>
             </div>
           </>
         )}

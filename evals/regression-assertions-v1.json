@@ -1,0 +1,13 @@
+{
+  "version": "1.0",
+  "description": "首轮真实模型测试后的补充逐轮断言，不修改 holdout-v1.json 的冻结输入与预期。",
+  "cases": {
+    "L04-04": {"0": {"status": "waiting_user"}},
+    "L07-01": {"0": {"status": "completed", "no_writes": true}},
+    "L07-02": {"0": {"allowed_result_companies": ["C002"], "no_writes": true}},
+    "L07-04": {"0": {"active_preferences": 1}, "1": {"active_preferences": 0}},
+    "L08-02": {"0": {"no_writes": true}},
+    "L08-04": {"0": {"active_preferences": 1}, "1": {"active_preferences": 0}, "2": {"active_preferences": 0}},
+    "L10-01": {"0": {"card_kinds": ["monthly_summary", "purpose_check"], "max_tool_calls": 6}}
+  }
+}

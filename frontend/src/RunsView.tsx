@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { importStatus } from './ImportReceipt';
-import { ArrowUpRight, History } from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
 import { dateTime, statusName } from './api';
 import { useResource } from './useResource';
 import type { Detail, RunSummary, ImportSummary } from './types';
@@ -32,7 +32,6 @@ export function RunsView({
     <section className="management-page">
       <div className="page-heading">
         <div>
-          <span className="eyebrow">有据可查</span>
           <h1>运行记录</h1>
           <p>核对本轮用了什么信息，执行了哪些操作。</p>
         </div>
@@ -103,9 +102,6 @@ export function RunsView({
                   key={run.run_id}
                   onClick={() => onDetail({ kind: 'run', id: run.run_id })}
                 >
-                  <div className="memory-icon">
-                    <History size={18} />
-                  </div>
                   <div>
                     <strong>{run.text}</strong>
                     <p>{dateTime(run.started_at)}</p>
@@ -119,7 +115,6 @@ export function RunsView({
             </div>
           ) : (
             <div className="empty-panel">
-              <History size={32} />
               <h3>还没有办理记录</h3>
               <p>开始对话后，实际输入、工具调用和结果会保存在这里。</p>
             </div>

@@ -108,6 +108,11 @@ def extended_settings():
         pytest.fail("Run python -m app.cli init-extended before extension tests.")
     return config.model_copy(
         update={
+            # Offline program tests must not inherit a developer's live API setup.
+            "model_api_key": "",
+            "model_id": "",
+            "model_base_url": "",
+            "model_context_limit": 0,
             "database_url": config.test_database_url,
             "ingest_database_url": make_conninfo(
                 config.ingest_database_url, dbname="tax_harness_extended_test"

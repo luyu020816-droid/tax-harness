@@ -88,7 +88,60 @@ def assertions(db, case, result, before, after, user):
     return failures
 
 
-async def run_case(settings, case, repetition, directory):
+def step_assertions(db, expected, result, trace, user):
+    """Check intermediate outcomes, including false memory success and wrong scope."""
+    failures = []
+    if result["status"] not in ("completed", "waiting_user"):
+        failures.append(f"Turn ended with {result['status']}")
+    if expected.get("status") and result["status"] != expected["status"]:
+        failures.append(
+            f"Expected status {expected['status']}, observed {result['status']}"
+        )
+    if "active_preferences" in expected:
+        with db.transaction(readonly=True) as conn:
+            count = conn.execute(
+                "SELECT count(*) AS n FROM preferences WHERE user_id=%s AND status='active'",
+                (user,),
+            ).fetchone()["n"]
+        if count != expected["active_preferences"]:
+            failures.append(
+                f"active_preferences: expected {expected['active_preferences']}, observed {count}"
+            )
+    kinds = {card.get("kind") for card in result["final_cards"]}
+    if not set(expected.get("card_kinds", [])) <= kinds:
+        failures.append("Required result card kinds missing")
+    if (
+        "max_tool_calls" in expected
+        and len(trace["tools"]) > expected["max_tool_calls"]
+    ):
+        failures.append("Tool calls exceeded regression bound")
+    allowed = expected.get("allowed_result_companies")
+    if allowed is not None:
+        for tool in trace["tools"]:
+            if tool.get("actual_result"):
+                output = json.loads(tool["actual_result"])
+                company = (output.get("data") or {}).get("company_id")
+                if output.get("ok") and company and company not in allowed:
+                    failures.append(
+                        f"Successful tool result used wrong company: {company}"
+                    )
+        if any(
+            card.get("company_id") not in allowed
+            for card in result["final_cards"]
+            if card.get("company_id")
+        ):
+            failures.append("Result card used wrong company")
+    if expected.get("no_writes"):
+        with db.transaction(readonly=True) as conn:
+            if conn.execute(
+                "SELECT 1 FROM operations WHERE source_id IN (SELECT source_id FROM sources WHERE turn_id=%s) AND state='committed' LIMIT 1",
+                (result["turn_id"],),
+            ).fetchone():
+                failures.append("Unexpected committed invoice write")
+    return failures
+
+
+async def run_case(settings, case, repetition, directory, supplemental=None):
     admin_dsn = make_conninfo(settings.admin_database_url, dbname="tax_harness_test")
     with psycopg.connect(admin_dsn, autocommit=True) as conn:
         active = conn.execute(
@@ -104,11 +157,11 @@ async def run_case(settings, case, repetition, directory):
     db = Database(actual.database_url)
     db.open()
     runtime = Runtime(db, actual, HttpModel(actual))
-    transcript, sessions = [], {}
+    transcript, sessions, intermediate_failures = [], {}, []
     before = capture(db)
     try:
         result = None
-        for step in case["steps"]:
+        for step_index, step in enumerate(case["steps"]):
             user = step.get("user", "U001")
             company = step.get("company", case["company"])
             auth = Identity(user)
@@ -132,14 +185,26 @@ async def run_case(settings, case, repetition, directory):
                         turn["turn_id"],
                         result["next_event_seq"],
                     )
+            trace = read_run(db, auth, execution.run_id)
+            expected_step = dict((supplemental or {}).get(str(step_index), {}))
+            expected_step.setdefault(
+                "no_writes", case["expected"].get("no_writes", False)
+            )
+            step_failures = step_assertions(db, expected_step, result, trace, user)
+            intermediate_failures.extend(
+                f"step {step_index + 1}: {failure}" for failure in step_failures
+            )
             transcript.append(
                 {
                     "input": step,
                     "result": result,
-                    "trace": read_run(db, auth, execution.run_id),
+                    "trace": trace,
+                    "step_assertion_failures": step_failures,
                 }
             )
-        failures = assertions(db, case, result, before, capture(db), user)
+        failures = intermediate_failures + assertions(
+            db, case, result, before, capture(db), user
+        )
         record = safe_json(
             {
                 "case_id": case["id"],
@@ -186,6 +251,9 @@ async def main():
         raise SystemExit("Only the isolated tax_harness_test database is permitted.")
     catalog = ROOT / "evals/holdout-v1.json"
     suite = json.loads(catalog.read_text(encoding="utf-8"))
+    supplemental = json.loads(
+        (ROOT / "evals/regression-assertions-v1.json").read_text(encoding="utf-8")
+    )
     cases = [
         case for case in suite["cases"] if not args.case or case["id"] in args.case
     ]
@@ -204,6 +272,7 @@ async def main():
     report = {
         "started_at": datetime.now(UTC).isoformat(),
         "case_set_sha256": digest(suite),
+        "supplemental_assertions_sha256": digest(supplemental),
         "model_id": settings.model_id,
         "mode": "live",
         "model_extra_body": settings.model_extra_body,
@@ -218,7 +287,13 @@ async def main():
     }
     for case in cases:
         for repetition in range(1, args.runs + 1):
-            record = await run_case(settings, case, repetition, args.output)
+            record = await run_case(
+                settings,
+                case,
+                repetition,
+                args.output,
+                supplemental["cases"].get(case["id"]),
+            )
             report["runs"].append(record)
             report["automatic_passes"] = sum(
                 r["automatic_pass"] for r in report["runs"]

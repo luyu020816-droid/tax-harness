@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <title>凭证狐</title>
+  <style>
+    :root { --fox: #c46f2c; --body: #b75e28; --fold: #69361f; --tail-fold: #754022; }
+  </style>
+  <!-- Folded voucher ears. -->
+  <path d="M14 36V10q0-3 3-1l22 18H25Z" fill="var(--fox)"/>
+  <path d="M14 10v26l11-9Z" fill="var(--fold)"/>
+  <path d="m61 27 22-18q3-2 3 1v26L75 27Z" fill="var(--fox)"/>
+  <path d="M86 10v26L75 27Z" fill="var(--fold)"/>
+  <!-- Separate planes leave a broad check-shaped counterform. -->
+  <path d="m85 46 1 14-35 25-3-1Z" fill="var(--fold)"/>
+  <path d="m24 63 41 40q7 7 3 12l-40-12q-4-2-4-7Z" fill="var(--body)"/>
+  <path d="m50 86 20 18q2 4-1 12l40-13q4-2 5-6L89 83Z" fill="var(--tail-fold)"/>
+  <!-- Voucher lines are transparent cutouts, not a baked-in background. -->
+  <path fill-rule="evenodd" clip-rule="evenodd" d="M27 29h47q2 0 3 1l8 9q2 2 0 4L51 70q-2 2-4 0L10 53q-4-2-1-5l16-17q1-2 2-2Zm1 11a2 2 0 0 0 0 4h22a2 2 0 0 0 0-4Zm0 8a2 2 0 0 0 0 4h16a2 2 0 0 0 0-4Z" fill="var(--fox)"/>
+  <path fill-rule="evenodd" clip-rule="evenodd" d="m86 61 34-13-6 49-25-14-20 16-19-13Zm8 10a1.8 1.8 0 0 0 1.3 3.4l13-5a1.8 1.8 0 0 0-1.3-3.4Zm1 8a1.8 1.8 0 0 0 1.3 3.4l11-4.2a1.8 1.8 0 0 0-1.3-3.4Z" fill="var(--fox)"/>
+</svg>
