@@ -11,12 +11,21 @@ test('real browser: results, saves, memory, traces, responsive and identity', as
   const failures: string[] = [];
   page.on('pageerror', error => failures.push(error.message));
   await page.goto('/');
+  const favicon = await page.locator('link[rel="icon"]').getAttribute('href');
+  const faviconResponse = await page.request.get(favicon!);
+  expect(faviconResponse.headers()['content-type']).toContain('image/svg+xml');
   await page.getByRole('button', { name: /测试用户一/ }).click();
   await expect(page.getByText('程序测试模式', { exact: false })).toBeVisible();
   await expect(page.getByRole('button', { name: '发送消息' })).toBeDisabled();
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  const brandMark = page.locator('.welcome .brand-mark');
+  await expect(brandMark).toBeVisible();
+  await expect
+    .poll(() => brandMark.evaluate((image: HTMLImageElement) => image.naturalWidth))
+    .toBeGreaterThan(0);
   for (const width of [1366, 1440, 1920]) {
-    await page.setViewportSize({ width, height: 900 });
+    const height = width === 1366 ? 768 : width === 1920 ? 1080 : 900;
+    await page.setViewportSize({ width, height });
     await expect(page.getByRole('heading', { name: '今天需要处理什么？' })).toBeVisible();
     const welcome = await page.locator('.welcome').boundingBox();
     const composer = await page.locator('.composer').boundingBox();
@@ -24,10 +33,14 @@ test('real browser: results, saves, memory, traces, responsive and identity', as
     expect(sidebar!.width).toBe(248);
     expect(composer!.width).toBeLessThanOrEqual(800);
     expect(composer!.y - (welcome!.y + welcome!.height)).toBeLessThan(100);
-    expect(composer!.y + composer!.height).toBeLessThan(900);
+    expect(composer!.y + composer!.height).toBeLessThan(height);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await shot(page, `00-empty-${width}`);
   }
+  await page.setViewportSize({ width: 360, height: 844 });
+  await expect(page.getByRole('textbox', { name: '输入办理需求' })).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await shot(page, '00-empty-mobile');
   await page.setViewportSize({ width: 1440, height: 900 });
   await shot(page, '01-empty-desktop');
   const input = page.getByRole('textbox', { name: '输入办理需求' });
@@ -50,7 +63,7 @@ test('real browser: results, saves, memory, traces, responsive and identity', as
   await page.getByRole('button', { name: /记住.*偏好/ }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
-  await expect(dialog).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+  await expect(dialog).toHaveCSS('background-color', 'rgb(255, 253, 249)');
   await dialog.getByRole('textbox').fill('以后请先列出需要补用途的发票');
   await dialog.getByRole('button', { name: '保存偏好' }).click();
   await expect(page.getByText('以后请先列出需要补用途的发票')).toBeVisible();

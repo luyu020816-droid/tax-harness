@@ -10,7 +10,6 @@ import {
   CircleAlert,
   ClipboardCheck,
   History,
-  Layers3,
   LoaderCircle,
   Menu,
   MessageSquare,
@@ -21,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import { api, ApiError, body, companyName, requestId, statusName, taskName } from './api';
+import { BrandMark } from './BrandMark';
 import { Details } from './Details';
 import { MemoryView } from './MemoryView';
 import { Results } from './Results';
@@ -394,9 +394,7 @@ export default function App() {
   if (booting && !user)
     return (
       <div className="boot-screen">
-        <div className="brand-symbol">
-          <Layers3 size={23} />
-        </div>
+        <BrandMark />
         <LoaderCircle className="spinning" size={20} />
         <p>正在连接工作台</p>
       </div>
@@ -405,9 +403,7 @@ export default function App() {
     return (
       <div className="login-page">
         <div className="login-brand">
-          <div className="brand-symbol">
-            <Layers3 size={24} />
-          </div>
+          <BrandMark />
           <span>财税助手</span>
         </div>
         <section className="login-card">
@@ -452,9 +448,7 @@ export default function App() {
       )}
       <aside className={`sidebar ${navigationOpen ? 'open' : ''}`}>
         <div className="sidebar-brand">
-          <div className="brand-symbol">
-            <Layers3 size={21} />
-          </div>
+          <BrandMark />
           <div>
             <strong>财税助手</strong>
           </div>
@@ -645,6 +639,7 @@ export default function App() {
               </div>
             )}
             <div className={`chat-workspace${turnList.length === 0 ? ' is-empty' : ''}`}>
+              <div className="welcome-backdrop" aria-hidden="true" />
               <div
                 className="conversation-scroll"
                 ref={scrollArea}
@@ -660,7 +655,12 @@ export default function App() {
                 <div className="conversation-content">
                   {turnList.length === 0 ? (
                     <section className="welcome">
-                      <span className="workspace-label">财税助手</span>
+                      <div className="welcome-brand">
+                        <span className="welcome-emblem" aria-hidden="true">
+                          <BrandMark className="brand-mark-welcome" />
+                        </span>
+                        <span className="workspace-label">财税助手</span>
+                      </div>
                       <h1>今天需要处理什么？</h1>
                       <p>查询企业资料、核对发票或继续之前的任务。</p>
                       <div className="starter-actions" aria-label="快捷办理建议">
@@ -690,7 +690,7 @@ export default function App() {
                         <div className="user-message">{turn.text}</div>
                         <div className="assistant-message">
                           <span className="assistant-avatar">
-                            <Layers3 size={16} />
+                            <BrandMark compact className="brand-mark-message" />
                           </span>
                           <div className="assistant-content">
                             {turn.final_message ? (
@@ -775,12 +775,6 @@ export default function App() {
                     查看新消息
                     <ChevronDown size={13} />
                   </button>
-                )}
-                {!user.model_ready && (
-                  <p className="model-notice">
-                    <CircleAlert size={14} />
-                    模型暂未连接，完成本地配置并重启服务后即可办理。
-                  </p>
                 )}
                 {attachment && (
                   <div className="attachment-chip">
@@ -867,6 +861,12 @@ export default function App() {
                     )}
                   </div>
                 </form>
+                {!user.model_ready && (
+                  <p className="model-notice">
+                    <CircleAlert size={14} />
+                    模型暂未连接，完成本地配置并重启服务后即可办理。
+                  </p>
+                )}
                 <p className="composer-footnote">比赛模拟资料 · 保存状态以实际核验结果为准</p>
               </div>
             </div>

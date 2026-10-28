@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <title>凭证狐</title>
+  <!-- Small-size optical variant: same silhouette, fewer internal details. -->
+  <path d="M14 36V9l25 18H25ZM61 27 86 9v27L75 27Z" fill="#c46f2c"/>
+  <path d="m24 63 41 40q7 7 3 12l-40-12q-4-2-4-7Z" fill="#b75e28"/>
+  <path d="m120 48-6 49q-1 4-5 6l-40 13q3-8 1-12L50 86l36-25Z" fill="#c46f2c"/>
+  <path d="m50 86 20 18q2 4-1 12l40-13q4-2 5-6L89 83Z" fill="#754022"/>
+  <path fill-rule="evenodd" clip-rule="evenodd" d="M27 29h47q2 0 3 1l8 9q2 2 0 4L51 70q-2 2-4 0L10 53q-4-2-1-5l16-17q1-2 2-2Zm2 13a3 3 0 0 0 0 6h20a3 3 0 0 0 0-6Z" fill="#c46f2c"/>
+</svg>
