@@ -7,6 +7,7 @@ from app.errors import AppError
 from app.events import emit
 from app.execution import Execution, guard
 from app.identity import assert_access
+from app.request_evidence import require_period
 from app.sources import add_source, assess, read_source
 from app.tool_schemas import TOOLS
 from app.turns import mentioned_companies
@@ -138,6 +139,12 @@ class ToolExecutor:
 
     def _dispatch(self, execution, name, args):
         db, auth = self.db, execution.auth
+        scope_basis = None
+        if name in ("query_month", "get_rules", "check_purposes") or (
+            name == "change_task" and args.get("period")
+        ):
+            with db.transaction(readonly=True) as conn:
+                scope_basis = require_period(conn, execution, args["company_id"], args["period"])
         if args.get("company_id") and name in (
             "query_month",
             "find_invoices",
@@ -176,13 +183,16 @@ class ToolExecutor:
                     409,
                 )
         if name == "query_month":
-            return business.query_month(db, auth, **args)
+            return {**business.query_month(db, auth, **args), "scope_basis": scope_basis}
         if name == "find_invoices":
             return business.find_invoices(db, auth, **args, session_id=execution.session_id)
         if name == "get_rules":
-            return rules.get_rules(db, auth, **args)
+            return {**rules.get_rules(db, auth, **args), "scope_basis": scope_basis}
         if name == "check_purposes":
-            return business.check_purposes(db, auth, **args, session_id=execution.session_id)
+            return {
+                **business.check_purposes(db, auth, **args, session_id=execution.session_id),
+                "scope_basis": scope_basis,
+            }
         if name == "update_invoice":
             return mutations.update_invoice(
                 db, auth, **args, source_id=execution.source_id, execution=execution

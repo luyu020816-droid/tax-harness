@@ -5,6 +5,7 @@ from app.config import Settings
 from app.errors import AppError
 from app.execution import Execution, guard
 from app.memory import load_core, recent_groups
+from app.model_requests import build_request
 from app.sources import read_source
 from app.tool_schemas import tool_definitions
 from app.values import canonical, digest, safe_json
@@ -146,19 +147,6 @@ def assemble(
     current = {"role": "user", "content": source["content"]}
     extras = [message for group in groups for message in group["messages"]]
     definitions = tool_definitions()
-    protected = {"messages", "tools", "model", "stream", "max_tokens"}
-    if protected.intersection(settings.model_extra_body):
-        raise AppError("INVALID_ARGUMENT", "MODEL_EXTRA_BODY 不能覆盖核心请求字段。")
-    base = {
-        "model": settings.model_id,
-        "max_tokens": settings.output_reserve,
-        "tools": definitions,
-        "tool_choice": "auto",
-        "parallel_tool_calls": False,
-        "stream": False,
-        "response_format": {"type": "json_object"},
-        **settings.model_extra_body,
-    }
     limit = budget or settings.context_budget
     if limit < 512:
         raise AppError("CONTEXT_CAPACITY_EXCEEDED", "模型输入预算不足，请检查上下文上限配置。", 422)
@@ -166,7 +154,9 @@ def assemble(
     dropped = []
     while True:
         history = [m for group in selected for m in group["messages"]]
-        payload = {**base, "messages": [*mandatory, *history, current, *extras]}
+        payload = build_request(
+            settings, [*mandatory, *history, current, *extras], tools=definitions
+        )
         count = estimate_tokens(payload)
         if count <= limit:
             break
@@ -208,6 +198,15 @@ def assemble(
     for group in groups:
         for result in group.get("results", []):
             data = result.get("data") or {}
+            basis = data.get("scope_basis") or {}
+            if basis.get("source_id"):
+                refs.append(
+                    {
+                        "source_id": basis["source_id"],
+                        "revision": basis["revision"],
+                        "allow_suppressed": basis.get("allow_suppressed", False),
+                    }
+                )
             if data.get("company_id") and "data_revision" in data and "rules_epoch" in data:
                 heads[data["company_id"]] = {k: data[k] for k in ("data_revision", "rules_epoch")}
             rule_refs.extend(data.get("rule_refs", data.get("rules", [])))

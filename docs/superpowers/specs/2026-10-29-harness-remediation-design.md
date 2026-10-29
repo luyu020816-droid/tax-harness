@@ -2,8 +2,8 @@
 
 | 项目 | 约定 |
 |---|---|
-| 文档版本 | 1.0，2026-10-29，北京时间 |
-| 状态 | 修改设计与开发契约；未实施，不代表测试已通过 |
+| 文档版本 | 1.1，2026-10-29，北京时间；经实施前复审 |
+| 状态 | 分阶段实施中；仅实际执行报告可作为已完成证据 |
 | 审查基线 | `feature_adjust_1026`，`203efafead55aa6f119c7588a3c78f857c88932b` |
 | 当前 main | 本地 `998d31a`；实施前必须确认并纳入上述分支或等价修复，不得直接按旧 main 开发并覆盖朋友的前端 |
 | 文档用途 | 指导编码、接口联调、迁移、缺陷回归、真实模型验收与参赛交付 |
@@ -130,6 +130,10 @@ Frame写入context manifest，不新增重复存储所有原话的表。
 正常情况下模型使用Frame中的available_scope_refs。需要新增组合时调用只读工具`resolve_scope`，输入candidate_company_id、candidate_period和basis_refs；宿主验证后返回binding_id。basis_refs是严格联合类型：current_span含source_id/revision/start/end，task含task_id/revision/generation，confirmed_slot含slot_id/revision，selected_company只补企业；相对日期由current_span定位后由宿主解析。模型不能直接往绑定表写入，也不能通过该工具“确认”没有依据的范围。
 
 月度工具的DTO保留company_id、period并新增必填scope_ref，三者必须与宿主绑定一致。未提供绑定时返回范围错误，而不是自动用模型参数补造一个。已有合法Frame绑定不必额外调用resolve_scope。
+
+实施顺序说明：在完整协议迁移前，允许先在旧工具入口核验真实月份来源并记录scope_basis，且创建/修改任务同样不得注入无依据月份。此项是M1的前置防护，不等于ScopeBinding持久接口、resolve_scope或完整M1已经交付；M1退出条件不变。
+
+带period的change_task同样受范围来源检查约束；不能先创建猜测月份任务，再以task作为范围依据绕过查询保护。任务来源在后续进度刷新中可以变化，但所用月份必须仍能追溯其被明确确认的用户来源修订。
 
 允许的范围依据：
 
@@ -353,6 +357,8 @@ result视图首批覆盖monthly_summary、purpose_check、invoices、rules、tas
 知识索引作业使用独立retrieval_jobs，因为无聊天turn的上传不能硬塞进既有work_items身份链。
 
 建议顺序为004请求证据与输出协议、005知识权威关系与三主题规则、006检索派生关系/pgvector。实际编号以实施时已存在迁移为准，禁止覆盖已执行迁移。每一阶段声明可兼容schema范围；`db.ready()`不能继续写死version==3。
+
+共用模型请求、受控三主题规则和月份来源入口防护可先作为无schema迁移的前置提交，降低实施风险；进入004及后续阶段时再升级ready约束，不能只为一个纯逻辑修复提前升级schema。
 
 迁移不得重导Excel或重置当前用途。旧operation保留审计读取；不能自动把旧Source转成新授权凭据。旧最终答复可显示为历史记录，新轮次只用新协议。迁移前已有在途模型执行须受控停止/失效，不让旧协议在新版本启用后提交。
 

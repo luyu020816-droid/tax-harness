@@ -6,6 +6,12 @@ from app.identity import Identity, assert_access
 from app.values import jsonb, month_bounds, uid
 
 TOPICS = {"amounts", "purpose", "bank"}
+CONDITION_TOPICS = {
+    "money_summary": "amounts",
+    "bank_read_only": "bank",
+    "purpose_all": "purpose",
+    "purpose_threshold": "purpose",
+}
 
 
 def resolve_in(conn, auth: Identity, company_id: str, period: str, topics: list[str]) -> list[dict]:
@@ -63,6 +69,22 @@ def rule_ref(rule: dict) -> dict:
 
 def template(condition: dict) -> str:
     kind = condition.get("kind")
+    allowed = {"kind", "threshold", "operator"} if kind == "purpose_threshold" else {"kind"}
+    if set(condition) - allowed:
+        raise AppError("RULE_UNSUPPORTED", "执行条件包含不支持的字段。", 422)
+    if kind == "money_summary":
+        return (
+            "发票金额表示价税合计，按企业和月份汇总当前保存数据；银行收入与支出分别相加，三项不相互抵扣。"
+            "金额使用十进制或整数分计算，单位元，保留两位小数。月份未明确时先追问。"
+            "成功查询但没有记录时合计为0.00元并说明无记录；失败或无权限不能回答为零。"
+            "发票与银行流水无逐条对应关系，不据金额推断付款或欠款。"
+        )
+    if kind == "bank_read_only":
+        return (
+            "企业编号和银行记录编号共同定位记录，按交易日期确定月份。"
+            "收入和支出金额均为正数，按方向分别汇总，支出不重复减负号。"
+            "银行记录全部只读；查询检查用户权限和企业范围，不据对方名称、备注或同额推断发票已付款。"
+        )
     if kind == "purpose_all":
         return "每张发票都必须填写用途，不设置金额门槛。空白或只有空白字符视为未填写，备注不能代替用途。"
     if kind == "purpose_threshold":
@@ -77,7 +99,7 @@ def template(condition: dict) -> str:
         if condition.get("operator", "gte") != "gte":
             raise AppError("RULE_UNSUPPORTED", "首版仅支持大于或等于的用途门槛。", 422)
         return f"单张发票金额大于或等于 {amount:.2f} 元时必须填写用途；低于此金额可以不填。空白或只有空白字符视为未填写，备注不能代替用途。"
-    raise AppError("RULE_UNSUPPORTED", "新增可执行版本目前支持全部必填和金额门槛用途规则。", 422)
+    raise AppError("RULE_UNSUPPORTED", "该执行条件尚未实现，规则只能保留草稿。", 422)
 
 
 def create_version(conn, data: dict) -> dict:
@@ -92,6 +114,10 @@ def create_version(conn, data: dict) -> dict:
     except (KeyError, ValueError) as exc:
         raise AppError("INVALID_ARGUMENT", "规则生效区间无效。") from exc
     condition = data.get("condition_json", {})
+    condition_topic = CONDITION_TOPICS.get(condition.get("kind"))
+    topic = data.get("topic", condition_topic or "purpose")
+    if topic not in TOPICS or (condition_topic and topic != condition_topic):
+        raise AppError("INVALID_ARGUMENT", "规则主题与执行条件不一致。")
     supported = start.day == 1 and (end is None or end.day == 1)
     try:
         supported = supported and data.get("full_text") == template(condition)
@@ -102,7 +128,7 @@ def create_version(conn, data: dict) -> dict:
             raise AppError("INVALID_ARGUMENT", "规则包含不存在的企业。")
     row = conn.execute(
         "INSERT INTO rule_versions(rule_version_id,rule_code,display_name,business_version,effective_from,effective_to,status,topic,full_text,condition_json,source_ref) "
-        "VALUES(%s,%s,%s,%s,%s,%s,'draft','purpose',%s,%s,%s) RETURNING *",
+        "VALUES(%s,%s,%s,%s,%s,%s,'draft',%s,%s,%s,%s) RETURNING *",
         (
             uid(),
             data["rule_code"],
@@ -110,6 +136,7 @@ def create_version(conn, data: dict) -> dict:
             data["business_version"],
             start,
             end,
+            topic,
             data.get("full_text", ""),
             jsonb(condition),
             data.get("source_ref", "local-admin"),
@@ -145,6 +172,27 @@ def activate(conn, version_id: str, replaces: str | None = None) -> dict:
         "SELECT * FROM company_heads WHERE company_id=ANY(%s) ORDER BY company_id FOR UPDATE",
         (companies,),
     )
+    row = conn.execute(
+        "SELECT * FROM rule_versions WHERE rule_version_id=%s FOR UPDATE", (version_id,)
+    ).fetchone()
+    if row["status"] != "draft":
+        raise AppError("RULE_CONFLICT", "规则版本已被其他维护操作更改。", 409)
+    if CONDITION_TOPICS.get(row["condition_json"].get("kind")) != row["topic"]:
+        raise AppError("RULE_UNSUPPORTED", "规则主题与执行条件不一致。", 422)
+    if replaces:
+        old = conn.execute(
+            "SELECT * FROM rule_versions WHERE rule_version_id=%s", (replaces,)
+        ).fetchone()
+        old_companies = {
+            r["company_id"]
+            for r in conn.execute(
+                "SELECT company_id FROM rule_scopes WHERE rule_version_id=%s", (replaces,)
+            ).fetchall()
+        }
+        if not old or old["topic"] != row["topic"] or old_companies != set(companies):
+            raise AppError("RULE_SCOPE_MISMATCH", "替换须保持规则主题和完整企业范围一致。", 409)
+        if old["status"] != "active":
+            raise AppError("RULE_CONFLICT", "被替换版本已不处于启用状态。", 409)
     conflicts = conn.execute(
         "SELECT DISTINCT r.rule_version_id FROM rule_versions r JOIN rule_scopes s USING(rule_version_id) "
         "WHERE s.company_id=ANY(%s) AND r.topic=%s AND r.status='active' AND r.rule_version_id<>%s "
