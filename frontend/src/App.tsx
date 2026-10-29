@@ -25,7 +25,7 @@ import { Details } from './Details';
 import { MemoryView } from './MemoryView';
 import { Results } from './Results';
 import { RunsView } from './RunsView';
-import type { Detail, Session, Task, Turn, User, UploadedInvoice } from './types';
+import type { Detail, InvoiceWritePlan, Session, Task, Turn, User, UploadedInvoice } from './types';
 
 type Page = 'chat' | 'memory' | 'runs';
 
@@ -63,6 +63,15 @@ export default function App() {
   const acknowledged = useRef(new Set<string>());
 
   const changed = useCallback(() => setVersion((v) => v + 1), []);
+
+  async function refreshTurns() {
+    if (!session) return;
+    const stamp = generation.current;
+    const fresh = await api<{ turns: Turn[] }>(`/sessions/${session.session_id}/messages`);
+    if (stamp !== generation.current) return;
+    const byId = new Map(fresh.turns.map((turn) => [turn.turn_id, turn]));
+    setTurns((previous) => previous.map((turn) => byId.get(turn.turn_id) ?? turn));
+  }
 
   const clearWorkspace = () => {
     generation.current += 1;
@@ -258,6 +267,7 @@ export default function App() {
           stream.close();
           setActiveId(null);
           changed();
+          if (result.request_kind === 'write_confirmation') void refreshTurns().catch(() => {});
           if ('selected_company_id' in result) {
             setCompany(result.selected_company_id ?? null);
             setSession((previous) =>
@@ -306,6 +316,33 @@ export default function App() {
         }).catch(() => acknowledged.current.delete(viewId));
       }
   }, [turnList]);
+
+  async function confirmWrite(plan: InvoiceWritePlan) {
+    if (!session || activeId || sending || plan.company_id !== company)
+      throw new Error('请先结束当前办理，并切换到计划所属企业。');
+    const stamp = generation.current;
+    const accepted = plan.confirmation_turn_id
+      ? { turn_id: plan.confirmation_turn_id }
+      : await api<{ turn_id: string }>(`/write-plans/${plan.plan_id}/confirm`, {
+          method: 'POST',
+          body: body({
+            expected_revision: plan.revision,
+            intent_hash: plan.intent_hash,
+            request_id: requestId(),
+          }),
+        });
+    if (stamp !== generation.current) return;
+    const turn = await api<Turn>(`/turns/${accepted.turn_id}`);
+    if (stamp !== generation.current) return;
+    setTurns((previous) =>
+      previous.some((t) => t.turn_id === turn.turn_id)
+        ? previous.map((t) => (t.turn_id === turn.turn_id ? turn : t))
+        : [...previous, turn]
+    );
+    setActiveId(turn.turn_id);
+    stickToBottom.current = true;
+    changed();
+  }
 
   async function send() {
     if (!session || !draft.trim() || activeId || sending || draft.length > 16000) return;
@@ -708,6 +745,8 @@ export default function App() {
                                     }
                                     onDraft={prepareDraft}
                                     onDetail={setDetail}
+                                    onConfirm={confirmWrite}
+                                    onPlanChanged={refreshTurns}
                                   />
                                 ))}
                                 <div className="answer-footer">

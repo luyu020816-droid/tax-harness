@@ -66,7 +66,7 @@ def test_F05_F06_expired_lease_cannot_duplicate_committed_write(db, settings, ad
         source = conn.execute(
             "SELECT * FROM sources WHERE source_id=%s", (old.source_id,)
         ).fetchone()
-    first = update_invoice(db, AUTH, **request(source), execution=old)
+    first = update_invoice(db, AUTH, **request(db, source), execution=old)
     admin.execute(
         "UPDATE work_items SET lease_until=clock_timestamp()-interval '1 second' WHERE work_id=%s",
         (old.work_id,),
@@ -75,7 +75,7 @@ def test_F05_F06_expired_lease_cannot_duplicate_committed_write(db, settings, ad
     assert new.turn_id == turn["turn_id"] and new.fencing_token > old.fencing_token
     with pytest.raises(AppError), db.transaction() as conn:
         guard(conn, old)
-    replay = update_invoice(db, AUTH, **request(source), execution=new)
+    replay = update_invoice(db, AUTH, **request(db, source), execution=new)
     assert str(replay["operation_id"]) == str(first["operation_id"])
     assert replay["replayed"]
     assert (

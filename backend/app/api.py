@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from psycopg.conninfo import conninfo_to_dict
 from pydantic import Field
 
-from app import business, identity, preferences, rules, tasks, trace, turns
+from app import business, identity, invoice_write, preferences, rules, tasks, trace, turns
 from app.api_imports import UploadBodyLimit, import_router
 from app.config import ROOT, Settings
 from app.db import Database
@@ -62,6 +62,12 @@ class ViewBody(StrictModel):
     event_seq: int = Field(ge=1)
 
 
+class WriteConfirmationBody(StrictModel):
+    expected_revision: int = Field(ge=1)
+    intent_hash: str = Field(min_length=64, max_length=64)
+    request_id: str = Field(min_length=1, max_length=100)
+
+
 def create_app(
     settings=None, db=None, model=None, *, start_workers=True, ingest_db=None
 ) -> FastAPI:
@@ -74,12 +80,9 @@ def create_app(
     ingest_db = ingest_db or (Database(settings.ingest_database_url) if own_ingest else None)
     imports = InvoiceImports(db, ingest_db)
     connection = conninfo_to_dict(settings.database_url)
-    database_name = connection.get("dbname", "")
     # Cookies are shared across localhost ports. Keep independent instances isolated.
-    cookie_name = "tax_session"
-    if database_name not in ("tax_harness", "tax_harness_test"):
-        instance = "|".join(connection.get(key, "") for key in ("host", "port", "dbname"))
-        cookie_name += "_" + hashlib.sha256(instance.encode()).hexdigest()[:12]
+    instance = "|".join(connection.get(key, "") for key in ("host", "port", "dbname"))
+    cookie_name = "tax_session_" + hashlib.sha256(instance.encode()).hexdigest()[:12]
 
     @asynccontextmanager
     async def lifespan(app):
@@ -109,6 +112,18 @@ def create_app(
     app.include_router(import_router(imports, auth_dependency))
     app.add_middleware(UploadBodyLimit)
     app.state.imports = imports
+
+    @app.get("/api/v1/write-plans/{plan_id}")
+    def write_plan(plan_id: UUID, current=auth_dependency):
+        return invoice_write.get(db, current, str(plan_id))
+
+    @app.post("/api/v1/write-plans/{plan_id}/confirm")
+    def confirm_write(plan_id: UUID, body: WriteConfirmationBody, current=auth_dependency):
+        return invoice_write.confirm(db, current, str(plan_id), **body.model_dump())
+
+    @app.post("/api/v1/write-plans/{plan_id}/cancel")
+    def cancel_write(plan_id: UUID, body: ControlBody, current=auth_dependency):
+        return invoice_write.cancel(db, current, str(plan_id))
 
     @app.middleware("http")
     async def same_origin(request, call_next):

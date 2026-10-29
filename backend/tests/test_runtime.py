@@ -22,17 +22,62 @@ class ScriptedModel:
     def __init__(self, steps):
         self.steps = iter(steps)
         self.requests = []
+        self.pending_write = False
 
     async def complete(self, payload):
         self.requests.append(payload)
+        if self.pending_write:
+            from scripted_protocol import actual_outputs
+
+            self.pending_write = False
+            output = actual_outputs(payload)[-1]
+            if output.get("ok") and output["data"].get("status") == "authorized":
+                return {
+                    "message": tool("update_invoice", {"plan_id": output["data"]["plan_id"]}),
+                    "usage": None,
+                    "finish_reason": "stop",
+                }
         step = next(self.steps)
         result = step(payload) if callable(step) else step
         if asyncio.iscoroutine(result):
             result = await result
+        for call in result.get("tool_calls", []):
+            if call["function"]["name"] in ("query_month", "get_rules", "check_purposes"):
+                state = json.loads(payload["messages"][0]["content"].split("\n正式状态：\n", 1)[1])
+                arguments = json.loads(call["function"]["arguments"])
+                binding = next(
+                    (
+                        b
+                        for b in state["request_frame"]["available_scope_refs"]
+                        if b["company_id"] == arguments["company_id"]
+                        and b["period"] == arguments["period"]
+                    ),
+                    None,
+                )
+                arguments["scope_ref"] = (
+                    binding["scope_ref"] if binding else "00000000-0000-0000-0000-000000000001"
+                )
+                call["function"]["arguments"] = json.dumps(arguments, ensure_ascii=False)
+            if call["function"]["name"] == "update_invoice":
+                arguments = json.loads(call["function"]["arguments"])
+                if "plan_id" not in arguments:
+                    call["function"]["name"] = "prepare_invoice_write"
+                    self.pending_write = True
+        if result.get("content"):
+            try:
+                legacy = json.loads(result["content"])
+            except json.JSONDecodeError:
+                legacy = None
+            if isinstance(legacy, dict) and "message" in legacy and "blocks" not in legacy:
+                from scripted_protocol import migrate_answer
+
+                result = migrate_answer(legacy, payload)
         return {"message": result, "usage": None, "finish_reason": "stop"}
 
 
 def tool(name, args):
+    if name in ("query_month", "get_rules", "check_purposes") and "scope_ref" not in args:
+        args = {**args, "scope_ref": "00000000-0000-0000-0000-000000000001"}
     return {
         "role": "assistant",
         "content": None,
@@ -238,19 +283,26 @@ def test_B12_save_rechecks_real_task_progress(db, settings, execution_factory):
 
     execution = execution_factory("检查甲企业2026年9月用途；F002用途补为办公耗材采购")
     executor = ToolExecutor(db)
+    from app.request_evidence import bind_scope
+
+    with db.transaction() as conn:
+        scope = bind_scope(conn, execution, "C001", "2026-09")
     checked, _ = executor.execute(
         execution,
-        tool("check_purposes", {"company_id": "C001", "period": "2026-09"})["tool_calls"][0],
+        tool(
+            "check_purposes",
+            {"company_id": "C001", "period": "2026-09", "scope_ref": scope["scope_ref"]},
+        )["tool_calls"][0],
     )
     assert checked["data"]["missing_count"] == 5
     with db.transaction(readonly=True) as conn:
         invoice = conn.execute(
             "SELECT revision FROM invoices WHERE company_id='C001' AND invoice_id='F002'"
         ).fetchone()
-    saved, _ = executor.execute(
+    prepared, _ = executor.execute(
         execution,
         tool(
-            "update_invoice",
+            "prepare_invoice_write",
             {
                 "company_id": "C001",
                 "invoice_id": "F002",
@@ -261,6 +313,10 @@ def test_B12_save_rechecks_real_task_progress(db, settings, execution_factory):
                 ],
             },
         )["tool_calls"][0],
+    )
+    assert prepared["ok"] and prepared["data"]["status"] == "authorized", prepared
+    saved, _ = executor.execute(
+        execution, tool("update_invoice", {"plan_id": prepared["data"]["plan_id"]})["tool_calls"][0]
     )
     assert saved["ok"], saved
     assert saved["data"]["verification_state"] == "verified"

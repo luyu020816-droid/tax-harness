@@ -40,7 +40,9 @@ function RunContent({ id }: { id: string }) {
           </div>
           <div>
             <dt>模型调用</dt>
-            <dd>{data.contexts.length} 次</dd>
+            <dd>
+              {data.contexts.filter((item) => item.manifest.kind !== 'control_execution').length} 次
+            </dd>
           </div>
           <div>
             <dt>工具记录</dt>
@@ -56,12 +58,15 @@ function RunContent({ id }: { id: string }) {
         data.contexts.map((item) => (
           <details className="trace-block" key={item.context_id}>
             <summary>
-              第 {item.model_step} 轮 · {item.token_count.toLocaleString()} 输入估算单位
+              {item.manifest.kind === 'control_execution'
+                ? '本人确认执行快照（未调用模型）'
+                : `第 ${item.model_step} 轮`}{' '}
+              · {item.token_count.toLocaleString()} 输入估算单位
             </summary>
             <p className="muted small">
               计数方式：{item.count_kind}；用时 {item.duration_ms ?? '未知'} ms
             </p>
-            <h4>实际请求</h4>
+            <h4>{item.manifest.kind === 'control_execution' ? '宿主执行依据' : '实际请求'}</h4>
             <pre>{JSON.stringify(item.payload, null, 2)}</pre>
             <h4>输入与来源清单</h4>
             <pre>{JSON.stringify(item.manifest, null, 2)}</pre>

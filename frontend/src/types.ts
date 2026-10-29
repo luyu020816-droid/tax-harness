@@ -84,8 +84,23 @@ export interface RulesCard extends CardBase {
   kind: 'rules';
   rules: Rule[];
 }
-export type ResultCard = SummaryCard | ListCard | OperationCard | RulesCard | ImportBatch;
+export interface InvoiceWritePlan extends CardBase {
+  kind: 'write_plan';
+  plan_id: string;
+  invoice_id: string;
+  patch: Record<string, string | null>;
+  before_values: Record<string, string | null>;
+  revision: number;
+  intent_hash: string;
+  status: 'authorized' | 'needs_confirmation' | 'prohibited' | 'consumed' | 'revoked' | 'expired';
+  expires_at: string;
+  operation_id: string | null;
+  confirmation_turn_id: string | null;
+}
+export type ResultCard =
+  SummaryCard | ListCard | OperationCard | RulesCard | ImportBatch | InvoiceWritePlan;
 export interface Turn {
+  request_kind?: 'chat' | 'write_confirmation';
   turn_id: string;
   source_seq: number;
   text: string;
@@ -148,7 +163,7 @@ export interface RunDetail {
     context_id: string;
     model_step: number;
     payload: unknown;
-    manifest: unknown;
+    manifest: { kind?: string; [key: string]: unknown };
     token_count: number;
     count_kind: string;
     duration_ms: number | null;

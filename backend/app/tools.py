@@ -2,16 +2,16 @@ import json
 
 from pydantic import ValidationError
 
-from app import business, memory, mutations, preferences, rules, tasks
+from app import business, invoice_write, memory, preferences, rules, tasks
 from app.errors import AppError
 from app.events import emit
 from app.execution import Execution, guard
 from app.identity import assert_access
-from app.request_evidence import require_period
+from app.request_evidence import bind_scope, require_period, validate_scope
 from app.sources import add_source, assess, read_source
 from app.tool_schemas import TOOLS
 from app.turns import mentioned_companies
-from app.values import digest, jsonb, safe_json
+from app.values import digest, jsonb, safe_json, uid
 
 
 class ToolExecutor:
@@ -80,6 +80,13 @@ class ToolExecutor:
             )
         task_before = None
         company = arguments.get("company_id")
+        if name == "update_invoice":
+            try:
+                company = invoice_write.get(self.db, execution.auth, arguments["plan_id"])[
+                    "company_id"
+                ]
+            except AppError:
+                company = None
         if company:
             with self.db.transaction(readonly=True) as conn:
                 try:
@@ -108,7 +115,13 @@ class ToolExecutor:
                 }
             output = {"ok": False, "error": exc.as_dict()}
         if output["ok"] and name == "update_invoice" and task_before:
-            self._refresh_after_save(execution, call_id, arguments, output, task_before)
+            self._refresh_after_save(
+                execution,
+                call_id,
+                {"company_id": output["data"]["company_id"]},
+                output,
+                task_before,
+            )
         output, ref = self._record(execution, call_id, name, arguments, output)
         if output["ok"] and name in ("query_month", "get_rules", "check_purposes"):
             self._maintain_task(execution, name, arguments, output["data"], ref, task_before)
@@ -139,12 +152,6 @@ class ToolExecutor:
 
     def _dispatch(self, execution, name, args):
         db, auth = self.db, execution.auth
-        scope_basis = None
-        if name in ("query_month", "get_rules", "check_purposes") or (
-            name == "change_task" and args.get("period")
-        ):
-            with db.transaction(readonly=True) as conn:
-                scope_basis = require_period(conn, execution, args["company_id"], args["period"])
         if args.get("company_id") and name in (
             "query_month",
             "find_invoices",
@@ -166,9 +173,25 @@ class ToolExecutor:
                             "actual_company_id": args["company_id"],
                         },
                     )
+        scope_basis = None
+        scope_ref = args.get("scope_ref")
+        if name in ("query_month", "get_rules", "check_purposes") or (
+            name == "change_task" and args.get("period")
+        ):
+            with db.transaction(readonly=True) as conn:
+                scope_basis = require_period(conn, execution, args["company_id"], args["period"])
+                if name != "change_task":
+                    validate_scope(
+                        conn, execution, args["scope_ref"], args["company_id"], args["period"]
+                    )
+            args = {k: v for k, v in args.items() if k != "scope_ref"}
         if name in ("prepare_invoice_import", "get_invoice_import"):
             execution.import_context = True
-        if name in ("update_invoice", "change_task") or (
+        if name == "resolve_scope":
+            with db.transaction() as conn:
+                guard(conn, execution, shared=True)
+                return bind_scope(conn, execution, args["company_id"], args["period"])
+        if name in ("prepare_invoice_write", "update_invoice", "change_task") or (
             name == "manage_preference" and args.get("action") != "list"
         ):
             with db.transaction(readonly=True) as conn:
@@ -183,18 +206,33 @@ class ToolExecutor:
                     409,
                 )
         if name == "query_month":
-            return {**business.query_month(db, auth, **args), "scope_basis": scope_basis}
+            return {
+                **business.query_month(db, auth, **args),
+                "scope_basis": scope_basis,
+                "scope_ref": scope_ref,
+            }
         if name == "find_invoices":
             return business.find_invoices(db, auth, **args, session_id=execution.session_id)
         if name == "get_rules":
-            return {**rules.get_rules(db, auth, **args), "scope_basis": scope_basis}
+            return {
+                **rules.get_rules(db, auth, **args),
+                "scope_basis": scope_basis,
+                "scope_ref": scope_ref,
+            }
         if name == "check_purposes":
             return {
                 **business.check_purposes(db, auth, **args, session_id=execution.session_id),
                 "scope_basis": scope_basis,
+                "scope_ref": scope_ref,
             }
         if name == "update_invoice":
-            return mutations.update_invoice(
+            return invoice_write.commit(db, auth, args["plan_id"], execution=execution)
+        if name == "get_invoice_operation":
+            from app.mutations import verify_operation
+
+            return {**verify_operation(db, auth, args["operation_id"]), "status_query": True}
+        if name == "prepare_invoice_write":
+            return invoice_write.prepare(
                 db, auth, **args, source_id=execution.source_id, execution=execution
             )
         if name == "get_task":
@@ -232,11 +270,13 @@ class ToolExecutor:
             from app.invoice_imports import InvoiceImports
 
             return InvoiceImports(db).get(auth, args["batch_id"], args.get("cursor", 0))
-        return memory.search_history(db, auth, **args)
+        return memory.search_history(db, auth, **args, before_source_seq=execution.source_seq)
 
     def _record(self, execution, call_id, name, arguments, output):
         with self.db.transaction() as conn:
             guard(conn, execution)
+            result_id = uid()
+            output = {**output, "result_ref": result_id}
             companies = []
             result_company = arguments.get("company_id") or (output.get("data") or {}).get(
                 "company_id"
@@ -256,6 +296,7 @@ class ToolExecutor:
                 turn_id=execution.turn_id,
                 source_seq=execution.source_seq,
                 companies=companies,
+                source_id=result_id,
             )
             assess(conn, str(source["source_id"]), "no_change")
             conn.execute(

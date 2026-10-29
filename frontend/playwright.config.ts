@@ -6,7 +6,7 @@ export default defineConfig({
   workers: 1,
   timeout: 90000,
   use: {
-    baseURL: 'http://127.0.0.1:8101',
+    baseURL: process.env.UI_BASE_URL ?? 'http://127.0.0.1:8101',
     viewport: { width: 1440, height: 900 },
     launchOptions: { executablePath: process.env.CHROME_PATH ?? 'C:/Program Files/Google/Chrome/Application/chrome.exe' },
     screenshot: 'only-on-failure',

@@ -79,6 +79,8 @@ def _grant_runtime(conn, settings: Settings) -> None:
         "memory_change_ops",
         "result_views",
         "operations",
+        "scope_bindings",
+        "write_plans",
     ]
     conn.execute(
         sql.SQL("GRANT INSERT,UPDATE ON {} TO {}").format(

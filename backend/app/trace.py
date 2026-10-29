@@ -24,7 +24,7 @@ def record_context(conn, execution: Execution, step: int, payload: dict, manifes
         conn,
         execution.turn_id,
         execution.run_id,
-        "model_started",
+        "control_started" if manifest.get("kind") == "control_execution" else "model_started",
         {"step": step, "context_id": context_id},
         input_ref=context_id,
     )

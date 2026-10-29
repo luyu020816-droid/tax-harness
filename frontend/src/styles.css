@@ -1979,3 +1979,8 @@ td strong {
     scroll-behavior: auto !important;
   }
 }
+.write-plan-actions {
+  display: flex;
+  gap: 24px;
+  margin-top: 16px;
+}

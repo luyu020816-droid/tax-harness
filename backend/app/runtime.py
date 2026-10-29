@@ -7,6 +7,7 @@ import psycopg
 from pydantic import ValidationError
 
 from app import context, tasks
+from app.answer_renderer import render
 from app.config import Settings
 from app.errors import AppError
 from app.events import emit
@@ -171,7 +172,15 @@ class Runtime:
         heartbeat = asyncio.create_task(self._heartbeat(execution))
         try:
             async with asyncio.timeout(self.settings.turn_timeout):
-                await self._loop(execution)
+                with self.db.transaction(readonly=True) as conn:
+                    turn = conn.execute(
+                        "SELECT request_kind,control_ref FROM turns WHERE turn_id=%s",
+                        (execution.turn_id,),
+                    ).fetchone()
+                if turn["request_kind"] == "write_confirmation":
+                    await self._confirm_loop(execution, str(turn["control_ref"]))
+                else:
+                    await self._loop(execution)
         except asyncio.CancelledError:
             # Leave the durable lease for recovery; cancellation API uses a separate fence.
             raise
@@ -357,6 +366,55 @@ class Runtime:
             "RUN_LIMIT_EXCEEDED", "本轮模型调用到达上限，已提交数据保留，请继续核对。", 422
         )
 
+    async def _confirm_loop(self, execution, plan_id):
+        call = {
+            "id": "confirmed-invoice-write",
+            "type": "function",
+            "function": {
+                "name": "update_invoice",
+                "arguments": canonical({"plan_id": plan_id}),
+            },
+        }
+        output, ref = await asyncio.to_thread(self.tools.execute, execution, call)
+        if not output.get("ok"):
+            error = output["error"]
+            raise AppError(error["code"], error["message"], 409)
+        group = {
+            "messages": [
+                {"role": "assistant", "content": None, "tool_calls": [call]},
+                {"role": "tool", "tool_call_id": call["id"], "content": canonical(output)},
+            ],
+            "sources": [ref],
+            "results": [output],
+            "memory_epoch": execution.expected_epoch,
+        }
+        payload, manifest, _ = await asyncio.to_thread(
+            context.assemble,
+            self.db,
+            self.settings,
+            execution,
+            [group],
+            budget=self.settings.input_budget,
+        )
+        manifest["kind"] = "control_execution"
+        with self.db.transaction() as conn:
+            record_context(conn, execution, 1, payload, manifest)
+        with self.db.transaction(readonly=True) as conn:
+            origin = conn.execute(
+                "SELECT t.turn_id FROM write_plans p JOIN sources s ON s.source_id=p.origin_source_id "
+                "JOIN turns t ON t.turn_id=s.turn_id WHERE p.plan_id=%s AND t.status='waiting_user'",
+                (plan_id,),
+            ).fetchone()
+        reply = FinalReply.model_validate(
+            {
+                "blocks": [
+                    {"type": "operation", "operation_id": str(output["data"]["operation_id"])}
+                ],
+                "resume_turn_id": str(origin["turn_id"]) if origin else None,
+            }
+        )
+        await asyncio.to_thread(self.finish, execution, reply, payload, manifest)
+
     def _waiting_task_in(self, conn, execution, pending):
         company = pending.get("company_id")
         if not company:
@@ -408,44 +466,12 @@ class Runtime:
         )
         return {**pending, "task_id": str(task["task_id"]), "task_generation": task["generation"]}
 
-    def _cards_in(self, conn, execution):
-        rows = conn.execute(
-            "SELECT s.content FROM tool_executions e JOIN runs r USING(run_id) JOIN sources s ON s.source_id=e.result_source_id WHERE r.turn_id=%s AND s.recall_state='active' ORDER BY s.created_at",
-            (execution.turn_id,),
-        ).fetchall()
-        cards = {}
-        for row in rows:
-            output = json.loads(row["content"])
-            data = output.get("data") or {}
-            if not output.get("ok") or data.get("kind") not in (
-                "import_preview",
-                "import_receipt",
-                "monthly_summary",
-                "purpose_check",
-                "operation",
-                "rules",
-                "invoices",
-            ):
-                continue
-            company = data.get("company_id")
-            if company:
-                assert_access(conn, execution.auth, company)
-                head = conn.execute(
-                    "SELECT * FROM company_heads WHERE company_id=%s FOR SHARE", (company,)
-                ).fetchone()
-                if "data_revision" in data and any(
-                    data.get(k) != head[k] for k in ("data_revision", "rules_epoch")
-                ):
-                    continue
-            key = (data["kind"], company, data.get("period"), data.get("operation_id"))
-            cards[key] = data
-        return list(cards.values())
-
     def finish(self, execution, reply: FinalReply, payload, manifest):
         with self.db.transaction() as conn:
             context.validate(self.db, execution, payload, manifest, conn=conn)
             # Upgrade the same locks before committing state, answer and events atomically.
             guard(conn, execution)
+            reply = render(conn, execution, reply, payload, manifest)
             if reply.preference_status == "committed":
                 evidence = conn.execute(
                     "SELECT result_ref FROM memory_change_ops WHERE user_id=%s AND target_type='preference' AND action=%s AND state='committed' AND request_id LIKE %s",
@@ -516,7 +542,7 @@ class Runtime:
                     revision=1,
                     authority_source_seq=execution.source_seq,
                 )
-            cards = self._cards_in(conn, execution)
+            cards = reply.cards
             if reply.displayed_view_ids and not {str(x) for x in reply.displayed_view_ids} <= {
                 str(c.get("view_id")) for c in cards
             }:

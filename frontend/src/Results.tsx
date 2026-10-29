@@ -1,7 +1,8 @@
 import { ImportReceipt } from './ImportReceipt';
+import { WritePlanCard } from './WritePlanCard';
 import { ArrowUpRight, CheckCheck, ChevronRight, CircleAlert } from 'lucide-react';
 import { companyName, dateTime, money } from './api';
-import type { Detail, ResultCard, Rule } from './types';
+import type { Detail, InvoiceWritePlan, ResultCard, Rule } from './types';
 
 function RuleLinks({ rules, onDetail }: { rules: Rule[]; onDetail: (detail: Detail) => void }) {
   return (
@@ -21,12 +22,25 @@ export function Results({
   canUpdate,
   onDraft,
   onDetail,
+  onConfirm,
+  onPlanChanged,
 }: {
   card: ResultCard;
   canUpdate: boolean;
   onDraft: (text: string) => void;
   onDetail: (detail: Detail) => void;
+  onConfirm: (plan: InvoiceWritePlan) => Promise<void>;
+  onPlanChanged: () => Promise<void>;
 }) {
+  if (card.kind === 'write_plan')
+    return (
+      <WritePlanCard
+        plan={card}
+        canConfirm={canUpdate}
+        onConfirm={onConfirm}
+        onChanged={onPlanChanged}
+      />
+    );
   if (card.kind === 'import_preview' || card.kind === 'import_receipt')
     return (
       <ImportReceipt batch={card} onOpen={() => onDetail({ kind: 'import', id: card.batch_id })} />
@@ -187,15 +201,18 @@ export function Results({
   if (card.kind === 'operation') {
     const verified = card.verification_state === 'verified';
     const rejected = card.commit_state === 'rejected';
+    const committed = ['committed', 'no_change'].includes(card.commit_state);
     const label = rejected
       ? '本项未保存'
-      : card.verification_state === 'changed_since_commit'
-        ? '本次曾提交，当前值已有变化'
-        : verified
-          ? card.commit_state === 'no_change'
-            ? '当前已经是该值，已核验'
-            : '已保存并核验'
-          : '已提交，核验待完成';
+      : !committed
+        ? '保存状态尚未确定，请按原操作编号核验'
+        : card.verification_state === 'changed_since_commit'
+          ? '本次曾提交，当前值已有变化'
+          : verified
+            ? card.commit_state === 'no_change'
+              ? '当前已经是该值，已核验'
+              : '已保存并核验'
+            : '已提交，核验待完成';
     return (
       <section className={`result-card receipt-card ${verified ? 'verified' : 'unverified'}`}>
         {range}
@@ -207,8 +224,11 @@ export function Results({
         <dl className="saved-values">
           {Object.entries(card.saved_values ?? card.patch).map(([key, value]) => (
             <div key={key}>
-              <dt>{key === 'purpose' ? '用途' : '备注'}</dt>
-              <dd>{value?.trim() ? value : '已清空'}</dd>
+              <dt>
+                {!committed ? '计划' : ''}
+                {key === 'purpose' ? '用途' : '备注'}
+              </dt>
+              <dd>{value?.trim() ? value : committed ? '已清空' : '清空'}</dd>
             </div>
           ))}
         </dl>

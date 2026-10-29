@@ -144,9 +144,15 @@ def step_assertions(db, expected, result, trace, user):
 async def run_case(settings, case, repetition, directory, supplemental=None):
     admin_dsn = make_conninfo(settings.admin_database_url, dbname="tax_harness_test")
     with psycopg.connect(admin_dsn, autocommit=True) as conn:
-        active = conn.execute(
-            "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid()"
-        ).fetchone()[0]
+        # A just-closed pool may still be disconnecting on the server. Wait only
+        # briefly; persistent external connections still block every reset.
+        for attempt in range(6):
+            active = conn.execute(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid()"
+            ).fetchone()[0]
+            if not active:
+                break
+            await asyncio.sleep(0.5)
         if active:
             raise SystemExit(
                 "Stop other test database connections before evaluation; no data was reset."

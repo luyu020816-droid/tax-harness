@@ -126,7 +126,7 @@ async def test_preference_success_requires_committed_evidence(db, settings):
 
     def remember(payload):
         state = json.loads(payload["messages"][0]["content"].split("\n正式状态：\n", 1)[1])
-        assert "没有该偏好操作的成功记录" in payload["messages"][-1]["content"]
+        assert "缺少本轮偏好操作提交证据" in payload["messages"][-1]["content"]
         return tool(
             "manage_preference",
             {

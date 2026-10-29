@@ -34,4 +34,4 @@ class Database:
             row = conn.execute(
                 "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
             ).fetchone()
-            return bool(row and row["version"] == 3)
+            return bool(row and row["version"] == 4)

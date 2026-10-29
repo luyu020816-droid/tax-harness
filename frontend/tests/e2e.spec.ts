@@ -9,7 +9,7 @@ async function shot(page: Page, name: string) {
 
 test('real browser: results, saves, memory, traces, responsive and identity', async ({ page }) => {
   const failures: string[] = [];
-  page.on('pageerror', error => failures.push(error.message));
+  page.on('pageerror', (error) => failures.push(error.message));
   await page.goto('/');
   const favicon = await page.locator('link[rel="icon"]').getAttribute('href');
   const faviconResponse = await page.request.get(favicon!);
@@ -34,7 +34,9 @@ test('real browser: results, saves, memory, traces, responsive and identity', as
     expect(composer!.width).toBeLessThanOrEqual(800);
     expect(composer!.y - (welcome!.y + welcome!.height)).toBeLessThan(100);
     expect(composer!.y + composer!.height).toBeLessThan(height);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true
+    );
     await shot(page, `00-empty-${width}`);
   }
   await page.setViewportSize({ width: 360, height: 844 });
@@ -55,7 +57,7 @@ test('real browser: results, saves, memory, traces, responsive and identity', as
   await shot(page, '03-purpose-check');
   await input.fill('甲企业F002用途补为办公耗材采购');
   await input.press('Enter');
-  await expect(page.getByText('F002用途已保存并回读核验', { exact: false })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '已保存并核验', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: /待补.*4.*张发票用途/ })).toBeVisible();
   await shot(page, '04-save-verified');
   await page.getByRole('button', { name: '记忆管理', exact: true }).click();
@@ -88,7 +90,9 @@ test('real browser: results, saves, memory, traces, responsive and identity', as
   for (const width of [1366, 1440, 1920, 768, 390, 360]) {
     await page.setViewportSize({ width, height: width < 500 ? 844 : 720 });
     await expect(input).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true
+    );
     await shot(page, `07-responsive-${width}`);
   }
   await input.fill('中文输入法候选');

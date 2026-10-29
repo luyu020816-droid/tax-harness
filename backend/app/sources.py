@@ -20,6 +20,7 @@ def add_source(
     turn_id=None,
     source_seq: int,
     companies: list[str] | None = None,
+    source_id: str | None = None,
 ) -> dict:
     text = content if isinstance(content, str) else canonical(content)
     companies = list(dict.fromkeys(companies or []))
@@ -29,7 +30,7 @@ def add_source(
         "INSERT INTO sources(source_id,turn_id,user_id,role,kind,scope_kind,content,content_hash,source_seq) "
         "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
         (
-            uid(),
+            source_id or uid(),
             turn_id,
             auth.user_id,
             role,

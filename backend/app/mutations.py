@@ -171,14 +171,28 @@ def update_invoice(
     operation_id=None,
     selection_ref=None,
     execution: Execution | None = None,
+    plan_id: str | None = None,
 ) -> dict:
+    from app.invoice_write import validate as validate_plan
+
     _validate_patch(patch)
     operation_id = operation_id or uid()
-    intent_key = digest([auth.user_id, source_id, company_id, invoice_id])
-    fingerprint = digest([auth.user_id, source_id, company_id, invoice_id, patch])
     terminal = False
     with db.transaction() as conn:
         assert_access(conn, auth, company_id, write=True)
+        plan = validate_plan(
+            conn,
+            auth,
+            plan_id,
+            company_id=company_id,
+            invoice_id=invoice_id,
+            patch=patch,
+            source_id=source_id,
+            expected_revision=expected_revision,
+        )
+        origin_id = str(plan["origin_source_id"])
+        intent_key = digest([auth.user_id, origin_id, company_id, invoice_id])
+        fingerprint = digest([auth.user_id, origin_id, company_id, invoice_id, patch])
         row = _existing(conn, auth, intent_key, fingerprint, operation_id)
         if row and row["state"] in ("committed", "no_change", "rejected"):
             terminal = True
@@ -213,8 +227,8 @@ def update_invoice(
             ).fetchone():
                 raise AppError("RESOURCE_NOT_FOUND", "该企业不存在这张发票。", 404)
             conn.execute(
-                "INSERT INTO operations(operation_id,user_id,company_id,invoice_id,source_id,intent_key,request_hash,before_revision,patch,state) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,'prepared') ON CONFLICT DO NOTHING",
+                "INSERT INTO operations(operation_id,user_id,company_id,invoice_id,source_id,intent_key,request_hash,before_revision,patch,state,authorization_plan_id) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,'prepared',%s) ON CONFLICT DO NOTHING",
                 (
                     operation_id,
                     auth.user_id,
@@ -225,6 +239,7 @@ def update_invoice(
                     fingerprint,
                     expected_revision,
                     jsonb(patch),
+                    plan_id,
                 ),
             )
             row = _existing(conn, auth, intent_key, fingerprint, operation_id)
@@ -244,6 +259,22 @@ def update_invoice(
                 ).fetchone()
             assert_access(conn, auth, company_id, write=True)
             guard_company(conn, execution, company_id)
+            plan = validate_plan(
+                conn,
+                auth,
+                plan_id,
+                company_id=company_id,
+                invoice_id=invoice_id,
+                patch=patch,
+                source_id=source_id,
+                expected_revision=expected_revision,
+                lock=True,
+            )
+            head = conn.execute(
+                "SELECT rules_epoch FROM company_heads WHERE company_id=%s", (company_id,)
+            ).fetchone()
+            if plan["status"] != "consumed" and head["rules_epoch"] != plan["rules_epoch"]:
+                raise AppError("WRITE_PLAN_STALE", "规则已变化，请重新核对修改计划。", 409)
             invoice = conn.execute(
                 "SELECT * FROM invoices WHERE company_id=%s AND invoice_id=%s FOR UPDATE",
                 (company_id, invoice_id),
@@ -318,6 +349,10 @@ def update_invoice(
                     ).fetchone()["memory_epoch"]
                 else:
                     epoch = user["memory_epoch"]
+                conn.execute(
+                    "UPDATE write_plans SET status='consumed',operation_id=%s,revision=revision+1 WHERE plan_id=%s",
+                    (operation_id, plan_id),
+                )
     except AppError as exc:
         if exc.code != "STALE_CONTEXT":
             with db.transaction() as conn:

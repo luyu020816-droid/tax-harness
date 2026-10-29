@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -20,6 +20,11 @@ class Scope(StrictModel):
 
 
 class Monthly(Scope):
+    period: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    scope_ref: UUID
+
+
+class ResolveScope(Scope):
     period: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
@@ -53,12 +58,20 @@ class SelectionRef(StrictModel):
     row_index: int = Field(ge=1, le=10)
 
 
-class UpdateInvoice(Scope):
+class PrepareInvoiceWrite(Scope):
     invoice_id: str = Field(pattern="^" + INVOICE_ID_PATTERN + "$")
     patch: InvoicePatch
     expected_revision: int = Field(ge=1)
     source_refs: list[SourceRef] = Field(min_length=1, max_length=6)
     selection_ref: SelectionRef | None = None
+
+
+class UpdateInvoice(StrictModel):
+    plan_id: UUID
+
+
+class GetInvoiceOperation(StrictModel):
+    operation_id: UUID
 
 
 class ChangeTask(Scope):
@@ -101,31 +114,102 @@ class Clarification(StrictModel):
     intent: Literal["query_month", "explain_rules", "complete_purposes", "update_invoice", "other"]
     company_id: str | None = None
     period: str | None = None
-    missing_fields: list[str] = Field(min_length=1, max_length=8)
+    missing_fields: list[
+        Literal[
+            "company_id", "period", "invoice_id", "purpose", "note", "intent", "write_confirmation"
+        ]
+    ] = Field(min_length=1, max_length=7)
     task_id: UUID | None = None
     task_generation: int | None = None
-    summary: str = Field(max_length=500)
+    summary: str = Field(default="", max_length=500)
+
+
+class ResultBlock(StrictModel):
+    type: Literal["result"]
+    result_ref: UUID
+    view: Literal[
+        "monthly_summary",
+        "purpose_check",
+        "invoices",
+        "rules",
+        "task",
+        "preferences",
+        "invoice_import_batch",
+    ]
+
+
+class OperationBlock(StrictModel):
+    type: Literal["operation"]
+    operation_id: UUID
+
+
+class PreferenceBlock(StrictModel):
+    type: Literal["preference_receipt"]
+    result_ref: UUID
+    action: Literal["remember", "update", "delete"]
+
+
+class ExplanationBlock(StrictModel):
+    type: Literal["explanation"]
+    code: Literal[
+        "acknowledged",
+        "no_changes",
+        "independent_totals",
+        "read_only",
+        "access_denied",
+        "unsupported_fields",
+        "cannot_infer_payment",
+        "unsupported_period",
+        "target_not_found",
+        "history_not_found",
+        "no_tasks",
+        "write_not_authorized",
+        "purpose_all",
+        "purpose_threshold",
+        "request_purpose_values",
+        "private_memory_boundary",
+        "rule_activation_boundary",
+    ]
+
+
+class HistoryBlock(StrictModel):
+    type: Literal["history_quote"]
+    source_id: UUID
+    quote: str = Field(min_length=1, max_length=1200)
+
+
+class ConfirmationBlock(StrictModel):
+    type: Literal["confirmation"]
+    plan_id: UUID
+
+
+AnswerBlock = Annotated[
+    ResultBlock
+    | OperationBlock
+    | PreferenceBlock
+    | ExplanationBlock
+    | HistoryBlock
+    | ConfirmationBlock,
+    Field(discriminator="type"),
+]
 
 
 class FinalReply(StrictModel):
-    message: str = Field(min_length=1, max_length=12000)
+    blocks: list[AnswerBlock] = Field(default_factory=list, max_length=10)
     status: Literal["completed", "waiting_user"] = "completed"
     clarification: Clarification | None = None
     resume_turn_id: UUID | None = None
-    displayed_view_ids: list[UUID] = Field(default_factory=list, max_length=4)
-    preference_action: Literal["remember", "update", "delete"] | None
-    preference_status: Literal["not_requested", "committed", "not_committed", "needs_clarification"]
 
     @model_validator(mode="after")
     def consistent_state(self):
+        if not self.blocks and self.clarification is None:
+            raise ValueError("空答复必须是必要的澄清，不能空白完成。")
         if self.status == "waiting_user" and self.clarification is None:
             raise ValueError(
                 "waiting_user 必须提供 clarification；权限拒绝或操作失败但不缺用户信息时使用 completed。"
             )
         if self.status == "completed" and self.clarification is not None:
             raise ValueError("completed 的 clarification 必须为 null。")
-        if (self.preference_action is None) != (self.preference_status == "not_requested"):
-            raise ValueError("偏好操作必须同时声明 preference_action 和 preference_status。")
         return self
 
 
@@ -139,6 +223,14 @@ class GetInvoiceImport(StrictModel):
 
 
 TOOLS = {
+    "get_invoice_operation": (
+        GetInvoiceOperation,
+        "按本人真实operation_id只读核验保存状态；超时或重试应先查原编号，不另造修改。",
+    ),
+    "resolve_scope": (
+        ResolveScope,
+        "为有真实用户/任务依据的企业月份签发本轮scope_ref；不能确认猜测月份。优先使用request_frame.available_scope_refs。",
+    ),
     "prepare_invoice_import": (
         PrepareInvoiceImport,
         "为本轮附件生成发票追加预览，不执行入库；说明用户需要在界面确认。",
@@ -162,7 +254,11 @@ TOOLS = {
     ),
     "update_invoice": (
         UpdateInvoice,
-        "按本轮明确用户要求修改唯一发票用途/备注。先查询 revision，同票字段合并 patch；null表示明确清空。必须引用当前用户来源。",
+        "只执行本轮宿主已授权的plan_id，不接收自由patch；未授权计划需要本人界面确认。",
+    ),
+    "prepare_invoice_write": (
+        PrepareInvoiceWrite,
+        "先查发票revision，再根据当前原话冻结用途/备注修改计划；同票字段合并。返回authorized才可update_invoice，needs_confirmation等待本人界面确认，prohibited不得执行。",
     ),
     "get_task": (Scope, "精确读取当前用户在该企业的未完成任务。新会话续办仍须查询当前资料。"),
     "change_task": (

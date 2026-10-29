@@ -1,6 +1,7 @@
 """Explicit program-test server; isolated database, fixed tool script, no LLM claims."""
 
 import json
+import os
 
 import psycopg
 import uvicorn
@@ -38,6 +39,10 @@ assert "tax_harness_test" in settings.test_database_url
 with psycopg.connect(
     make_conninfo(settings.admin_database_url, dbname="tax_harness_test"), autocommit=True
 ) as conn:
+    if conn.execute(
+        "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid()"
+    ).fetchone()[0]:
+        raise SystemExit("Stop other test database connections before starting the UI fixture.")
     conn.execute("TRUNCATE users,companies,import_batches,rule_versions CASCADE")
 initialize(settings, test=True)
 settings = model_settings(settings).model_copy(update={"database_url": settings.test_database_url})
@@ -63,4 +68,8 @@ model = ScriptedModel(
     ]
 )
 if __name__ == "__main__":
-    uvicorn.run(create_app(settings, model=model), host="127.0.0.1", port=8101)
+    uvicorn.run(
+        create_app(settings, model=model),
+        host="127.0.0.1",
+        port=int(os.environ.get("UI_TEST_PORT", "8101")),
+    )

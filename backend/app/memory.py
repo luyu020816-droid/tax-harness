@@ -178,12 +178,15 @@ def search_history(
     entity: str | None = None,
     date_from=None,
     date_to=None,
+    before_source_seq: int | None = None,
 ) -> dict:
     if not query.strip() and not entity:
         raise AppError("INVALID_ARGUMENT", "请提供要查找的文字或明确编号。")
     if len(query) > 300:
         raise AppError("INVALID_ARGUMENT", "历史查找条件过长，请缩小范围。")
-    query_hash = digest([auth.user_id, company_id, query, entity, date_from, date_to])
+    query_hash = digest(
+        [auth.user_id, company_id, query, entity, date_from, date_to, before_source_seq]
+    )
     offset = 0
     if cursor:
         try:
@@ -204,6 +207,9 @@ def search_history(
             "ON g.company_id=ss.company_id AND g.user_id=s.user_id WHERE ss.source_id=s.source_id AND g.can_read IS DISTINCT FROM true)",
         ]
         params = [auth.user_id]
+        if before_source_seq is not None:
+            clauses.append("s.source_seq<%s")
+            params.append(before_source_seq)
         if company_id:
             clauses.append(
                 "(s.scope_kind='user_private' OR EXISTS(SELECT 1 FROM source_scopes z WHERE z.source_id=s.source_id AND z.company_id=%s))"
