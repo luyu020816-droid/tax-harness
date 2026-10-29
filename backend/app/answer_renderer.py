@@ -54,6 +54,25 @@ def _rules(data):
     return "、".join(f"《{r['display_name']}》{r['business_version']}版" for r in rows)
 
 
+def _purpose_explanations(conn, refs):
+    texts = {}
+    for ref in refs:
+        rule = conn.execute(
+            "SELECT condition_json FROM rule_versions WHERE rule_version_id=%s AND status='active'",
+            (ref["rule_version_id"],),
+        ).fetchone()
+        condition = rule["condition_json"] if rule else {}
+        if condition.get("kind") == "purpose_all":
+            texts["purpose_all"] = (
+                "当前规则要求每张发票填写用途，不设金额门槛；空白视为未填，备注不能代替用途。"
+            )
+        if condition.get("kind") == "purpose_threshold":
+            texts["purpose_threshold"] = (
+                f"当前规则要求单张金额大于或等于{condition['threshold']}元时填写用途，正好达到门槛也算；低于门槛可不填，备注不能代替用途。"
+            )
+    return texts
+
+
 def _result_text(data, view):
     kind = data.get("kind")
     if kind in ("import_preview", "import_receipt") and view == "invoice_import_batch":
@@ -62,7 +81,7 @@ def _result_text(data, view):
         missing("结果视图与实际工具结果不一致。")
     company = data.get("company_id", "")
     label = {"C001": "甲企业", "C002": "乙企业"}.get(company, company)
-    period = data.get("period", "")
+    period = data.get("period") or ""
     if view == "monthly_summary":
         text = f"{label}{period}：发票总额{data['invoice_total']:.2f}元，银行收入{data['bank_income']:.2f}元，银行支出{data['bank_expense']:.2f}元。"
         if not data["has_records"]:
@@ -131,6 +150,9 @@ def render(conn, execution, plan, payload, manifest):
                     },
                 }
             text, card = _result_text(data, block.view)
+            if block.view == "rules":
+                for explanation in _purpose_explanations(conn, data.get("rules", [])).values():
+                    text += "\n\n" + explanation
             texts.append(text)
             if card:
                 reply.cards.append(safe_json(card))
@@ -257,7 +279,8 @@ def render(conn, execution, plan, payload, manifest):
     if plan.clarification:
         reply.clarification = _clarification(conn, execution, plan.clarification, state, outputs)
         texts.append(reply.clarification.summary)
-    reply.message = "\n\n".join(dict.fromkeys(texts))
+    paragraphs = [paragraph for text in texts for paragraph in text.split("\n\n") if paragraph]
+    reply.message = "\n\n".join(dict.fromkeys(paragraphs))
     reply.cards = list(
         {
             (
@@ -342,18 +365,8 @@ def _explanation(conn, execution, code, outputs, rules, state):
     ):
         return "如需补充，请按发票编号提供实际用途；不能根据票面项目推测。"
     if code in ("purpose_all", "purpose_threshold"):
-        for ref in rules:
-            rule = conn.execute(
-                "SELECT condition_json FROM rule_versions WHERE rule_version_id=%s AND status='active'",
-                (ref["rule_version_id"],),
-            ).fetchone()
-            condition = rule["condition_json"] if rule else {}
-            if code == "purpose_all" and condition.get("kind") == "purpose_all":
-                return (
-                    "当前规则要求每张发票填写用途，不设金额门槛；空白视为未填，备注不能代替用途。"
-                )
-            if code == "purpose_threshold" and condition.get("kind") == "purpose_threshold":
-                return f"当前规则要求单张金额大于或等于{condition['threshold']}元时填写用途，正好达到门槛也算；低于门槛可不填，备注不能代替用途。"
+        if text := _purpose_explanations(conn, rules).get(code):
+            return text
     missing("说明缺少对应的真实状态依据，请选用实际结果或正确的拒绝理由。")
 
 

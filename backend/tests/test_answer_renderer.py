@@ -241,3 +241,52 @@ def test_rule_activation_rejection_needs_no_fabricated_month(db, settings, execu
         db, ex, payload, manifest, [{"type": "explanation", "code": "rule_activation_boundary"}]
     )
     assert "本轮未改变规则" in reply.message and reply.status == "completed"
+
+
+def test_invoice_lookup_does_not_print_none_month(db, settings, execution_factory):
+    ex = execution_factory("查询甲企业F002")
+    output, payload, manifest = recorded(
+        db, settings, ex, "find_invoices", {"company_id": "C001", "ids": ["F002"]}
+    )
+    reply = rendered(
+        db,
+        ex,
+        payload,
+        manifest,
+        [{"type": "result", "result_ref": output["result_ref"], "view": "invoices"}],
+    )
+    assert "None" not in reply.message and "甲企业共找到1张" in reply.message
+
+
+def test_rules_view_explains_threshold_without_model_narrative(db, settings, execution_factory):
+    import json
+
+    ex = execution_factory("乙企业2026年9月正好1000元算必填用途吗？", company="C002")
+    initial, _, _ = context.assemble(db, model_settings(settings), ex, [])
+    frame = json.loads(initial["messages"][0]["content"].split("\n正式状态：\n")[1])[
+        "request_frame"
+    ]
+    output, payload, manifest = recorded(
+        db,
+        settings,
+        ex,
+        "get_rules",
+        {
+            "company_id": "C002",
+            "period": "2026-09",
+            "scope_ref": frame["available_scope_refs"][0]["scope_ref"],
+            "topics": ["purpose"],
+        },
+    )
+    reply = rendered(
+        db,
+        ex,
+        payload,
+        manifest,
+        [
+            {"type": "result", "result_ref": output["result_ref"], "view": "rules"},
+            {"type": "explanation", "code": "purpose_threshold"},
+        ],
+    )
+    assert "正好达到门槛也算" in reply.message and "备注不能代替用途" in reply.message
+    assert reply.message.count("正好达到门槛也算") == 1
