@@ -2,6 +2,8 @@
 
 日期：2026-10-29。分支：`feature/knowledge-remediation`。代码提交：`cfd469d871a71c99da59670dbe4586a9b905e1ab`。
 
+本文件为前置修复的历史记录。第1—2步最新实施与验收见[PATCH002_M1_EXECUTION_REPORT.md](PATCH002_M1_EXECUTION_REPORT.md)；下文“尚未完成”描述当时状态，不覆盖后续执行报告。
+
 ## 已执行内容
 
 1. SPEC复审并修订为1.1，明确无schema迁移的前置修复、阶段退出条件和禁止通过任务注入猜测月份。
