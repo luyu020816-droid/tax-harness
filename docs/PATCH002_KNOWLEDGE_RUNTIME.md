@@ -69,9 +69,11 @@ KNOWLEDGE_PARSER_TIMEOUT=60
 KNOWLEDGE_LEASE_SECONDS=90
 ```
 
+默认从仓库内`evals/retrieval-v1/selection-policy.json`加载开发校准策略，无需手填阈值，也不依赖被忽略的本地评测目录。可用`KNOWLEDGE_SELECTION_POLICY`显式指定其他策略文件；文件必须匹配当前真实profile、hybrid模式和structural-groups-v1。更换模型/profile后需独立开发校准并重新验收，不能照搬当前分数。
+
 启动后登录U001，在“知识资料”上传文本PDF、DOCX、Markdown或TXT。任务显示当前阶段，完成后可查找原文、用于对话、上传新版、下载或停用。U002不能上传本人资料，也不能读U001私有资料。
 
-全局ready中的知识轻量探测会标validation=not_checked；完整检查调用登录后的`GET /api/v1/knowledge/ready`，会校验本地模型manifest及当前profile。首次调用会读取权重hash，不能把轻量探测当成推理验收。
+全局ready中的知识轻量探测会标validation=not_checked；完整检查调用登录后的`GET /api/v1/knowledge/ready`，会校验本地模型manifest、当前profile和选择策略，返回selection_calibrated及selection_policy_id。策略缺失或profile不符时知识能力不能通过完整ready；搜索若仍有降级候选会明确partial和未校准，不能冒称与已验收配置等价。首次调用会读取权重hash，不能把轻量探测当成推理验收。ready也不代表检索正确率100%。
 
 文档故障通过知识页面或job接口查看。依赖恢复后由本人重试失败/blocked任务；自动worker只接queued或租约过期的running，不无限重试坏文件。不再使用的资料可停用，相关queued/running/blocked任务会取消并释放待处理配额；原文件仍计入总存储配额。关闭知识开关可停止新增接入，不回退为假向量实现。
 
@@ -101,6 +103,24 @@ npx playwright test tests/knowledge.spec.ts --reporter=line
 runtime脚本使用独立tax_harness_knowledge_live；HTTP与浏览器脚本使用8105对应预览库。后者创建/换版/停用自己的合成文档，采用真实检索，聊天步骤调用现有真实DeepSeek；不要把它作为无成本单元测试。不要把其他三个旧UI脚本直接指向真实预览，它们需要各自的固定程序测试服务。
 
 记录在`.local/evidence`及忽略的本地日志中。真实组件三条同义问题只是链路验证，不是独立检索留出成绩。首次PDF取证脚本的排序列错误日志也保留，修复后才有完整PASS证据。
+
+### 冻结检索评测
+
+语料、金标准和策略在`evals/retrieval-v1`，协议见其README。以下命令会新建各自隔离数据库，必须使用新的输出目录；不与同一数据库的其他作业同时运行。CPU真实推理可能耗时较长，`--live-model`还会调用配置的聊天接口。
+
+```powershell
+cd D:\tax-harness-remediation
+.\.venv\Scripts\python.exe scripts/evaluate_retrieval.py --split development --output .local/evidence/dev-new-run
+# 开发策略先锁定，再测留出。当前版本锁定文件已随仓库提交，不覆写它。
+.\.venv\Scripts\python.exe scripts/evaluate_retrieval.py --split holdout --policy evals/retrieval-v1/selection-policy.json --output .local/evidence/holdout-replay-new-run --live-model
+.\.venv\Scripts\python.exe scripts/verify_retrieval_entities.py --output .local/evidence/entity-new-run
+```
+
+重跑已看过的留出只能叫复现，不能作为新一轮调参后的独立测试。`--inference-cache`可复用同profile、完全相同输入的真实向量/重排结果；报告记录来源hash和实际/缓存计数。缓存后耗时不能当生产响应时间。本批结果见[质量报告](PATCH002_M4_EXECUTION_REPORT.md)：候选100%，完整证据47/48，保留1条口语误拒；不是48/48。
+
+`verify_retrieval_agent.py`用于在某次已保留的留出数据库上补测指定问题，需`--evaluation`原输出目录、`--output`新输出目录和一个或多个`--case`。它不初始化或清空该库，原数据库必须仍存在；后加边界文档会改变语料，因此结果与原冻结分数分开记录。
+
+浏览器截图可通过`UI_EVIDENCE_DIRECTORY`指向新目录，避免覆盖前一批图片。未设置时保留旧默认路径。本批验证设为`../.local/evidence/m4-knowledge-ui`。
 
 ## 5. 交付边界
 

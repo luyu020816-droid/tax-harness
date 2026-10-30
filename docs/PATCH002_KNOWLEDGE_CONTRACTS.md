@@ -1,6 +1,6 @@
 # PATCH-002：知识资料接口与运行契约
 
-实施：2026-10-29；收尾更新：2026-10-30。对应路线图第3步及第4步已实现部分。办理协议仍为 trusted-execution-v1；本批增加 knowledge-v1，核心 schema 需要005和007，向量索引另外需要006。不要用最大迁移编号代替能力就绪检查。
+实施：2026-10-29；质量批次更新：2026-10-30。对应路线图第3—4步；实测边界见[第一批报告](PATCH002_M4_EXECUTION_REPORT.md)。办理协议仍为 trusted-execution-v1；知识接口为knowledge-v1，选择算法为structural-groups-v1。本批无新增迁移，核心schema需要005和007，向量索引另外需要006。不要用最大迁移编号代替能力就绪检查。
 
 ## 1. 数据与模块
 
@@ -11,6 +11,7 @@
 | `knowledge_jobs.py` | 持久任务、阶段、lease、fencing、索引完整后原子发布 |
 | `retrieval_engine.py` | 固定修订的真实BGE-M3向量、jieba分词和BGE重排 |
 | `knowledge_retrieval.py` | 查询范围、混合候选、去重/预算、持久引用和输出前重验 |
+| `evidence_selection.py` | profile绑定的开发校准策略、结构证据组和完整组预算 |
 | `knowledge_admin.py` | 本地企业发布、停用、撤权及RuleBridge；不暴露给聊天写工具 |
 | `KnowledgeView` / `KnowledgeCitation` | 上传和状态、检索、版本操作、显示时重验原文、受保护下载 |
 
@@ -64,7 +65,9 @@
 
 Bundle包含query_id、profile_id、scope_snapshot、coverage、status、retrieval_mode、candidates的持久trace、evidence、timings和degraded_reason。HTTP返回不暴露全部候选正文，完整排名与分数保留在retrieval_queries。
 
-status为ok/partial/not_found/unavailable。**ok只表示检索和索引范围状态，不表示候选已经回答问题**，answer_support为not_evaluated。没有相关支撑时模型可选择受控knowledge_insufficient，而不能编造答案。无答案的自动选择规则尚待开发/留出集校准。
+status为ok/partial/not_found/unavailable。**ok只表示检索和索引范围状态，不表示候选已经回答问题**，answer_support为not_evaluated。没有相关支撑时模型可选择受控knowledge_insufficient，而不能编造答案。hybrid下使用独立开发集校准的选择阈值；全部候选被阈值排除时为not_found，原因BELOW_CALIBRATED_RELEVANCE。这只说明本次范围和选择策略下未找到依据，不能证明事实不存在。
+
+coverage增加selection_version、selection_calibrated、selection_policy_id、selection_cutoff、evidence_tokens、evidence_budget、budget_incomplete。公开组摘要不暴露全部候选ID；完整候选通道、组成员和分数保存在retrieval_queries。策略不存在/不匹配时partial并明确SELECTION_POLICY_NOT_CALIBRATED或SELECTION_POLICY_MISMATCH。依赖故障与空答案分开，降级候选不能冒称通过hybrid校准。
 
 模式为hybrid、lexical_only、hybrid_unranked或unavailable；向量或重排失败不会伪装完整语义检索。只有原文件、没有任何完成profile时返回未就绪，而非空答案。
 
@@ -75,12 +78,12 @@ status为ok/partial/not_found/unavailable。**ok只表示检索和索引范围�
 1. 在SQL里先过滤用户、企业、当前版本、profile和日期，再取候选；精确编号约束同时用于词法与向量通道。
 2. 真实jieba分词后的PostgreSQL全文检索最多30条；真实BGE-M3 + pgvector余弦距离最多30条。
 3. 单层RRF，k=60，两通道默认等权；取融合前20条，由真实bge-reranker-v2-m3重排。保存各通道排名/分数、RRF与raw logit，不称作正确概率。
-4. 按全文hash去重，最多6组，连定位/标题计入3000个保守估算token预算。不静默截断条款；单条款过大接入失败，表格行重复携带表头/单位。
+4. 通过开发校准阈值的种子扩展为同版本结构组。明确条款的例外、续文、表头共同选取；不跨来源/版本只按相同文本去重。最多6组，连定位/标题按UTF-8字节数/2计入3000估算tokens。整组过预算返回partial及EVIDENCE_BUDGET_INSUFFICIENT，不静默只留主句。
 5. 持久引用冻结query、doc/revision、version、chunk、完整excerpt/hash及locator。重启后继续可读；新版发布、停用或撤权后旧引用拒绝重新使用。
 
-目前保留结构条款和表头；尚未实现跨chunk必要例外/脚注的完整证据扩展。初步同义联调不等于Recall@20达到95%，没有部署拍脑袋的logit阈值。
+组只依据明确标题/编号/例外/表格结构，不识别任意隐含跨章节语义；无明确边界的文档保守扩大组，可能预算拒绝。实体约束保护候选，必要结构上下文可以含其他编号，不能借此更改业务操作目标。实测候选Recall与最终完整证据覆盖分别见报告，不承诺任意表达零遗漏。
 
-新增聊天工具：search_knowledge、read_evidence。知识附件使用独立的knowledge_upload_ids，不复用Excel发票追加接口。模型只能用实际入模返回的citation_id选择knowledge_quote；渲染器核对原文与hash，前端卡片再次GET当前引用展示完整原文。历史final_message只保存来源说明，不复制一份永久显示的资料正文。
+新增聊天工具：search_knowledge、read_evidence。知识附件使用独立的knowledge_upload_ids，不复用Excel发票追加接口。read_evidence保持主引用字段，新增related_evidence返回同组其他已核验引用。模型只能用实际入模返回的citation_id选择knowledge_quote；宿主对该引用的完整组逐条核对原文、hash及实际入模状态，生成全部组卡片。成员未入模时要求先read_evidence，不隐式补入新知识。前端卡片再次GET当前引用展示完整原文。历史final_message只保存来源说明，不复制一份永久显示的资料正文。旧M3引用无组元数据时只保持原单条读取，重新检索后才获得新组。
 
 页面每5秒重验已显示引用；失效或请求错误时撤下卡片正文。历史工具来源回读也重验知识引用，不能借search_history复活已停用正文。原文审计记录保留，不宣称从已经被用户看到的设备中抹除内容。
 
@@ -107,4 +110,4 @@ rule-anchors.json是数组，每个企业一项：`{"knowledge_version_id":"UUID
 
 ## 6. 已知后续
 
-第4步仍需独立开发/留出集、无答案校准、必要证据扩展和分层指标；第5步再为历史建立真实向量与日期浏览；第6步补OCR和强制长上下文验证；第7—8步完成组合恢复、部署和参赛交付。当前不支持扫描PDF的OCR，保留原文件并返回blocked，不宣称解析成功。
+第4步实现及合成域自动门槛已验证，已知口语误拒1/48和人工语义签收仍待跟进。第5步为历史建立真实向量与日期浏览；第6步补OCR和强制长上下文验证；第7—8步完成组合恢复、部署和参赛交付。当前不支持扫描PDF的OCR，保留原文件并返回blocked，不宣称解析成功。

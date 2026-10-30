@@ -1,0 +1,201 @@
+{
+  "scope": "Implementer-authored synthetic knowledge evaluation; independent human semantic acceptance pending.",
+  "date": "2026-10-30",
+  "release_code_commit": "63c282eaf43fd0082d704d4c65c26e979f6194fc",
+  "release_code_fingerprint": "e49b3d0964d6cfd040f73055bcb3a189daa98d0b86b3207995c8197c8294d97d",
+  "selection_policy": {
+    "version": "structural-groups-v1",
+    "profile_id": "0892c00a8c75451a31c3f1be37bb51ce1c10814c1074188d2d789283b5824446",
+    "mode": "hybrid",
+    "development_sha256": "ff300092663936e95947fe3a4c994840044a4346ddf1078d3b2e2a3ba96ebbb4",
+    "cutoff": -2.6050246953964233,
+    "calibration": {
+      "objective": "min_false_accepts_then_max_gold_seed_retention",
+      "positive_questions": 24,
+      "negative_questions": 12,
+      "development_false_accepts": 0,
+      "development_gold_seed_retained": 23,
+      "raw_logits_are_probabilities": false
+    },
+    "policy_id": "e17545f723aa64fbd268c5eb7a6014a8086b5824d7d95b2c63fafb1e702a2230"
+  },
+  "development": {
+    "suite_sha256": "ff300092663936e95947fe3a4c994840044a4346ddf1078d3b2e2a3ba96ebbb4",
+    "selected": {
+      "questions": 36,
+      "answerable": 24,
+      "unanswerable": 12,
+      "lexical_recall20": 0.9791666666666666,
+      "dense_recall20": 1.0,
+      "rrf_recall20": 1.0,
+      "reranked_recall20": 1.0,
+      "lexical_ndcg10": 0.8464526659669686,
+      "dense_ndcg10": 0.9830780087071864,
+      "rrf_ndcg10": 0.939357150142996,
+      "reranked_ndcg10": 0.9933100657623489,
+      "complete_evidence": 0.9583333333333334,
+      "legacy_topk_complete_evidence": 1.0,
+      "unexpanded_filtered_complete_evidence": 0.625,
+      "citation_checks": 1.0,
+      "unanswerable_retained_evidence": 0,
+      "unanswerable_no_evidence_rate": 1.0,
+      "paired_recall_rrf_minus_lexical": {
+        "mean_difference": 0.020833333333333332,
+        "lower_95": 0.0,
+        "upper_95": 0.0625,
+        "families": 12,
+        "method": "paired_document_family_percentile_bootstrap",
+        "seed": 20261030,
+        "samples": 2000
+      },
+      "paired_ndcg_reranked_minus_rrf": {
+        "mean_difference": 0.05395291561935289,
+        "lower_95": 0.018495897002883357,
+        "upper_95": 0.09419733990037234,
+        "families": 12,
+        "method": "paired_document_family_percentile_bootstrap",
+        "seed": 20261030,
+        "samples": 2000
+      }
+    }
+  },
+  "holdout": {
+    "suite_sha256": "288104b2dd3965d30fdf24cbb9c197251215ed27d17ceb9be8ab7ef24af5917d",
+    "retrieval_code_fingerprint": "0508aeee5b0995a13be118c3a23322597996618cc511ffe1f60fbc34f056a896",
+    "baseline": {
+      "questions": 60,
+      "answerable": 48,
+      "unanswerable": 12,
+      "lexical_recall20": 0.9791666666666666,
+      "dense_recall20": 1.0,
+      "rrf_recall20": 1.0,
+      "reranked_recall20": 1.0,
+      "lexical_ndcg10": 0.9173443026487118,
+      "dense_ndcg10": 0.982338976395546,
+      "rrf_ndcg10": 0.9801346037507147,
+      "reranked_ndcg10": 0.9940970186173838,
+      "complete_evidence": 1.0,
+      "legacy_topk_complete_evidence": 1.0,
+      "unexpanded_filtered_complete_evidence": null,
+      "citation_checks": 1.0,
+      "unanswerable_retained_evidence": 12,
+      "unanswerable_no_evidence_rate": 0.0,
+      "paired_recall_rrf_minus_lexical": {
+        "mean_difference": 0.020833333333333332,
+        "lower_95": 0.0,
+        "upper_95": 0.052083333333333336,
+        "families": 24,
+        "method": "paired_document_family_percentile_bootstrap",
+        "seed": 20261030,
+        "samples": 2000
+      },
+      "paired_ndcg_reranked_minus_rrf": {
+        "mean_difference": 0.01396241486666911,
+        "lower_95": 0.0034435449681685243,
+        "upper_95": 0.026736314715949495,
+        "families": 24,
+        "method": "paired_document_family_percentile_bootstrap",
+        "seed": 20261030,
+        "samples": 2000
+      }
+    },
+    "selected": {
+      "questions": 60,
+      "answerable": 48,
+      "unanswerable": 12,
+      "lexical_recall20": 0.9791666666666666,
+      "dense_recall20": 1.0,
+      "rrf_recall20": 1.0,
+      "reranked_recall20": 1.0,
+      "lexical_ndcg10": 0.9173443026487118,
+      "dense_ndcg10": 0.982338976395546,
+      "rrf_ndcg10": 0.9801346037507147,
+      "reranked_ndcg10": 0.9940970186173838,
+      "complete_evidence": 0.9791666666666666,
+      "legacy_topk_complete_evidence": 1.0,
+      "unexpanded_filtered_complete_evidence": 0.75,
+      "citation_checks": 1.0,
+      "unanswerable_retained_evidence": 0,
+      "unanswerable_no_evidence_rate": 1.0,
+      "paired_recall_rrf_minus_lexical": {
+        "mean_difference": 0.020833333333333332,
+        "lower_95": 0.0,
+        "upper_95": 0.052083333333333336,
+        "families": 24,
+        "method": "paired_document_family_percentile_bootstrap",
+        "seed": 20261030,
+        "samples": 2000
+      },
+      "paired_ndcg_reranked_minus_rrf": {
+        "mean_difference": 0.01396241486666911,
+        "lower_95": 0.0034435449681685243,
+        "upper_95": 0.026736314715949495,
+        "families": 24,
+        "method": "paired_document_family_percentile_bootstrap",
+        "seed": 20261030,
+        "samples": 2000
+      }
+    },
+    "boundaries": {
+      "passed": 10,
+      "total": 10
+    }
+  },
+  "original_holdout_model_probes": {
+    "passed": 16,
+    "total": 16,
+    "scope": "Automatic evidence/no-write checks; final natural-language semantic review is separate."
+  },
+  "post_group_closure_agent_probes": {
+    "passed": 4,
+    "total": 5,
+    "scope": "Same holdout DB after boundary tests; includes auxiliary boundary documents. These probes do not replace or increase the 70-item frozen held-out score."
+  },
+  "known_failure": {
+    "id": "H13Q2",
+    "query": "免费的开源软件是不是拿来就能上生产环境？",
+    "strongest_gold_logit": -5.469383239746094,
+    "reason": "Below development-calibrated cutoff; remained unsupported in the post-closure live-agent diagnostic. Retained, not used to refit this policy."
+  },
+  "same_pool_entity_ablation": {
+    "baseline_has_other_entity_candidate": true,
+    "constrained_candidates_exclude_other_entity": true,
+    "constrained_evidence_has_expected_document": true
+  },
+  "business_frozen_40": {
+    "initial_passed": 38,
+    "initial_total": 40,
+    "final_passed": 40,
+    "final_total": 40,
+    "repetitions_per_case_in_final": 1,
+    "human_review": "pending"
+  },
+  "program_tests": {
+    "full": 216,
+    "post_default_policy_targeted": 56
+  },
+  "browser": {
+    "real_knowledge_workflow_passed": 1,
+    "desktop_and_390px": true
+  },
+  "artifact_sha256": {
+    "m4-holdout-v1/report.json": "e64431a20aa9502d9abf1136573ffed1b5dc1a893b66766550968122a05f3767",
+    "m4-holdout-v1/code-snapshot.json": "28bb4af4e350c0d06e7e9d3df120d3800d4de6802940dc8e3c0742c9c97271a0",
+    "m4-holdout-v1/real-inference-cache.json": "685a603543e3cb24631d06c2f707013054466d95f614a08b93e732b07116f159",
+    "m4-development-locked/report.json": "35203d6b0408defbe11a7afb28adc13377e4f42a23c8f0b7086c9a90303c7243",
+    "m4-agent-closure-fixed/report.json": "0e8ae02148822e7383ac01870bda7f8d550da95482ea39131ee1724285765bad",
+    "m4-business-frozen-40/report.json": "20cf35d57a2a2adbf8c774f9f4f3cad42d4153115ad9e0d087029ea580d75fb2",
+    "m4-business-final-40/report.json": "b5b8f8234242426d0b07753ae38621069613ca99211b371f1b537b9e540f0d5e",
+    "m4-entity-ablation-fixed/report.json": "b40b6b4b0520eb98da4c4e53e08b344a9c920a3c4e83565343878d8bf3caa56b"
+  },
+  "timing_note": "Query vectors and exact rerank pairs reuse actual profile-bound outputs; warm replay is not production request latency. Baseline may also hit imported caches; inference_counts separately records actual model work. Query priming is reported separately.",
+  "not_completed": [
+    "historical_semantic_30",
+    "OCR",
+    "forced_long_context",
+    "cross_module_recovery",
+    "clean_machine_install",
+    "independent_human_semantic_acceptance",
+    "competition_final_delivery"
+  ]
+}

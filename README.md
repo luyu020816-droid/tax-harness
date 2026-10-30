@@ -10,9 +10,9 @@
 
 已实现数据库及工具、任务/偏好管理、上下文预算与摘要、安全保存、租约恢复、规则 CLI、工作台和追溯界面，以及独立扩展实例中的 Excel 发票追加。验证记录见 [实施记录](docs/IMPLEMENTATION.md)、[测试报告](docs/TEST_REPORT.md) 与 [追加功能验证](docs/PATCH001_TEST_REPORT.md)。
 
-整改分支已增加文本知识资料的私有上传、真实混合检索、持久引用、换版与停用，并接入企业维护发布和规则来源校验。见[知识接口](docs/PATCH002_KNOWLEDGE_CONTRACTS.md)、[安装与运行](docs/PATCH002_KNOWLEDGE_RUNTIME.md)及[本批执行报告](docs/PATCH002_M3_EXECUTION_REPORT.md)。整改预览位于`http://127.0.0.1:8105/`，工作区`D:\tax-harness-remediation`。
+整改分支已增加文本知识资料的私有上传、真实混合检索、持久引用、换版与停用，并接入企业维护发布和规则来源校验；本批补充开发/留出评测、校准弃答和完整条款组引用。见[知识接口](docs/PATCH002_KNOWLEDGE_CONTRACTS.md)、[安装与运行](docs/PATCH002_KNOWLEDGE_RUNTIME.md)、[接入报告](docs/PATCH002_M3_EXECUTION_REPORT.md)及[质量报告](docs/PATCH002_M4_EXECUTION_REPORT.md)。整改预览位于`http://127.0.0.1:8105/`，工作区`D:\tax-harness-remediation`。
 
-凭据只在本地`.env`配置，仓库不包含密钥。本地真实DeepSeek冻结40例自动断言已通过；ScriptedModel仅用于明确标记的程序测试。检索留出评测、历史语义召回、OCR、完整故障矩阵和最终参赛验收仍未完成，不能将当前工程称为已全部验收。
+凭据只在本地`.env`配置，仓库不包含密钥。本批后端216项及真实DeepSeek原冻结40例单轮自动检查通过；ScriptedModel仅用于明确标记的程序测试。合成制度留出候选Recall@20=100%，最终完整证据47/48，12个无答案未保留片段；1条口语问法误拒仍存在。历史语义召回、OCR、完整故障矩阵、人工语义签收和最终参赛验收仍未完成，不能将当前工程称为已全部验收。
 
 ## 启动
 
