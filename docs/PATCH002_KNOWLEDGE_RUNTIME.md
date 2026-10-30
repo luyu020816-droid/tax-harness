@@ -49,7 +49,7 @@ py -3.12 -m venv .venv
 
 准备脚本复制独立PG16二进制目录后安装扩展，不改原目录，也不自行停/起服务。原始扩展包SHA256：`5730998991a2b7349c4253ed7881f339bd43d005949b655edc616cca8caf21dd`。`native_postgres.py`在准备清单存在时选用新目录，数据目录保持`.local/postgres/data`，端口读取当前项目本地配置。
 
-005创建知识权威关系与权限，006创建vector扩展和向量表，007增加企业维护审计及逐企业规则关联。缺少扩展时006可跳过，核心财税仍可ready；知识索引blocked，安装扩展后再显式init补006。不能仅因007存在就声称向量已就绪。
+005创建知识权威关系与权限，006创建vector扩展和向量表，007增加企业维护审计及逐企业规则关联。008增加历史任务、派生块、查询与引用，009增加历史向量表。核心ready要求005/007/008；缺少扩展时006/009可跳过，核心财税仍可ready，语义索引blocked；安装扩展后再显式init补齐。不能仅因权威表已迁移就声称向量已就绪。
 
 新表、BYTEA和向量纳入备份快照。向量按维度和有限float32规范表示生成指纹。本批恢复用例验证文件、向量、版本指针及引用恢复；完整故障组合和异机恢复仍属第7步。
 
@@ -67,6 +67,8 @@ KNOWLEDGE_MODEL_DIRECTORY=D:/tax-harness-remediation/.local/retrieval-models
 KNOWLEDGE_MAX_FILE_BYTES=20971520
 KNOWLEDGE_PARSER_TIMEOUT=60
 KNOWLEDGE_LEASE_SECONDS=90
+HISTORY_ENABLED=true
+HISTORY_SELECTION_POLICY=D:/tax-harness-remediation/evals/history-v1/selection-policy.json
 ```
 
 默认从仓库内`evals/retrieval-v1/selection-policy.json`加载开发校准策略，无需手填阈值，也不依赖被忽略的本地评测目录。可用`KNOWLEDGE_SELECTION_POLICY`显式指定其他策略文件；文件必须匹配当前真实profile、hybrid模式和structural-groups-v1。更换模型/profile后需独立开发校准并重新验收，不能照搬当前分数。
@@ -121,6 +123,24 @@ cd D:\tax-harness-remediation
 `verify_retrieval_agent.py`用于在某次已保留的留出数据库上补测指定问题，需`--evaluation`原输出目录、`--output`新输出目录和一个或多个`--case`。它不初始化或清空该库，原数据库必须仍存在；后加边界文档会改变语料，因此结果与原冻结分数分开记录。
 
 浏览器截图可通过`UI_EVIDENCE_DIRECTORY`指向新目录，避免覆盖前一批图片。未设置时保留旧默认路径。本批验证设为`../.local/evidence/m4-knowledge-ui`。
+
+### 历史检索与回填
+
+历史原话在Source；正式任务和显式偏好仍精确读取。新增Source与history_jobs同事务，后台生成派生索引。迁移008将现有active来源排队，不重写原文、时间和业务数据。009的真实pgvector索引及开发校准策略用于语义查询；日期浏览直接读取Source，无向量也能使用。
+
+```powershell
+$env:PYTHONPATH='backend'
+.\.venv\Scripts\python.exe scripts/rebuild_history.py --semantic
+.\.venv\Scripts\python.exe scripts/evaluate_history.py --split development --output .local/evidence/history-dev-new
+.\.venv\Scripts\python.exe scripts/evaluate_history.py --split holdout --policy evals/history-v1/selection-policy.json --output .local/evidence/history-heldout-replay
+.\.venv\Scripts\python.exe scripts/verify_history_agent.py --evaluation .local/evidence/history-heldout-replay --output .local/evidence/history-agent-new
+```
+
+回填命令幂等重建词法记录并排队缺失、blocked或profile过期的任务；服务worker负责处理，命令返回不代表索引已完成。查询coverage显示当前eligible/ready/pending，partial不能解释为从未说过。策略必须匹配当前真实profile及history-passages-v1；历史与知识选择阈值分别校准。以上评测使用新的隔离数据库/输出目录，重跑已见留出不是新的独立成绩。
+
+BGE推理在受控子进程中串行执行，不需要另一把embedding API key。原生退出仅重试一次纯推理，再失败或响应超时返回DEPENDENCY_UNAVAILABLE；历史查询可明确词法降级，作业blocked并保留Source。每次响应等待120秒，首次模型校验与切换存在可见延迟；不是整个请求的延迟SLA。子进程只获得运行时路径环境，不获得数据库/聊天凭据；日志在`.local/native-inference`，不会把输入正文写到协议错误日志。应用退出会关闭自身推理进程。实际Windows torch崩溃尚未根治，报告记录了隔离后的恢复证据。
+
+浏览器历史专项使用`backend/tests/history_ui_server.py`，仅启动独立8106与tax_harness_history_ui，不清空8105预览库；对应`tests/history.spec.ts`测试旧原话、手机布局和失效撤回。最终本批结果见[报告](PATCH002_M5_EXECUTION_REPORT.md)。
 
 ## 5. 交付边界
 

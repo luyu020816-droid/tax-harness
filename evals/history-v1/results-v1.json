@@ -1,0 +1,183 @@
+{
+  "version": "history-evaluation-v1",
+  "dataset": "Implementer-authored public synthetic histories; not independent human acceptance or a large corpus benchmark.",
+  "profile_id": "0892c00a8c75451a31c3f1be37bb51ce1c10814c1074188d2d789283b5824446",
+  "policy": {
+    "version": "history-passages-v1",
+    "profile_id": "0892c00a8c75451a31c3f1be37bb51ce1c10814c1074188d2d789283b5824446",
+    "mode": "hybrid",
+    "development_sha256": "6d22b2b019be752f507b8b7c7103352206e61b0a04c1ba2cc1fca6e7013c1b75",
+    "cutoff": -5.015931129455566,
+    "calibration": {
+      "objective": "min_false_accepts_then_max_gold_seed_retention",
+      "positive_questions": 16,
+      "negative_questions": 8,
+      "development_false_accepts": 0,
+      "development_gold_seed_retained": 16,
+      "raw_logits_are_probabilities": false
+    },
+    "policy_id": "a198d61c0af6804d5e7acea0664b540062af5088bb942c546a76dbdf800568bb"
+  },
+  "development": {
+    "suite_sha256": "6d22b2b019be752f507b8b7c7103352206e61b0a04c1ba2cc1fca6e7013c1b75",
+    "selected": {
+      "positives": 16,
+      "negative_questions": 8,
+      "candidate_recall20": 1.0,
+      "complete_quotes": 16,
+      "negative_retained_evidence": 0,
+      "role_locator_hash_valid": true
+    },
+    "code_fingerprint": "08b94a0d5ce7803b26efb73ed405f6f19553e1f5fa39c4c44070f03881e7bd2a"
+  },
+  "original_holdout": {
+    "suite_sha256": "5a3f2d6645076201207525b432a255d2ddbc02be848984d9069d2e3fddd5fd60",
+    "baseline": {
+      "positives": 20,
+      "negative_questions": 4,
+      "candidate_recall20": 1.0,
+      "complete_quotes": 20,
+      "negative_retained_evidence": 4,
+      "role_locator_hash_valid": true
+    },
+    "selected": {
+      "positives": 20,
+      "negative_questions": 4,
+      "candidate_recall20": 1.0,
+      "complete_quotes": 20,
+      "negative_retained_evidence": 0,
+      "role_locator_hash_valid": true
+    },
+    "boundaries": {
+      "passed": 6,
+      "total": 6,
+      "records": [
+        {
+          "id": "date_without_vectors",
+          "pass": true
+        },
+        {
+          "id": "date_pagination",
+          "pass": true
+        },
+        {
+          "id": "private_user",
+          "pass": true
+        },
+        {
+          "id": "wrong_company",
+          "pass": true
+        },
+        {
+          "id": "suppressed_vector_and_citation",
+          "pass": true
+        },
+        {
+          "id": "before_input_watermark",
+          "pass": true
+        }
+      ]
+    },
+    "code_fingerprint": "0eb0b278ad3752e84d558e990738ecf16d12faa661524a643297428df9ce7952",
+    "inference_counts": {
+      "real_embedding_texts": 47,
+      "cached_embedding_texts": 48,
+      "real_rerank_pairs": 500,
+      "cached_rerank_pairs": 480
+    }
+  },
+  "ranking": {
+    "rrf_recall20": 1,
+    "rrf_ndcg10": 0.8939963100696926,
+    "dense_recall20": 1,
+    "dense_ndcg10": 1.0,
+    "lexical_recall20": 0.85,
+    "lexical_ndcg10": 0.7446394630357186,
+    "reranked_recall20": 1,
+    "reranked_ndcg10": 1.0
+  },
+  "agent_rehearsal": {
+    "passed": 8,
+    "total": 8,
+    "records": [
+      {
+        "id": "H02Q1",
+        "pass": true,
+        "invoice_writes": 0,
+        "human_review": "pending"
+      },
+      {
+        "id": "H05Q1",
+        "pass": true,
+        "invoice_writes": 0,
+        "human_review": "pending"
+      },
+      {
+        "id": "H09Q1",
+        "pass": true,
+        "invoice_writes": 0,
+        "human_review": "pending"
+      },
+      {
+        "id": "HU01",
+        "pass": true,
+        "invoice_writes": 0,
+        "human_review": "pending"
+      },
+      {
+        "id": "current_business_truth",
+        "pass": true,
+        "invoice_writes": 0,
+        "human_review": "pending"
+      },
+      {
+        "id": "date_browse",
+        "pass": true,
+        "invoice_writes": 0,
+        "human_review": "pending"
+      },
+      {
+        "id": "date_next",
+        "pass": true,
+        "invoice_writes": 0,
+        "human_review": "pending"
+      },
+      {
+        "id": "date_end",
+        "pass": true,
+        "invoice_writes": 0,
+        "human_review": "pending"
+      }
+    ],
+    "code_fingerprint": "5f29d6d3ce35e89eb7502b7e9ee28055585d146738b66b5cfca6d019078ecb7e",
+    "inference_counts": {
+      "real_embedding_texts": 5,
+      "cached_embedding_texts": 22,
+      "real_rerank_pairs": 77,
+      "cached_rerank_pairs": 3
+    },
+    "scope": "Supplemental live Agent rehearsal in a fresh database with the same frozen synthetic corpus and actual profile-bound inference cache; not a new independent holdout score. Final natural-language semantic acceptance is pending."
+  },
+  "backend_tests": 249,
+  "human_review": "pending",
+  "final_success_rate": null,
+  "limitations": [
+    "Frozen holdout preceded late navigation and process-isolation changes; Agent rehearsal tests the final core, using the same corpus and exact-input real cache.",
+    "Windows torch native access violation observed; inference process containment and bounded retry verified, underlying root cause unresolved.",
+    "Knowledge-side H13Q2 false rejection remains; no claim of 100 combined end-to-end Agent successes."
+  ],
+  "business_regression": {
+    "automatic_passes": 40,
+    "full_40_by_3": false,
+    "final_success_rate": null,
+    "code_fingerprint": "5f29d6d3ce35e89eb7502b7e9ee28055585d146738b66b5cfca6d019078ecb7e",
+    "case_set_sha256": "42a3b04447c6d074bf9d8eb47e2a4b2b9f0840611bc77d1f5ab9e94c28bfaf4d",
+    "supplemental_assertions_sha256": "aab658983fe9b4b0efedb36927bc7a1f3a8c2dd6c5bb140388e983802c530792",
+    "total": 40
+  },
+  "release_code": {
+    "commit": "794ec5e",
+    "fingerprint": "b3ff58c3bc8ce2f777ec73b56480c55e062b659e4471b36d75fd5e2dbe75be0e",
+    "late_change": "After live Agent/business/browser checks, Windows inference timeout cleanup was extended to terminate the owned interpreter tree; dedicated real-child process tests and final full program regression validate it."
+  }
+}

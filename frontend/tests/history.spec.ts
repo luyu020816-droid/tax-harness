@@ -22,9 +22,11 @@ test('history: old source quote, mobile layout and invalidation', async ({ page 
   await page.setViewportSize({ width: 390, height: 844 });
   if (await page.locator('.nav-backdrop').isVisible())
     await page.locator('.sidebar').getByRole('button', { name: '关闭导航' }).click();
-  await expect.poll(() => page.locator('.sidebar').evaluate(
-    (element) => element.getBoundingClientRect().right
-  )).toBeLessThanOrEqual(0);
+  await expect
+    .poll(() =>
+      page.locator('.sidebar').evaluate((element) => element.getBoundingClientRect().right)
+    )
+    .toBeLessThanOrEqual(0);
   await last.locator('.history-citation').last().scrollIntoViewIfNeeded();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: `${evidenceDirectory}/mobile.png`, fullPage: true });
