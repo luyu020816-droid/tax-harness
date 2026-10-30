@@ -1,0 +1,344 @@
+{
+  "sources": [
+    {
+      "id": "D01",
+      "family": "档案位置",
+      "role": "user",
+      "company_id": "C001",
+      "content": "盖章合同纸质原件放在三楼资料室蓝色柜子的第二层。",
+      "created_at": "2026-09-03T10:00:00+08:00"
+    },
+    {
+      "id": "D02",
+      "family": "周会安排",
+      "role": "user",
+      "company_id": "C001",
+      "content": "项目周会改到每周三下午三点，在二号会议室召开。",
+      "created_at": "2026-09-03T10:00:00+08:00"
+    },
+    {
+      "id": "D03",
+      "family": "备件存放",
+      "role": "user",
+      "company_id": "C001",
+      "content": "服务器备用硬盘存放在机房西侧上锁的铁柜，钥匙由小林保管。",
+      "created_at": "2026-09-03T10:00:00+08:00"
+    },
+    {
+      "id": "D04",
+      "family": "出差计划",
+      "role": "user",
+      "company_id": "C001",
+      "content": "下月出差去成都，先拜访高新区客户，周五返程。",
+      "created_at": "2026-09-03T10:00:00+08:00"
+    },
+    {
+      "id": "D05",
+      "family": "联系人变更",
+      "role": "user",
+      "company_id": "C001",
+      "content": "采购合同的日常联系人改为王敏，原来的李强已不负责。",
+      "created_at": "2026-09-03T10:00:00+08:00"
+    },
+    {
+      "id": "D06",
+      "family": "回复偏好",
+      "role": "user",
+      "company_id": "C001",
+      "content": "请记下我的长期回复偏好：先给结论，再说明依据。",
+      "created_at": "2026-09-03T10:00:00+08:00"
+    },
+    {
+      "id": "D07",
+      "family": "快递地址",
+      "role": "user",
+      "company_id": "C001",
+      "content": "样机收货地址是南园路二十号研发楼前台，联系人陈宁。",
+      "created_at": "2026-09-03T10:00:00+08:00"
+    },
+    {
+      "id": "D08",
+      "family": "文件命名",
+      "role": "user",
+      "company_id": "C001",
+      "content": "预算底稿请以部门简称加月份命名，旧稿统一加old后缀。",
+      "created_at": "2026-09-03T10:00:00+08:00"
+    },
+    {
+      "id": "DN00",
+      "family": "近期无关记录",
+      "role": "user",
+      "company_id": "C001",
+      "content": "当天第1次例行记录：核对台账记录编号，不改变任何历史安排。",
+      "created_at": "2026-10-29T10:00:00+08:00"
+    },
+    {
+      "id": "DN01",
+      "family": "近期无关记录",
+      "role": "user",
+      "company_id": "C001",
+      "content": "当天第2次例行记录：核对台账记录编号，不改变任何历史安排。",
+      "created_at": "2026-10-29T10:00:00+08:00"
+    },
+    {
+      "id": "DN02",
+      "family": "近期无关记录",
+      "role": "user",
+      "company_id": "C001",
+      "content": "当天第3次例行记录：核对台账记录编号，不改变任何历史安排。",
+      "created_at": "2026-10-29T10:00:00+08:00"
+    },
+    {
+      "id": "DN03",
+      "family": "近期无关记录",
+      "role": "user",
+      "company_id": "C001",
+      "content": "当天第4次例行记录：核对台账记录编号，不改变任何历史安排。",
+      "created_at": "2026-10-29T10:00:00+08:00"
+    },
+    {
+      "id": "DN04",
+      "family": "近期无关记录",
+      "role": "user",
+      "company_id": "C001",
+      "content": "当天第5次例行记录：核对台账记录编号，不改变任何历史安排。",
+      "created_at": "2026-10-29T10:00:00+08:00"
+    },
+    {
+      "id": "DN05",
+      "family": "近期无关记录",
+      "role": "user",
+      "company_id": "C001",
+      "content": "当天第6次例行记录：核对台账记录编号，不改变任何历史安排。",
+      "created_at": "2026-10-29T10:00:00+08:00"
+    },
+    {
+      "id": "DN06",
+      "family": "近期无关记录",
+      "role": "user",
+      "company_id": "C001",
+      "content": "当天第7次例行记录：核对台账记录编号，不改变任何历史安排。",
+      "created_at": "2026-10-29T10:00:00+08:00"
+    },
+    {
+      "id": "DN07",
+      "family": "近期无关记录",
+      "role": "user",
+      "company_id": "C001",
+      "content": "当天第8次例行记录：核对台账记录编号，不改变任何历史安排。",
+      "created_at": "2026-10-29T10:00:00+08:00"
+    },
+    {
+      "id": "DN08",
+      "family": "近期无关记录",
+      "role": "user",
+      "company_id": "C001",
+      "content": "当天第9次例行记录：核对台账记录编号，不改变任何历史安排。",
+      "created_at": "2026-10-29T10:00:00+08:00"
+    },
+    {
+      "id": "DN09",
+      "family": "近期无关记录",
+      "role": "user",
+      "company_id": "C001",
+      "content": "当天第10次例行记录：核对台账记录编号，不改变任何历史安排。",
+      "created_at": "2026-10-29T10:00:00+08:00"
+    },
+    {
+      "id": "DN10",
+      "family": "近期无关记录",
+      "role": "user",
+      "company_id": "C001",
+      "content": "当天第11次例行记录：核对台账记录编号，不改变任何历史安排。",
+      "created_at": "2026-10-29T10:00:00+08:00"
+    },
+    {
+      "id": "DN11",
+      "family": "近期无关记录",
+      "role": "user",
+      "company_id": "C001",
+      "content": "当天第12次例行记录：核对台账记录编号，不改变任何历史安排。",
+      "created_at": "2026-10-29T10:00:00+08:00"
+    }
+  ],
+  "questions": [
+    {
+      "id": "D01Q1",
+      "family": "档案位置",
+      "query": "签好章的合同正本搁哪儿了？",
+      "source": "D01",
+      "required_quote": "盖章合同纸质原件放在三楼资料室蓝色柜子的第二层。",
+      "answerable": true
+    },
+    {
+      "id": "D01Q2",
+      "family": "档案位置",
+      "query": "找合同原件该去哪个柜子？",
+      "source": "D01",
+      "required_quote": "盖章合同纸质原件放在三楼资料室蓝色柜子的第二层。",
+      "answerable": true
+    },
+    {
+      "id": "D02Q1",
+      "family": "周会安排",
+      "query": "咱们每星期碰头现在是啥时候在哪开？",
+      "source": "D02",
+      "required_quote": "项目周会改到每周三下午三点，在二号会议室召开。",
+      "answerable": true
+    },
+    {
+      "id": "D02Q2",
+      "family": "周会安排",
+      "query": "项目例会的新时间和房间是什么？",
+      "source": "D02",
+      "required_quote": "项目周会改到每周三下午三点，在二号会议室召开。",
+      "answerable": true
+    },
+    {
+      "id": "D03Q1",
+      "family": "备件存放",
+      "query": "机器坏了要换的那个盘去哪里拿？",
+      "source": "D03",
+      "required_quote": "服务器备用硬盘存放在机房西侧上锁的铁柜，钥匙由小林保管。",
+      "answerable": true
+    },
+    {
+      "id": "D03Q2",
+      "family": "备件存放",
+      "query": "备份硬盘的位置与钥匙保管人是谁？",
+      "source": "D03",
+      "required_quote": "服务器备用硬盘存放在机房西侧上锁的铁柜，钥匙由小林保管。",
+      "answerable": true
+    },
+    {
+      "id": "D04Q1",
+      "family": "出差计划",
+      "query": "我下趟外地行程打算先见哪边客户？",
+      "source": "D04",
+      "required_quote": "下月出差去成都，先拜访高新区客户，周五返程。",
+      "answerable": true
+    },
+    {
+      "id": "D04Q2",
+      "family": "出差计划",
+      "query": "之前说的成都差旅准备哪天回来？",
+      "source": "D04",
+      "required_quote": "下月出差去成都，先拜访高新区客户，周五返程。",
+      "answerable": true
+    },
+    {
+      "id": "D05Q1",
+      "family": "联系人变更",
+      "query": "现在采购合同这事应该找谁对接？",
+      "source": "D05",
+      "required_quote": "采购合同的日常联系人改为王敏，原来的李强已不负责。",
+      "answerable": true
+    },
+    {
+      "id": "D05Q2",
+      "family": "联系人变更",
+      "query": "李强还管采购合同吗，换成谁了？",
+      "source": "D05",
+      "required_quote": "采购合同的日常联系人改为王敏，原来的李强已不负责。",
+      "answerable": true
+    },
+    {
+      "id": "D06Q1",
+      "family": "回复偏好",
+      "query": "我以前希望你答复按什么顺序组织？",
+      "source": "D06",
+      "required_quote": "请记下我的长期回复偏好：先给结论，再说明依据。",
+      "answerable": true
+    },
+    {
+      "id": "D06Q2",
+      "family": "回复偏好",
+      "query": "上次说的回答风格是什么？",
+      "source": "D06",
+      "required_quote": "请记下我的长期回复偏好：先给结论，再说明依据。",
+      "answerable": true
+    },
+    {
+      "id": "D07Q1",
+      "family": "快递地址",
+      "query": "试验设备寄过来写哪个收件地点？",
+      "source": "D07",
+      "required_quote": "样机收货地址是南园路二十号研发楼前台，联系人陈宁。",
+      "answerable": true
+    },
+    {
+      "id": "D07Q2",
+      "family": "快递地址",
+      "query": "样机快递填谁收、寄到哪里？",
+      "source": "D07",
+      "required_quote": "样机收货地址是南园路二十号研发楼前台，联系人陈宁。",
+      "answerable": true
+    },
+    {
+      "id": "D08Q1",
+      "family": "文件命名",
+      "query": "我之前要求预算草稿文件怎么起名字？",
+      "source": "D08",
+      "required_quote": "预算底稿请以部门简称加月份命名，旧稿统一加old后缀。",
+      "answerable": true
+    },
+    {
+      "id": "D08Q2",
+      "family": "文件命名",
+      "query": "过时的预算底稿用什么后缀区分？",
+      "source": "D08",
+      "required_quote": "预算底稿请以部门简称加月份命名，旧稿统一加old后缀。",
+      "answerable": true
+    },
+    {
+      "id": "DU01",
+      "family": "无答案",
+      "query": "巴黎明天是否下雨？",
+      "answerable": false
+    },
+    {
+      "id": "DU02",
+      "family": "无答案",
+      "query": "昨天纳斯达克收盘指数是多少？",
+      "answerable": false
+    },
+    {
+      "id": "DU03",
+      "family": "无答案",
+      "query": "哪个周末适合爬泰山？",
+      "answerable": false
+    },
+    {
+      "id": "DU04",
+      "family": "无答案",
+      "query": "糖尿病早餐应该吃什么？",
+      "answerable": false
+    },
+    {
+      "id": "DU05",
+      "family": "无答案",
+      "query": "台风什么时候登陆海口？",
+      "answerable": false
+    },
+    {
+      "id": "DU06",
+      "family": "无答案",
+      "query": "火星表面气压是多少？",
+      "answerable": false
+    },
+    {
+      "id": "DU07",
+      "family": "无答案",
+      "query": "附近哪家川菜馆最好吃？",
+      "answerable": false
+    },
+    {
+      "id": "DU08",
+      "family": "无答案",
+      "query": "今年世界杯冠军是哪支队伍？",
+      "answerable": false
+    }
+  ],
+  "boundaries": [],
+  "label_note": "Implementer-authored synthetic messages; human semantic acceptance pending. Business date and message date are distinct."
+}
