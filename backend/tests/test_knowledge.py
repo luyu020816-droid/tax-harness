@@ -35,7 +35,13 @@ def knowledge(db, settings, admin):
     admin.execute("TRUNCATE retrieval_profiles CASCADE")
     store = Knowledge(db, settings)
     engine = ProgramEngine()
-    return store, KnowledgeJobs(db, settings, engine), KnowledgeRetrieval(db, settings, engine)
+    # Explicit protocol-test policy; it is not a semantic calibration result.
+    policy = {"profile_id": "a" * 64, "mode": "hybrid", "cutoff": 0, "policy_id": "b" * 64}
+    return (
+        store,
+        KnowledgeJobs(db, settings, engine),
+        KnowledgeRetrieval(db, settings, engine, selection_policy=policy),
+    )
 
 
 def uploaded(
@@ -110,6 +116,45 @@ def test_upload_is_idempotent_and_patch_requires_new_request(knowledge):
     with pytest.raises(AppError) as error:
         store.upload(AUTH, **{**args, "content": "另一份正文".encode()})
     assert error.value.code == "IDEMPOTENCY_CONFLICT"
+
+
+def test_calibrated_rejection_is_different_from_dependency_degradation(knowledge):
+    _, _, retrieval = knowledge
+    uploaded(knowledge)
+    retrieval.engine.rerank = lambda query, passages: [-10.0] * len(passages)
+    rejected = retrieval.search(AUTH, company_id="C001", query="不存在的规定")
+    assert (
+        rejected["status"] == "not_found"
+        and rejected["degraded_reason"] == "BELOW_CALIBRATED_RELEVANCE"
+        and not rejected["evidence"]
+    )
+
+    def unavailable(texts):
+        raise AppError("DEPENDENCY_UNAVAILABLE", "测试注入", 503)
+
+    retrieval.engine.embed = unavailable
+    degraded = retrieval.search(AUTH, company_id="C001", query="用途")
+    assert degraded["status"] == "partial" and degraded["retrieval_mode"] == "lexical_only"
+    assert degraded["evidence"] and not degraded["coverage"]["selection_calibrated"]
+    missing = retrieval.search(AUTH, company_id="C001", query="绝无词法匹配的火星沙丘")
+    assert missing["status"] == "partial" and missing["retrieval_mode"] == "lexical_only"
+    assert not missing["evidence"] and missing["degraded_reason"] == "DEPENDENCY_UNAVAILABLE"
+
+
+def test_wrong_profile_policy_cannot_claim_calibrated_or_expose_candidate_trace(knowledge, db):
+    _, _, retrieval = knowledge
+    uploaded(knowledge)
+    retrieval.selection_policy = {**retrieval.selection_policy, "profile_id": "c" * 64}
+    result = retrieval.search(AUTH, company_id="C001", query="用途")
+    assert (
+        result["status"] == "partial" and result["degraded_reason"] == "SELECTION_POLICY_MISMATCH"
+    )
+    assert "candidate_channels" not in result["coverage"]
+    with db.transaction(readonly=True) as conn:
+        trace = conn.execute(
+            "SELECT coverage FROM retrieval_queries WHERE query_id=%s", (result["query_id"],)
+        ).fetchone()["coverage"]
+    assert trace["candidate_channels"]["dense"] and trace["candidate_channels"]["lexical"]
 
 
 def test_docx_table_headers_units_and_locators_are_preserved():

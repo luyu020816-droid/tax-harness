@@ -358,6 +358,10 @@ export function KnowledgeView({
                   : '已找到可引用片段。'}
             {bundle.retrieval_mode === 'lexical_only' && ' 本次仅按文字查找。'}
             {bundle.retrieval_mode === 'hybrid_unranked' && ' 本次重排暂不可用。'}
+            {bundle.degraded_reason?.startsWith('SELECTION_POLICY_') &&
+              ' 本次仅展示待核对的候选原文，尚不能确认足以回答。'}
+            {bundle.degraded_reason === 'EVIDENCE_BUDGET_INSUFFICIENT' &&
+              ' 必要条款超出本轮容量，请限定一条制度或缩小问题；未展示不完整条款。'}
           </p>
           {bundle.evidence.map((evidence) => (
             <KnowledgeCitation

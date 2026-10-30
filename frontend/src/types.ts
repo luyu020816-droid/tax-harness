@@ -253,6 +253,7 @@ export interface KnowledgeBundle {
   query_id: string;
   status: string;
   retrieval_mode: string;
+  degraded_reason?: string | null;
   evidence: KnowledgeEvidence[];
   coverage: { eligible: number; ready: number; pending: number };
 }
