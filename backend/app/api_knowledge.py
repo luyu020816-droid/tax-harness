@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Literal
 from urllib.parse import quote
 from uuid import UUID
 
@@ -8,7 +9,7 @@ from pydantic import Field, ValidationError
 from starlette.datastructures import UploadFile
 
 from app.errors import AppError
-from app.tool_schemas import StrictModel
+from app.tool_schemas import SearchHistory, StrictModel
 
 
 class UploadKnowledge(StrictModel):
@@ -31,7 +32,7 @@ class RetryControl(StrictModel):
 
 
 class RetrievalQuery(StrictModel):
-    corpus: str = Field(default="knowledge", pattern="^knowledge$")
+    corpus: Literal["knowledge"] = "knowledge"
     company_id: str = Field(pattern=r"^C\d+$")
     query: str = Field(min_length=1, max_length=2000)
     entities: list[str] = Field(default_factory=list, max_length=8)
@@ -41,7 +42,12 @@ class RetrievalQuery(StrictModel):
     session_id: UUID | None = None
 
 
-def knowledge_router(store, retrieval, auth_dependency):
+class HistoryQuery(SearchHistory):
+    corpus: Literal["history"]
+    session_id: UUID | None = None
+
+
+def knowledge_router(store, retrieval, auth_dependency, history=None):
     router = APIRouter(prefix="/api/v1")
 
     async def receive_upload(request, current, document_id=None):
@@ -146,14 +152,25 @@ def knowledge_router(store, retrieval, auth_dependency):
         return retrieval.ready()
 
     @router.post("/retrieval/search")
-    def search(body: RetrievalQuery, current=auth_dependency):
+    def search(body: RetrievalQuery | HistoryQuery, current=auth_dependency):
         args = body.model_dump(exclude={"corpus"})
+        if body.corpus == "history":
+            args["session_id"] = str(body.session_id) if body.session_id else None
+            return history.search(current, **args)
         args["document_ids"] = [str(i) for i in body.document_ids]
         args["session_id"] = str(body.session_id) if body.session_id else None
         return retrieval.search(current, **args)
 
     @router.get("/evidence/{citation_id}")
     def evidence(citation_id: UUID, current=auth_dependency):
+        if history:
+            with store.db.transaction(readonly=True) as conn:
+                exists = conn.execute(
+                    "SELECT 1 FROM history_evidence e JOIN history_queries q USING(query_id) WHERE e.citation_id=%s AND q.user_id=%s",
+                    (citation_id, current.user_id),
+                ).fetchone()
+            if exists:
+                return history.read(current, str(citation_id))
         return retrieval.read(current, str(citation_id))
 
     return router

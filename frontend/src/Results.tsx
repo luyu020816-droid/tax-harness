@@ -1,6 +1,7 @@
 import { ImportReceipt } from './ImportReceipt';
 import { WritePlanCard } from './WritePlanCard';
 import { KnowledgeCitation } from './KnowledgeCitation';
+import { HistoryCitation } from './HistoryCitation';
 import { ArrowUpRight, CheckCheck, ChevronRight, CircleAlert } from 'lucide-react';
 import { companyName, dateTime, money } from './api';
 import type { Detail, InvoiceWritePlan, ResultCard, Rule } from './types';
@@ -35,6 +36,10 @@ export function Results({
 }) {
   if (card.kind === 'knowledge_quote')
     return <KnowledgeCitation id={card.citation_id} onDetail={onDetail} />;
+  if (card.kind === 'history_quote') return <HistoryCitation card={card} />;
+  // The host already renders the page status; this persisted marker binds
+  // cross-turn navigation to the page actually included in the completed reply.
+  if (card.kind === 'history_page') return null;
   if (card.kind === 'write_plan')
     return (
       <WritePlanCard

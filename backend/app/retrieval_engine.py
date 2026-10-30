@@ -8,6 +8,7 @@ import json
 import math
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from app.errors import AppError
@@ -18,6 +19,8 @@ STOP = set(
     "的 了 吗 呢 是 在 和 与 及 请 请问 怎么 如何 什么 哪些 有没有 一下 帮我 查询 查找 相关 资料 规定 要求 企业 公司 甲 乙 是否 需要".split()
 )
 _lexical = None
+_torch_setup_lock = threading.Lock()
+_torch_configured = False
 
 
 def terms(text):
@@ -61,12 +64,16 @@ def vector_literal(vector):
 
 
 class LocalRetrieval:
-    def __init__(self, directory):
+    def __init__(self, directory, *, isolated=True):
         self.directory = Path(directory)
         self.lock = threading.RLock()
         self.installation = None
         self.tokenizers = {}
         self.model, self.model_kind = None, None
+        self.isolated, self.process = isolated, None
+        # Native CPU models retain thread-local runtime state. All loads and
+        # inference use this one worker, even when API/job callers change threads.
+        self.inference_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bge-inference")
 
     def installed(self):
         missing = [
@@ -122,6 +129,8 @@ class LocalRetrieval:
         return self.tokenizers[kind]
 
     def count(self, text):
+        if self.isolated:
+            return self._remote("count", {"text": text})
         with self.lock:
             return len(
                 self._tokenizer("embedding").encode(text, add_special_tokens=True, truncation=False)
@@ -150,13 +159,17 @@ class LocalRetrieval:
         return digest(manifest), manifest
 
     def _load(self, kind):
+        global _torch_configured
         if self.model_kind != kind:
             self.model = None
             gc.collect()
             import torch
             from transformers import AutoModel, AutoModelForSequenceClassification
 
-            torch.set_num_threads(4)
+            with _torch_setup_lock:
+                if not _torch_configured:
+                    torch.set_num_threads(4)
+                    _torch_configured = True
             factory = AutoModel if kind == "embedding" else AutoModelForSequenceClassification
             self.model = factory.from_pretrained(
                 self.directory / self.installation["models"][kind]["directory"],
@@ -168,6 +181,16 @@ class LocalRetrieval:
         return self.model
 
     def embed(self, texts):
+        if self.isolated:
+            vectors = self._remote("embed", {"texts": texts})
+            if len(vectors) != len(texts):
+                raise AppError("DEPENDENCY_UNAVAILABLE", "本地向量结果不完整。", 503)
+            for vector in vectors:
+                vector_literal(vector)
+            return vectors
+        return self.inference_pool.submit(self._embed, texts).result()
+
+    def _embed(self, texts):
         with self.lock:
             import torch
 
@@ -199,6 +222,14 @@ class LocalRetrieval:
             return vectors
 
     def rerank(self, query, passages):
+        if self.isolated:
+            values = self._remote("rerank", {"query": query, "passages": passages})
+            if len(values) != len(passages) or not all(math.isfinite(v) for v in values):
+                raise AppError("DEPENDENCY_UNAVAILABLE", "本地重排结果不完整。", 503)
+            return values
+        return self.inference_pool.submit(self._rerank, query, passages).result()
+
+    def _rerank(self, query, passages):
         with self.lock:
             import torch
 
@@ -225,3 +256,16 @@ class LocalRetrieval:
             if len(scores) != len(passages) or not all(math.isfinite(s) for s in scores):
                 raise AppError("DEPENDENCY_UNAVAILABLE", "重排未返回完整有效结果。", 503)
             return scores
+
+    def close(self):
+        if self.process:
+            self.process.close()
+        self.inference_pool.shutdown(wait=True, cancel_futures=True)
+
+    def _remote(self, operation, arguments):
+        from app.retrieval_process import LocalInferenceProcess
+
+        with self.lock:
+            if self.process is None:
+                self.process = LocalInferenceProcess(self.directory, self.profile()[0])
+            return self.process.call(operation, arguments)

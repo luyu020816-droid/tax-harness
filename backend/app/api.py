@@ -17,6 +17,7 @@ from app.api_knowledge import knowledge_router
 from app.config import ROOT, Settings
 from app.db import Database
 from app.errors import AppError
+from app.history_jobs import HistoryJobs
 from app.identity import Identity
 from app.invoice_imports import InvoiceImports
 from app.knowledge import Knowledge
@@ -82,6 +83,7 @@ def create_app(
     runtime = Runtime(db, settings, model)
     knowledge = Knowledge(db, settings)
     knowledge_jobs = KnowledgeJobs(db, settings, runtime.tools.retrieval.engine)
+    history_jobs = HistoryJobs(db, settings, runtime.tools.retrieval.engine)
     own_ingest = ingest_db is None and bool(settings.ingest_database_url)
     ingest_db = ingest_db or (Database(settings.ingest_database_url) if own_ingest else None)
     imports = InvoiceImports(db, ingest_db)
@@ -99,12 +101,17 @@ def create_app(
         if start_workers:
             await runtime.start()
             await knowledge_jobs.start()
+            await history_jobs.start()
         try:
             yield
         finally:
             if start_workers:
                 await knowledge_jobs.stop()
+                await history_jobs.stop()
                 await runtime.stop()
+            close_inference = getattr(runtime.tools.retrieval.engine, "close", None)
+            if close_inference:
+                await asyncio.to_thread(close_inference)
             if own_database:
                 db.close()
             if own_ingest:
@@ -118,9 +125,12 @@ def create_app(
 
     auth_dependency = Depends(auth)
     app.include_router(import_router(imports, auth_dependency))
-    app.include_router(knowledge_router(knowledge, runtime.tools.retrieval, auth_dependency))
+    app.include_router(
+        knowledge_router(knowledge, runtime.tools.retrieval, auth_dependency, runtime.tools.history)
+    )
     app.add_middleware(UploadBodyLimit, knowledge_max_bytes=settings.knowledge_max_file_bytes)
     app.state.knowledge, app.state.knowledge_jobs = knowledge, knowledge_jobs
+    app.state.history_jobs = history_jobs
     app.state.imports = imports
 
     @app.get("/api/v1/write-plans/{plan_id}")

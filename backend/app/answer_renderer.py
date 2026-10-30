@@ -148,6 +148,36 @@ def render(conn, execution, plan, payload, manifest):
             if not output or not output.get("ok"):
                 missing("只能选择本轮实际入模的成功工具结果。")
             data = output["data"]
+            if block.view == "history_page":
+                if data.get("kind") != "history_search" or data.get("retrieval_mode") != "date":
+                    missing("历史整页视图只能使用实际日期浏览结果。")
+                from app.tool_schemas import HistoryBlock
+
+                for item in data["matches"]:
+                    history_block = HistoryBlock(
+                        type="history_quote",
+                        source_id=item["source_id"],
+                        citation_id=item["citation_id"],
+                        quote=item["content"],
+                    )
+                    text, card = _history_quote(conn, execution, history_block, outputs)
+                    texts.append(text)
+                    reply.cards.append(card)
+                texts.append(
+                    "本页还有后续记录，可继续下一页。"
+                    if data["has_more"]
+                    else "已到本次历史浏览末页。"
+                    if data["coverage"].get("page_exhausted") or data["matches"]
+                    else "本次日期窗口未找到当前可读的历史原文。"
+                )
+                reply.cards.append(
+                    {
+                        "kind": "history_page",
+                        "company_id": data["scope_snapshot"]["company_id"],
+                        "query_id": data["query_id"],
+                    }
+                )
+                continue
             if block.view == "monthly_summary" and data.get("kind") != "monthly_summary":
                 missing("结果视图与实际工具结果不一致。")
             # Stored JSON uses decimal strings. Conversion stays in the host.
@@ -260,22 +290,9 @@ def render(conn, execution, plan, payload, manifest):
                 else f"已{'记住' if block.action == 'remember' else '更正'}长期偏好：{op['result_ref']['value']}。"
             )
         elif block.type == "history_quote":
-            ref = str(block.source_id)
-            found = any(
-                any(str(m["source_id"]) == ref for m in (o.get("data") or {}).get("matches", []))
-                for o in outputs.values()
-                if o.get("ok")
-            )
-            if not found:
-                missing("历史原文未由本轮检索返回。")
-            source = read_source(conn, execution.auth, ref)
-            if block.quote not in source["content"]:
-                missing("历史引用不匹配原文。")
-            who = {"user": "用户", "assistant": "助手", "tool": "工具"}.get(
-                source["role"], source["role"]
-            )
-            quoted = "\n".join("> " + line for line in block.quote.splitlines())
-            texts.append(f"历史{who}原文（{source['created_at'].date()}）：\n{quoted}")
+            text, card = _history_quote(conn, execution, block, outputs)
+            texts.append(text)
+            reply.cards.append(card)
         elif block.type == "confirmation":
             ref = str(block.plan_id)
             if not any(
@@ -306,12 +323,64 @@ def render(conn, execution, plan, payload, manifest):
                 c.get("operation_id"),
                 c.get("plan_id"),
                 c.get("citation_id"),
+                c.get("quote_start"),
+                c.get("quote_end"),
+                c.get("query_id"),
             ): c
             for c in reply.cards
         }.values()
     )
     reply.displayed_view_ids = [c["view_id"] for c in reply.cards if c.get("view_id")]
     return reply
+
+
+def _history_quote(conn, execution, block, outputs):
+    ref = str(block.source_id)
+    served = []
+    for output in outputs.values():
+        data = output.get("data") or {}
+        if output.get("ok") and data.get("kind") == "history_search":
+            served.extend(data.get("matches", []))
+        elif output.get("ok") and data.get("kind") == "history_evidence":
+            served.append(data)
+    original = next(
+        (
+            m
+            for m in served
+            if str(m["source_id"]) == ref
+            and block.quote in m["content"]
+            and (not block.citation_id or str(block.citation_id) == m.get("citation_id"))
+        ),
+        None,
+    )
+    if not original:
+        missing("历史摘录未真正进入本轮模型输入，不能引用原文其他部分。")
+    from app.history_retrieval import read_evidence_in
+
+    evidence = read_evidence_in(conn, execution.auth, original["citation_id"])
+    if (
+        evidence["revision"] != original["revision"]
+        or evidence["excerpt_hash"] != original["excerpt_hash"]
+    ):
+        missing("历史引文已更正或失效。")
+    source = read_source(conn, execution.auth, ref)
+    if block.quote not in source["content"]:
+        missing("历史引用不匹配原文。")
+    who = {"user": "用户", "assistant": "助手", "tool": "工具"}.get(source["role"], source["role"])
+    from app.history_retrieval import CST
+
+    text = f"历史{who}原文（{source['created_at'].astimezone(CST).date()}）见来源卡片。这只是当时记录，当前业务状态须重新查询。"
+    card = {
+        "kind": "history_quote",
+        "company_id": evidence["company_id"],
+        "citation_id": evidence["citation_id"],
+        "source_id": ref,
+        "quote_start": evidence["locator"]["char_start"] + evidence["excerpt"].index(block.quote),
+        "quote_end": evidence["locator"]["char_start"]
+        + evidence["excerpt"].index(block.quote)
+        + len(block.quote),
+    }
+    return text, card
 
 
 def _knowledge_quotes(conn, execution, citation_id, outputs):
@@ -375,6 +444,21 @@ def _explanation(conn, execution, code, outputs, rules, state):
         for o in outputs.values()
         if o.get("ok") and (o.get("data") or {}).get("kind") == "knowledge_search"
     ]
+    history = [
+        (o.get("data") or {})
+        for o in outputs.values()
+        if o.get("ok") and (o.get("data") or {}).get("kind") == "history_search"
+    ]
+    if code == "history_partial" and any(d["status"] == "partial" for d in history):
+        return "历史索引、检索模式或摘录预算尚未完整覆盖本轮范围；未命中不能证明过去没有说过，请缩小条件或按日期查找。"
+    if code == "history_not_found" and history and all(d["status"] == "partial" for d in history):
+        missing(
+            "本轮历史状态为partial，不能断言没有原话；请用history_partial或history_insufficient。"
+        )
+    if code == "history_insufficient" and history:
+        return "本次找到的历史片段不足以支持回答，不能据此推断过去的说法或当前业务状态。"
+    if code == "history_unavailable" and any(d["status"] == "unavailable" for d in history):
+        return "历史检索依赖暂不可用，已保存原话和正式任务仍保留，请稍后重试或按日期查找。"
     if code == "knowledge_not_found" and any(d["status"] == "not_found" for d in knowledge):
         return "在本轮授权范围、有效版本和检索模式内未找到可引用的资料，不能据此编造依据。"
     if code == "knowledge_unavailable" and any(d["status"] == "unavailable" for d in knowledge):
@@ -438,9 +522,7 @@ def _explanation(conn, execution, code, outputs, rules, state):
         for o in outputs.values()
     ):
         return "本次查询未找到对应发票，未执行修改，请核对企业和编号。"
-    if code == "history_not_found" and any(
-        o.get("ok") and (o.get("data") or {}).get("not_found") for o in outputs.values()
-    ):
+    if code == "history_not_found" and any(d["status"] == "not_found" for d in history):
         return "本轮历史查找没有找到匹配原文，不能编造过去说过的内容。"
     if code == "no_tasks" and not state["task"] and not state["task_candidates"]:
         return "当前授权范围内没有可继续的未完成任务。"

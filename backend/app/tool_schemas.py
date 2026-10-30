@@ -116,11 +116,22 @@ class ManagePreference(StrictModel):
 
 class SearchHistory(StrictModel):
     company_id: str | None = None
-    query: str = Field(max_length=300)
+    company_ids: list[str] = Field(
+        default_factory=list,
+        max_length=4,
+        description="仅用于用户明确指定多个企业的联合历史查找，与company_id互斥；不提供企业范围则只查个人私有。",
+    )
+    query: str = Field(default="", max_length=2000)
     entity: str | None = None
     date_from: str | None = None
     date_to: str | None = None
     cursor: str | None = None
+    mode: Literal["hybrid", "lexical", "date"] = "hybrid"
+
+
+class ReadHistory(StrictModel):
+    citation_id: UUID
+    char_start: int | None = Field(default=None, ge=0)
 
 
 class Clarification(StrictModel):
@@ -141,6 +152,7 @@ class ResultBlock(StrictModel):
     type: Literal["result"]
     result_ref: UUID
     view: Literal[
+        "history_page",
         "monthly_summary",
         "purpose_check",
         "invoices",
@@ -175,6 +187,9 @@ class ExplanationBlock(StrictModel):
         "unsupported_period",
         "target_not_found",
         "history_not_found",
+        "history_partial",
+        "history_insufficient",
+        "history_unavailable",
         "no_tasks",
         "write_not_authorized",
         "purpose_all",
@@ -194,6 +209,7 @@ class HistoryBlock(StrictModel):
     type: Literal["history_quote"]
     source_id: UUID
     quote: str = Field(min_length=1, max_length=1200)
+    citation_id: UUID | None = None
 
 
 class ConfirmationBlock(StrictModel):
@@ -300,7 +316,11 @@ TOOLS = {
     ),
     "search_history": (
         SearchHistory,
-        "在授权范围查找历史原文，不以历史助手的声明代替当前数据。无证据时说明未找到。",
+        "查本人历史原文；query支持同义表达。纯日期浏览省略query，提供至多31天的date_from/date_to（结束不含）；无企业仅查个人私有。历史助手声明不是当前数据，partial不代表从未说过。",
+    ),
+    "read_history": (
+        ReadHistory,
+        "按citation_id核验历史原文与角色；更正、删除或撤权后失效。长消息按next_char_start继续传char_start读取，每次最多1200字符，不能把摘录当全消息。",
     ),
 }
 

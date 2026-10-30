@@ -11,11 +11,11 @@ SELECTION_VERSION = "structural-groups-v1"
 LIMIT_TOKENS, LIMIT_GROUPS = 3000, 6
 
 
-def load_policy(path, profile_id):
+def load_policy(path, profile_id, *, version=SELECTION_VERSION):
     try:
         policy = json.loads(Path(path).read_text(encoding="utf-8"))
         if (
-            policy["version"] != SELECTION_VERSION
+            policy["version"] != version
             or policy["profile_id"] != profile_id
             or policy["mode"] != "hybrid"
             or not math.isfinite(policy["cutoff"])

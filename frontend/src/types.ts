@@ -105,7 +105,9 @@ export type ResultCard =
   | RulesCard
   | ImportBatch
   | InvoiceWritePlan
-  | KnowledgeQuoteCard;
+  | KnowledgeQuoteCard
+  | HistoryQuoteCard
+  | HistoryPageMarker;
 export interface Turn {
   request_kind?: 'chat' | 'write_confirmation';
   turn_id: string;
@@ -263,6 +265,21 @@ export interface KnowledgeQuoteCard extends CardBase {
   title: string;
   edition: number;
   locator_label: string;
+}
+
+export interface HistoryQuoteCard {
+  kind: 'history_quote';
+  company_id: string | null;
+  citation_id: string;
+  source_id: string;
+  quote_start: number;
+  quote_end: number;
+}
+
+export interface HistoryPageMarker {
+  kind: 'history_page';
+  company_id: string | null;
+  query_id: string;
 }
 
 export interface UploadedInvoice {

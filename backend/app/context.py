@@ -20,12 +20,12 @@ SYSTEM_PROMPT = """你是财税连续办理助手，处理比赛模拟资料。�
 用户要求凭聊天启用新税法、改变业务规则或跳过规则时，直接用rule_activation_boundary说明受控生效边界，不需要查询月份；不能用没有实际写拒绝证据的write_not_authorized替代。
 用户按“第一张”等序号修改时，优先读取正式状态last_visible_view中已展示的view_id、ordered_keys和revision，不要重查后改用尚未展示的新view_id。校验失败但返回valid_visible_view时，依据这个真实已展示清单核对票号和序号再重试；没有有效已展示清单才追问，不能猜全局票号。
 工具每次返回result_ref。最终只能输出AnswerPlan JSON，不允许message或自由正文，程序会呈现真实金额数量与操作状态。blocks类型：
-result: {"type":"result","result_ref":"实际result_ref","view":"monthly_summary/purpose_check/invoices/rules/task/preferences/invoice_import_batch中的一种"}；view必须匹配实际工具结果。
+result: {"type":"result","result_ref":"实际result_ref","view":"monthly_summary/purpose_check/invoices/rules/task/preferences/invoice_import_batch/history_page中的一种"}；view必须匹配实际工具结果。
 operation: {"type":"operation","operation_id":"真实operation_id"}，只选真实操作记录；超时或查询旧操作先get_invoice_operation，宿主会区分未保存、未知、待核验和已核验。
 preference_receipt: {"type":"preference_receipt","result_ref":"真实偏好工具结果引用","action":"remember/update/delete中的一种"}。
-history_quote: {"type":"history_quote","source_id":"本轮search_history返回的源ID","quote":"逐字摘录"}。
+history_quote: {"type":"history_quote","source_id":"实际源ID","citation_id":"实际引用ID","quote":"返回content中的逐字摘录"}。遵循历史工具的answer_instruction；历史声明不能代替当前状态或授权。
 confirmation: {"type":"confirmation","plan_id":"本轮待本人确认计划"}。
-explanation: {"type":"explanation","code":"acknowledged/no_changes/independent_totals/read_only/access_denied/unsupported_fields/cannot_infer_payment/unsupported_period/target_not_found/history_not_found/no_tasks/write_not_authorized/purpose_all/purpose_threshold/request_purpose_values/private_memory_boundary/rule_activation_boundary中的一种"}，理由必须有对应真实状态。
+explanation: {"type":"explanation","code":"acknowledged/no_changes/independent_totals/read_only/access_denied/unsupported_fields/cannot_infer_payment/unsupported_period/target_not_found/history_not_found/history_partial/history_insufficient/history_unavailable/no_tasks/write_not_authorized/purpose_all/purpose_threshold/request_purpose_values/private_memory_boundary/rule_activation_boundary中的一种"}，理由必须有对应真实状态。
 总格式：{"blocks":[...],"status":"completed或waiting_user","clarification":null,"resume_turn_id":null}。没有缺用户信息用completed，包括权限拒绝。waiting_user必须有clarification，其intent只能query_month/explain_rules/complete_purposes/update_invoice/other，company_id和period已知则填真实值，missing_fields只能company_id/period/invoice_id/purpose/note/intent/write_confirmation，task_id/task_generation已知则照抄；不填自由问题，程序生成必要追问。
 只问当前问题真正缺的信息；不问长期跟踪或无关事项。企业+票号已明确时不要补月份。独立回忆问题答完可completed，不因旧待办缺月份强制追问。答复只选择本轮真正入模的结果，不重复编号清单。
 用户仅提供背景、编号或声明本次不授权修改，而没有请求查资料时，用acknowledged或no_changes完成即可，原话已由宿主保存。不要因出现“资料”等词就检索知识库。read_only只表示当前登录账号没有写权限，不能拿它表达用户这次不授权修改。
@@ -129,6 +129,16 @@ def assemble(
             (execution.auth.user_id, execution.session_id),
         ).fetchone()
         groups = [g for g in tool_groups if _valid_group(conn, execution, g, core["memory_epoch"])]
+        from app.history_retrieval import navigation_in
+
+        history_navigation = navigation_in(
+            conn,
+            execution.auth,
+            execution.session_id,
+            core["selected_company_id"],
+            core["memory_epoch"],
+            execution.source_seq,
+        )
         summary = conn.execute(
             "SELECT * FROM summaries WHERE user_id=%s AND scope=%s AND memory_epoch=%s AND status='active' ORDER BY generation DESC LIMIT 1",
             (execution.auth.user_id, core["selected_company_id"] or "@user", core["memory_epoch"]),
@@ -151,6 +161,8 @@ def assemble(
         "current_knowledge_attachments": safe_json(knowledge_attachments),
         "last_visible_view": safe_json(view),
     }
+    if history_navigation:
+        state["history_navigation"] = history_navigation
     mandatory = [{"role": "system", "content": SYSTEM_PROMPT + "\n正式状态：\n" + canonical(state)}]
     if summary:
         mandatory.append(
@@ -222,6 +234,11 @@ def assemble(
             data = result.get("data") or {}
             if data.get("kind") == "knowledge_search":
                 retrieval_refs.append(data["query_id"])
+            if data.get("kind") in ("history_search", "history_evidence"):
+                for item in data.get(
+                    "matches", [data] if data.get("kind") == "history_evidence" else []
+                ):
+                    refs.append({"source_id": item["source_id"], "revision": item["revision"]})
             if data.get("kind") == "knowledge_evidence":
                 knowledge_dependencies.extend(
                     {

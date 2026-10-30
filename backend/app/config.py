@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     knowledge_max_file_bytes: int = Field(default=20 * 1024 * 1024, ge=1024, le=20 * 1024 * 1024)
     knowledge_parser_timeout: int = Field(default=60, ge=1, le=120)
     knowledge_lease_seconds: int = Field(default=90, ge=30)
+    history_enabled: bool = True
+    history_selection_policy: Path = ROOT / "evals/history-v1/selection-policy.json"
 
     @property
     def model_configured(self) -> bool:

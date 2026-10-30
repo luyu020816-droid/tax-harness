@@ -1,11 +1,10 @@
-import base64
 import json
 
 from app.errors import AppError
 from app.identity import Identity, assert_access, owned
 from app.sources import read_source
 from app.tasks import current_in
-from app.values import digest, safe_json
+from app.values import safe_json
 
 
 def load_core(db, auth: Identity, session_id: str) -> dict:
@@ -168,110 +167,14 @@ def load_core(db, auth: Identity, session_id: str) -> dict:
         )
 
 
-def search_history(
-    db,
-    auth: Identity,
-    *,
-    company_id: str | None = None,
-    query: str,
-    cursor=None,
-    entity: str | None = None,
-    date_from=None,
-    date_to=None,
-    before_source_seq: int | None = None,
-) -> dict:
-    if not query.strip() and not entity:
-        raise AppError("INVALID_ARGUMENT", "请提供要查找的文字或明确编号。")
-    if len(query) > 300:
-        raise AppError("INVALID_ARGUMENT", "历史查找条件过长，请缩小范围。")
-    query_hash = digest(
-        [auth.user_id, company_id, query, entity, date_from, date_to, before_source_seq]
-    )
-    offset = 0
-    if cursor:
-        try:
-            decoded = json.loads(base64.urlsafe_b64decode(cursor.encode()))
-            offset = int(decoded["offset"])
-            if offset < 0 or decoded["query"] != query_hash:
-                raise ValueError
-        except (ValueError, KeyError, TypeError) as exc:
-            raise AppError("INVALID_ARGUMENT", "历史分页条件无效。") from exc
-    with db.transaction(readonly=True) as conn:
-        if company_id:
-            assert_access(conn, auth, company_id)
-        clauses = [
-            "s.user_id=%s",
-            "s.recall_state='active'",
-            "s.revision=h.source_revision",
-            "NOT EXISTS(SELECT 1 FROM source_scopes ss LEFT JOIN user_company_grants g "
-            "ON g.company_id=ss.company_id AND g.user_id=s.user_id WHERE ss.source_id=s.source_id AND g.can_read IS DISTINCT FROM true)",
-        ]
-        params = [auth.user_id]
-        if before_source_seq is not None:
-            clauses.append("s.source_seq<%s")
-            params.append(before_source_seq)
-        if company_id:
-            clauses.append(
-                "(s.scope_kind='user_private' OR EXISTS(SELECT 1 FROM source_scopes z WHERE z.source_id=s.source_id AND z.company_id=%s))"
-            )
-            params.append(company_id)
-        else:
-            clauses.append("s.scope_kind='user_private'")
-        if entity:
-            clauses.append("position(lower(%s) in lower(s.content))>0")
-            params.append(entity)
-        if query.strip():
-            clauses.append("position(lower(%s) in lower(h.searchable_text))>0")
-            params.append(query.strip())
-        if date_from:
-            clauses.append("s.created_at>=%s::timestamptz")
-            params.append(date_from)
-        if date_to:
-            clauses.append("s.created_at<%s::timestamptz")
-            params.append(date_to)
-        rows = conn.execute(
-            "SELECT s.* FROM sources s JOIN history_index h USING(source_id) WHERE "
-            + " AND ".join(clauses)
-            + " ORDER BY s.source_seq DESC,s.created_at DESC LIMIT 6 OFFSET %s",
-            [*params, offset],
-        ).fetchall()
-        matches = []
-        for row in rows[:5]:
-            try:
-                source = read_source(conn, auth, str(row["source_id"]), company_id=company_id)
-            except AppError as error:
-                if error.code in ("SOURCE_INVALIDATED", "STALE_CONTEXT", "ACCESS_DENIED"):
-                    continue
-                raise
-            matches.append(
-                {
-                    k: source[k]
-                    for k in (
-                        "source_id",
-                        "role",
-                        "kind",
-                        "content",
-                        "revision",
-                        "source_seq",
-                        "created_at",
-                    )
-                }
-            )
-        next_cursor = (
-            base64.urlsafe_b64encode(
-                json.dumps({"query": query_hash, "offset": offset + 5}).encode()
-            ).decode()
-            if len(rows) > 5
-            else None
-        )
-        return safe_json(
-            {
-                "matches": matches,
-                "has_more": len(rows) > 5,
-                "next_cursor": next_cursor,
-                "not_found": not matches,
-            }
-        )
+def search_history(db, auth: Identity, **kwargs) -> dict:
+    from app.config import Settings
+    from app.history_retrieval import HistoryRetrieval, local_engine
+
+    settings = Settings()
+    return HistoryRetrieval(
+        db, settings, local_engine(str(settings.knowledge_model_directory))
+    ).search(auth, **kwargs)
 
 
 def recent_groups(db, auth: Identity, session_id: str, current_turn_id: str) -> list[dict]:

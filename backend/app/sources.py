@@ -57,6 +57,20 @@ def add_source(
         "INSERT INTO history_index(source_id,source_revision,scope,searchable_text) VALUES(%s,1,%s,%s)",
         (row["source_id"], ",".join(companies) or "@user", text),
     )
+    conn.execute(
+        "INSERT INTO history_jobs(source_id,source_revision,state) VALUES(%s,%s,%s)",
+        (
+            row["source_id"],
+            row["revision"],
+            "skipped"
+            if role == "tool"
+            and isinstance(content, dict)
+            and isinstance(content.get("data"), dict)
+            and content["data"].get("kind")
+            in ("knowledge_search", "knowledge_evidence", "history_search", "history_evidence")
+            else "queued",
+        ),
+    )
     return row
 
 
@@ -95,6 +109,15 @@ def read_source(
             from app.knowledge_retrieval import read_evidence_group_in
 
             read_evidence_group_in(conn, auth, data["citation_id"])
+        elif data.get("kind") == "history_search":
+            from app.history_retrieval import validate_query_in
+
+            for query_id in [data["query_id"], *data.get("alternate_query_ids", [])]:
+                validate_query_in(conn, auth, query_id)
+        elif data.get("kind") == "history_evidence":
+            from app.history_retrieval import read_evidence_in
+
+            read_evidence_in(conn, auth, data["citation_id"])
     return row
 
 

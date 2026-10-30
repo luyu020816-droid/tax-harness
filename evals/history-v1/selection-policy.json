@@ -1,0 +1,15 @@
+{
+  "version": "history-passages-v1",
+  "profile_id": "0892c00a8c75451a31c3f1be37bb51ce1c10814c1074188d2d789283b5824446",
+  "mode": "hybrid",
+  "development_sha256": "6d22b2b019be752f507b8b7c7103352206e61b0a04c1ba2cc1fca6e7013c1b75",
+  "cutoff": -5.015931129455566,
+  "calibration": {
+    "objective": "min_false_accepts_then_max_gold_seed_retention",
+    "positive_questions": 16,
+    "negative_questions": 8,
+    "development_false_accepts": 0,
+    "development_gold_seed_retained": 16,
+    "raw_logits_are_probabilities": false
+  }
+}

@@ -4,7 +4,7 @@ from datetime import date, timedelta, timezone
 
 from pydantic import ValidationError
 
-from app import business, invoice_write, memory, preferences, rules, tasks
+from app import business, invoice_write, preferences, rules, tasks
 from app.errors import AppError
 from app.events import emit
 from app.execution import Execution, guard
@@ -29,6 +29,9 @@ class ToolExecutor:
                 db, settings, LocalRetrieval(settings.knowledge_model_directory)
             )
         self.retrieval = retrieval
+        from app.history_retrieval import HistoryRetrieval
+
+        self.history = HistoryRetrieval(db, retrieval.settings, retrieval.engine)
 
     def execute(self, execution: Execution, call: dict) -> tuple[dict, dict]:
         name = call.get("function", {}).get("name", "")
@@ -218,8 +221,11 @@ class ToolExecutor:
                     "资料或附件问答轮次只读。请在单独消息中明确修改任务、偏好或既有发票。",
                     409,
                 )
-        if name in ("search_knowledge", "read_evidence"):
+        if name in ("search_knowledge", "read_evidence", "search_history", "read_history"):
             execution.reference_context = True
+        if name == "read_history":
+            result = self.history.read(auth, args["citation_id"], char_start=args.get("char_start"))
+            return {k: v for k, v in result.items() if k != "excerpt"}
         if name == "read_evidence":
             return self.retrieval.read(auth, args["citation_id"])
         if name == "search_knowledge":
@@ -314,7 +320,91 @@ class ToolExecutor:
             from app.invoice_imports import InvoiceImports
 
             return InvoiceImports(db).get(auth, args["batch_id"], args.get("cursor", 0))
-        return memory.search_history(db, auth, **args, before_source_seq=execution.source_seq)
+        with db.transaction(readonly=True) as conn:
+            original = read_source(conn, auth, execution.source_id)["content"]
+            cursor_scope = None
+            if args.get("cursor"):
+                try:
+                    from uuid import UUID
+
+                    cursor_id = UUID(args["cursor"])
+                    cursor_scope = conn.execute(
+                        "SELECT q.scope_snapshot FROM history_queries q JOIN turns t ON t.turn_id::text=q.scope_snapshot->>'origin_turn_id' WHERE q.query_id=%s AND q.user_id=%s AND t.status='completed'",
+                        (cursor_id, auth.user_id),
+                    ).fetchone()
+                except ValueError:
+                    pass
+            continued = bool(
+                cursor_scope
+                and cursor_scope["scope_snapshot"].get("session_id") == execution.session_id
+                and set(cursor_scope["scope_snapshot"].get("company_ids", []))
+                == set(args.get("company_ids", []))
+            )
+            if (
+                args.get("company_ids")
+                and not continued
+                and not set(args["company_ids"]).issubset(mentioned_companies(conn, original))
+            ):
+                raise AppError(
+                    "TARGET_SCOPE_MISMATCH",
+                    "联合历史查找须在本轮明确指定这些企业，不能自动混查。",
+                    422,
+                )
+        explicit = set(re.findall(r"(?<![A-Za-z0-9])[FR]\d{3,12}(?![A-Za-z0-9])", original))
+        if args.get("entity") and explicit and args["entity"] not in explicit:
+            raise AppError("TARGET_SCOPE_MISMATCH", "历史实体必须与本轮明确编号一致。", 422)
+        proposed = args.get("query", "")
+        primary_args = (
+            {**args, "query": original} if proposed and args.get("mode") != "date" else args
+        )
+        primary = self.history.search(
+            auth,
+            **primary_args,
+            before_source_seq=execution.source_seq,
+            session_id=execution.session_id,
+            origin_turn_id=execution.turn_id,
+        )
+        result = primary
+        if (
+            not primary["matches"]
+            and proposed
+            and proposed != original
+            and args.get("mode") != "date"
+        ):
+            # Keep the original question channel. A model rewrite may supplement
+            # it, but must never silently replace it or retune its relevance gate.
+            result = self.history.search(
+                auth,
+                **args,
+                before_source_seq=execution.source_seq,
+                session_id=execution.session_id,
+                origin_turn_id=execution.turn_id,
+            )
+            result["alternate_query_ids"] = [primary["query_id"]]
+            if primary["status"] == "partial":
+                result["status"] = "partial"
+                result["degraded_reason"] = result["degraded_reason"] or primary["degraded_reason"]
+        result["raw_user_query"] = original
+        result["rewritten_query"] = proposed if proposed != original else None
+        # The HTTP DTO retains legacy aliases. Send each excerpt only once to the
+        # model; duplicated evidence/matches and content/excerpt waste its budget.
+        return {
+            **{k: v for k, v in result.items() if k not in ("evidence", "matches", "not_found")},
+            **({"not_found": True} if result["status"] == "not_found" else {}),
+            "matches": [
+                {k: v for k, v in item.items() if k != "excerpt"} for item in result["matches"]
+            ],
+            "allowed_answer_codes": {
+                "partial": ["history_partial", "history_insufficient"],
+                "not_found": ["history_not_found", "history_insufficient"],
+                "unavailable": ["history_unavailable"],
+                "ok": ["history_insufficient"],
+            }[result["status"]],
+            "allow_history_quotes": bool(result["matches"]),
+            "answer_instruction": "日期页用result(view=history_page,result_ref=本工具result_ref)展示整页，程序处理末页，不挑漏消息。"
+            if result["retrieval_mode"] == "date"
+            else "matches若能支持问题，先用history_quote引用对应原话；partial只说明索引或范围有缺口，不否定已返回的有效片段。allowed_answer_codes仅限制explanation代码，不限制history_quote；没有支撑才仅说明不足。",
+        }
 
     def _record(self, execution, call_id, name, arguments, output):
         with self.db.transaction() as conn:
@@ -331,6 +421,16 @@ class ToolExecutor:
                     companies = [result_company]
                 except AppError:
                     pass
+            history_data = output.get("data") or {}
+            if output.get("ok") and history_data.get("kind") in (
+                "history_search",
+                "history_evidence",
+            ):
+                companies = history_data.get("scope_snapshot", {}).get(
+                    "company_ids", history_data.get("company_ids", [])
+                )
+                for company_id in companies:
+                    assert_access(conn, execution.auth, company_id)
             source = add_source(
                 conn,
                 execution.auth,

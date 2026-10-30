@@ -35,4 +35,4 @@ class Database:
                 row["version"]
                 for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
             }
-            return {5, 7} <= versions
+            return {5, 7, 8} <= versions

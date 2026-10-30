@@ -76,6 +76,10 @@ def _grant_runtime(conn, settings: Settings) -> None:
         "memory_dependencies",
         "summaries",
         "history_index",
+        "history_jobs",
+        "history_passages",
+        "history_queries",
+        "history_evidence",
         "memory_change_ops",
         "result_views",
         "operations",
@@ -98,10 +102,13 @@ def _grant_runtime(conn, settings: Settings) -> None:
         )
     )
     conn.execute(sql.SQL("GRANT DELETE ON history_index TO {}").format(role))
+    conn.execute(sql.SQL("GRANT DELETE ON history_passages TO {}").format(role))
     conn.execute(sql.SQL("GRANT DELETE ON invoice_import_rows TO {}").format(role))
     conn.execute(sql.SQL("REVOKE INSERT,UPDATE ON rule_knowledge_refs FROM {}").format(role))
     if conn.execute("SELECT to_regclass('public.retrieval_embeddings') AS t").fetchone()["t"]:
         conn.execute(sql.SQL("GRANT INSERT,UPDATE ON retrieval_embeddings TO {}").format(role))
+    if conn.execute("SELECT to_regclass('public.history_embeddings') AS t").fetchone()["t"]:
+        conn.execute(sql.SQL("GRANT INSERT,UPDATE,DELETE ON history_embeddings TO {}").format(role))
     conn.execute(sql.SQL("GRANT UPDATE(next_source_seq,memory_epoch) ON users TO {}").format(role))
     conn.execute(sql.SQL("GRANT UPDATE(data_revision) ON company_heads TO {}").format(role))
     conn.execute(sql.SQL("GRANT UPDATE(purpose,note,revision) ON invoices TO {}").format(role))
@@ -150,7 +157,7 @@ def _grant_ingest(conn, settings):
     )
     conn.execute(
         sql.SQL(
-            "GRANT INSERT ON invoices,sources,source_scopes,source_assessments,source_progress,history_index,memory_change_ops TO {}"
+            "GRANT INSERT ON invoices,sources,source_scopes,source_assessments,source_progress,history_index,history_jobs,memory_change_ops TO {}"
         ).format(role)
     )
     conn.execute(
@@ -192,7 +199,7 @@ def initialize(settings: Settings, *, test=False, extended=False) -> dict:
         )
         for migration in sorted((ROOT / "backend/migrations").glob("[0-9]*.sql")):
             if (
-                migration.name.startswith("006_")
+                migration.name.startswith(("006_", "009_"))
                 and not conn.execute(
                     "SELECT 1 FROM pg_available_extensions WHERE name='vector'"
                 ).fetchone()
