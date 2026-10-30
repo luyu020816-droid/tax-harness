@@ -1,3 +1,5 @@
+import json
+
 from app.errors import AppError
 from app.identity import Identity, assert_access
 from app.values import canonical, digest, jsonb, uid
@@ -78,6 +80,21 @@ def read_source(
         assert_access(conn, auth, scope["company_id"])
     if company_id and scopes and {company_id} != {x["company_id"] for x in scopes}:
         raise AppError("SOURCE_INVALIDATED", "来源不属于当前企业。", 409)
+    if row["role"] == "tool":
+        try:
+            data = json.loads(row["content"]).get("data") or {}
+        except (ValueError, AttributeError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        if data.get("kind") == "knowledge_search":
+            from app.knowledge_retrieval import validate_retrievals
+
+            validate_retrievals(conn, auth, [data["query_id"]])
+        elif data.get("kind") == "knowledge_evidence":
+            from app.knowledge_retrieval import read_evidence_in
+
+            read_evidence_in(conn, auth, data["citation_id"])
     return row
 
 

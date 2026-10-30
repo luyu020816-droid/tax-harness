@@ -23,9 +23,16 @@ from app.values import canonical, digest, jsonb, uid
 
 
 class Runtime:
-    def __init__(self, db, settings: Settings, model: ModelAdapter):
+    def __init__(self, db, settings: Settings, model: ModelAdapter, *, retrieval=None):
         self.db, self.settings, self.model = db, settings, model
-        self.tools = ToolExecutor(db)
+        if retrieval is None:
+            from app.knowledge_retrieval import KnowledgeRetrieval
+            from app.retrieval_engine import LocalRetrieval
+
+            retrieval = KnowledgeRetrieval(
+                db, settings, LocalRetrieval(settings.knowledge_model_directory)
+            )
+        self.tools = ToolExecutor(db, retrieval)
         self.stopping = asyncio.Event()
         self.workers: list[asyncio.Task] = []
 

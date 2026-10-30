@@ -221,6 +221,51 @@ def render(conn, execution, plan, payload, manifest):
                     text, card = _result_text(child["data"], "purpose_check")
                     texts.append(text)
                     reply.cards.append(safe_json(card))
+        elif block.type == "knowledge_quote":
+            citation_id = str(block.citation_id)
+            served = []
+            for output in outputs.values():
+                data = output.get("data") or {}
+                if output.get("ok") and data.get("kind") == "knowledge_search":
+                    served.extend(data.get("evidence", []))
+                if output.get("ok") and data.get("kind") == "knowledge_evidence":
+                    served.append(data)
+            original = next((e for e in served if str(e["citation_id"]) == citation_id), None)
+            if not original:
+                missing("只能引用本轮真正入模的知识证据。")
+            from app.knowledge_retrieval import read_evidence_in
+
+            evidence = read_evidence_in(conn, execution.auth, citation_id, lock=True)
+            if (
+                original["excerpt_hash"] != evidence["excerpt_hash"]
+                or original["excerpt"] != evidence["excerpt"]
+            ):
+                missing("实际入模知识与当前引用不一致。")
+            locators = []
+            for locator in evidence["locator"]:
+                kind = locator["type"]
+                locators.append(
+                    f"第{locator['page']}页"
+                    if kind == "pdf"
+                    else f"第{locator['from']}—{locator['to']}行"
+                    if kind == "lines"
+                    else f"第{locator['paragraph']}段"
+                    if kind == "docx_paragraph"
+                    else f"表{locator['table']}第{locator['row']}行（含表头）"
+                )
+            texts.append(
+                f"本轮资料依据：《{evidence['title']}》第{evidence['edition']}版，{'、'.join(dict.fromkeys(locators))}。原文见下方来源卡片；显示时会重新核对引用有效性。"
+            )
+            reply.cards.append(
+                {
+                    "kind": "knowledge_quote",
+                    "company_id": evidence["company_id"],
+                    "citation_id": citation_id,
+                    "title": evidence["title"],
+                    "edition": evidence["edition"],
+                    "locator_label": "、".join(dict.fromkeys(locators)),
+                }
+            )
         elif block.type == "preference_receipt":
             output = outputs.get(str(block.result_ref)) or {}
             pref = output.get("data") or {}
@@ -289,6 +334,7 @@ def render(conn, execution, plan, payload, manifest):
                 c.get("period"),
                 c.get("operation_id"),
                 c.get("plan_id"),
+                c.get("citation_id"),
             ): c
             for c in reply.cards
         }.values()
@@ -299,6 +345,24 @@ def render(conn, execution, plan, payload, manifest):
 
 def _explanation(conn, execution, code, outputs, rules, state):
     errors = {o.get("error", {}).get("code") for o in outputs.values() if not o.get("ok")}
+    knowledge = [
+        o.get("data") or {}
+        for o in outputs.values()
+        if o.get("ok") and (o.get("data") or {}).get("kind") == "knowledge_search"
+    ]
+    if code == "knowledge_not_found" and any(d["status"] == "not_found" for d in knowledge):
+        return "在本轮授权范围、有效版本和检索模式内未找到可引用的资料，不能据此编造依据。"
+    if code == "knowledge_unavailable" and any(d["status"] == "unavailable" for d in knowledge):
+        return "知识索引或检索依赖暂未就绪；这不代表没有资料，原文件和当前业务数据仍保留。"
+    if code == "knowledge_partial" and any(d["status"] == "partial" for d in knowledge):
+        return "本轮检索范围或证据覆盖不完整，请结合引用原文核对；需要时补充资料或缩小问题。"
+    if code == "knowledge_insufficient" and knowledge:
+        return "本次检索结果不足以支持回答这个问题，请补充对应条款或缩小问题范围。候选命中不代表问题已有依据。"
+    if (
+        code == "knowledge_compare"
+        and len({e["document_id"] for d in knowledge for e in d["evidence"]}) > 1
+    ):
+        return "以下并列展示不同资料的原文，请核对适用范围和生效时间；资料内容不会自动改变当前业务规则。"
     if code in ("acknowledged", "no_changes"):
         if state["known_operations"]:
             missing("已有操作，请使用实际操作回执。")

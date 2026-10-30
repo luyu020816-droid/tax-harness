@@ -31,7 +31,8 @@ class Database:
 
     def ready(self) -> bool:
         with self.transaction(readonly=True) as conn:
-            row = conn.execute(
-                "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
-            ).fetchone()
-            return bool(row and row["version"] == 4)
+            versions = {
+                row["version"]
+                for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
+            }
+            return {5, 7} <= versions

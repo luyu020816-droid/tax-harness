@@ -237,7 +237,12 @@ def search_history(
         ).fetchall()
         matches = []
         for row in rows[:5]:
-            source = read_source(conn, auth, str(row["source_id"]), company_id=company_id)
+            try:
+                source = read_source(conn, auth, str(row["source_id"]), company_id=company_id)
+            except AppError as error:
+                if error.code in ("SOURCE_INVALIDATED", "STALE_CONTEXT", "ACCESS_DENIED"):
+                    continue
+                raise
             matches.append(
                 {
                     k: source[k]

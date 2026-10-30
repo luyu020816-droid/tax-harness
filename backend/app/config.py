@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     worker_count: int = Field(default=2, ge=1, le=8)
     lease_seconds: int = Field(default=90, ge=30)
     cookie_secure: bool = False
+    knowledge_enabled: bool = True
+    knowledge_model_directory: Path = ROOT / ".local/retrieval-models"
+    knowledge_max_file_bytes: int = Field(default=20 * 1024 * 1024, ge=1024, le=20 * 1024 * 1024)
+    knowledge_parser_timeout: int = Field(default=60, ge=1, le=120)
+    knowledge_lease_seconds: int = Field(default=90, ge=30)
 
     @property
     def model_configured(self) -> bool:

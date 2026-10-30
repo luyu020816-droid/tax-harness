@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Download, FileText, ShieldCheck } from 'lucide-react';
 import { companyName, dateTime, statusName, taskName } from './api';
 import { InvoiceImportDialog } from './InvoiceImportDialog';
+import { EvidenceDetails, KnowledgeDocumentDetails } from './KnowledgeDetails';
 import { Modal } from './Modal';
 import { useResource } from './useResource';
 import type { Detail, RunDetail, Source, UploadedInvoice, ImportBatch } from './types';
@@ -133,6 +134,18 @@ export function Details({
         onUploaded={onUploaded}
         onChanged={onImportChanged}
       />
+    );
+  if (detail.kind === 'knowledge')
+    return (
+      <Modal title="资料版本与原文件" onClose={onClose} drawer>
+        <KnowledgeDocumentDetails id={detail.id} />
+      </Modal>
+    );
+  if (detail.kind === 'evidence')
+    return (
+      <Modal title="引用原文" onClose={onClose} drawer>
+        <EvidenceDetails id={detail.id} />
+      </Modal>
     );
   const title = { rule: '规则依据', run: '办理记录', task: '任务详情', source: '历史来源原文' }[
     detail.kind

@@ -88,7 +88,7 @@ def me(db, auth: Identity) -> dict:
             "SELECT user_id,display_name FROM users WHERE user_id=%s", (auth.user_id,)
         ).fetchone()
         grants = conn.execute(
-            "SELECT c.*,g.can_update,g.can_import_invoices FROM companies c JOIN user_company_grants g USING(company_id) "
+            "SELECT c.*,g.can_update,g.can_import_invoices,g.can_upload_knowledge FROM companies c JOIN user_company_grants g USING(company_id) "
             "WHERE g.user_id=%s AND g.can_read ORDER BY c.company_id",
             (auth.user_id,),
         ).fetchall()

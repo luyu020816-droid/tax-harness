@@ -37,7 +37,17 @@ def resolve_in(conn, auth: Identity, company_id: str, period: str, topics: list[
             )
         if len(rows) != 1:
             raise AppError("RULE_CONFLICT", "存在冲突的有效规则，需要维护人员处理。", 409)
-        result.extend(rows)
+        from app.knowledge_admin import validate_rule_refs
+
+        result.extend(
+            {
+                **row,
+                "knowledge_refs": validate_rule_refs(
+                    conn, str(row["rule_version_id"]), [company_id]
+                ),
+            }
+            for row in rows
+        )
     return result
 
 
@@ -51,7 +61,7 @@ def get_rules(db, auth: Identity, company_id: str, period: str, topics: list[str
 
 
 def rule_ref(rule: dict) -> dict:
-    return {
+    result = {
         key: rule[key]
         for key in (
             "rule_version_id",
@@ -65,6 +75,9 @@ def rule_ref(rule: dict) -> dict:
             "status",
         )
     }
+    if rule.get("knowledge_refs"):
+        result["knowledge_refs"] = rule["knowledge_refs"]
+    return result
 
 
 def template(condition: dict) -> str:
@@ -179,6 +192,9 @@ def activate(conn, version_id: str, replaces: str | None = None) -> dict:
         raise AppError("RULE_CONFLICT", "规则版本已被其他维护操作更改。", 409)
     if CONDITION_TOPICS.get(row["condition_json"].get("kind")) != row["topic"]:
         raise AppError("RULE_UNSUPPORTED", "规则主题与执行条件不一致。", 422)
+    from app.knowledge_admin import validate_rule_refs
+
+    validate_rule_refs(conn, version_id)
     if replaces:
         old = conn.execute(
             "SELECT * FROM rule_versions WHERE rule_version_id=%s", (replaces,)

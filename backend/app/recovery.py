@@ -6,8 +6,10 @@ zero data loss. Restoring an older image cannot silently enable old memories.
 
 import hashlib
 import json
+import math
 import os
 import shutil
+import struct
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,15 +41,20 @@ def _write(path: Path, data: dict):
 
 
 def _snapshot(conn) -> dict:
+    vector_type = conn.execute(
+        "SELECT oid FROM pg_type WHERE typname='vector' AND typnamespace='public'::regnamespace"
+    ).fetchone()
     tables = conn.execute(
         "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename"
     ).fetchall()
     result = {}
     for table in tables:
         name = table["tablename"]
-        rows = conn.execute(
-            sql.SQL("SELECT * FROM public.{}").format(sql.Identifier(name))
-        ).fetchall()
+        cursor = conn.execute(sql.SQL("SELECT * FROM public.{}").format(sql.Identifier(name)))
+        vector_columns = {
+            c.name for c in cursor.description if vector_type and c.type_code == vector_type["oid"]
+        }
+        rows = cursor.fetchall()
         hashes = sorted(
             digest(
                 safe_json(
@@ -57,6 +64,8 @@ def _snapshot(conn) -> dict:
                             "bytes": len(value),
                         }
                         if isinstance(value, (bytes, memoryview))
+                        else _vector_fingerprint(value)
+                        if key in vector_columns and value is not None
                         else value
                         for key, value in row.items()
                     }
@@ -66,6 +75,15 @@ def _snapshot(conn) -> dict:
         )
         result[name] = {"rows": len(rows), "hash": digest(hashes)}
     return {"tables": result, "fingerprint": digest(result)}
+
+
+def _vector_fingerprint(value):
+    values = json.loads(value) if isinstance(value, str) else list(value)
+    if not all(math.isfinite(v) for v in values):
+        raise AppError("RECOVERY_VECTOR_INVALID", "向量包含非有限数，不能生成完整恢复回执。", 503)
+    normalized = [0.0 if v == 0 else float(v) for v in values]
+    packed = struct.pack("!" + str(len(normalized)) + "f", *normalized)
+    return {"dimension": len(values), "float32_sha256": hashlib.sha256(packed).hexdigest()}
 
 
 def checkpoint(dsn: str, path: Path) -> dict:
@@ -85,7 +103,11 @@ def checkpoint(dsn: str, path: Path) -> dict:
 
 
 def _pg_command(name, dsn, *args):
-    binary = ROOT / ".tools/pgsql/bin" / f"{name}.exe"
+    prepared = ROOT / ".tools/pgsql-knowledge"
+    binaries = (
+        prepared if (prepared / "pgvector-installation.json").is_file() else ROOT / ".tools/pgsql"
+    )
+    binary = binaries / "bin" / f"{name}.exe"
     command = str(binary) if binary.exists() else shutil.which(name)
     if not command:
         raise AppError("RUNTIME_REQUIRED", f"未找到 {name}，请安装 PostgreSQL 16 客户端。", 503)

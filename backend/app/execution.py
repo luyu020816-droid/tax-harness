@@ -19,6 +19,7 @@ class Execution:
     expected_epoch: int
     observed_heads: dict = field(default_factory=dict)
     import_context: bool = False
+    reference_context: bool = False
 
 
 def guard(conn, execution: Execution, *, shared=False) -> dict:

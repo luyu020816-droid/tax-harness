@@ -16,19 +16,38 @@ def mentioned_companies(conn, text: str) -> list[str]:
 
 
 def accept_turn(
-    db, auth: Identity, session_id: str, client_request_id: str, text: str, *, upload_ids=None
+    db,
+    auth: Identity,
+    session_id: str,
+    client_request_id: str,
+    text: str,
+    *,
+    upload_ids=None,
+    knowledge_upload_ids=None,
 ) -> dict:
     if not text.strip() or len(text) > 16000 or len(client_request_id) > 200:
         raise AppError("INVALID_ARGUMENT", "消息不能为空且最多 16000 字符，请求编号最多 200 字符。")
     upload_ids = list(upload_ids or [])
+    knowledge_upload_ids = list(knowledge_upload_ids or [])
+    if len(knowledge_upload_ids) > 1 or (upload_ids and knowledge_upload_ids):
+        raise AppError("INVALID_ARGUMENT", "每轮只附一份知识资料或一份发票文件，请分开办理。", 422)
     if len(upload_ids) > 1:
         raise AppError("INVALID_ARGUMENT", "每轮最多附一个发票文件。")
     fingerprint = (
         digest([session_id, text, upload_ids]) if upload_ids else digest([session_id, text])
     )
+    if knowledge_upload_ids:
+        fingerprint = digest([session_id, text, upload_ids, knowledge_upload_ids])
     with db.transaction() as conn:
         conn.execute("SELECT * FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,))
         session = owned(conn, "sessions", "session_id", session_id, auth)
+        if knowledge_upload_ids:
+            from app.knowledge import upload_metadata as knowledge_metadata
+
+            if not session["selected_company_id"]:
+                raise AppError("NEEDS_SCOPE_CLARIFICATION", "请先选择知识资料所属企业。", 422)
+            for file_id in knowledge_upload_ids:
+                knowledge_metadata(conn, auth, file_id, session["selected_company_id"])
         if upload_ids:
             from app.invoice_imports import upload_metadata
 
@@ -62,6 +81,12 @@ def accept_turn(
             (turn_id, session_id, auth.user_id, client_request_id, fingerprint, sequence, text),
         )
         conn.execute("UPDATE turns SET upload_ids=%s WHERE turn_id=%s", (upload_ids, turn_id))
+        conn.execute(
+            "UPDATE turns SET knowledge_upload_ids=%s WHERE turn_id=%s",
+            (knowledge_upload_ids, turn_id),
+        )
+        if knowledge_upload_ids and session["selected_company_id"] not in accessible:
+            accessible.append(session["selected_company_id"])
         source = add_source(
             conn, auth, text, turn_id=turn_id, source_seq=sequence, companies=accessible
         )

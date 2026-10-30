@@ -4,6 +4,7 @@ import {
   ArrowRight,
   ArrowUp,
   BrainCircuit,
+  BookOpen,
   CheckCheck,
   ChevronDown,
   ChevronRight,
@@ -23,11 +24,21 @@ import { api, ApiError, body, companyName, requestId, statusName, taskName } fro
 import { BrandMark } from './BrandMark';
 import { Details } from './Details';
 import { MemoryView } from './MemoryView';
+import { KnowledgeView } from './KnowledgeView';
 import { Results } from './Results';
 import { RunsView } from './RunsView';
-import type { Detail, InvoiceWritePlan, Session, Task, Turn, User, UploadedInvoice } from './types';
+import type {
+  Detail,
+  InvoiceWritePlan,
+  KnowledgeAttachment,
+  Session,
+  Task,
+  Turn,
+  User,
+  UploadedInvoice,
+} from './types';
 
-type Page = 'chat' | 'memory' | 'runs';
+type Page = 'chat' | 'memory' | 'runs' | 'knowledge';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -40,6 +51,7 @@ export default function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [attachment, setAttachment] = useState<UploadedInvoice | null>(null);
+  const [knowledgeAttachment, setKnowledgeAttachment] = useState<KnowledgeAttachment | null>(null);
   const [error, setError] = useState('');
   const [detail, setDetail] = useState<Detail | null>(null);
   const [navigationOpen, setNavigationOpen] = useState(false);
@@ -59,6 +71,7 @@ export default function App() {
     text: string;
     session: string;
     upload: string | null;
+    knowledge: string | null;
   } | null>(null);
   const acknowledged = useRef(new Set<string>());
 
@@ -83,6 +96,7 @@ export default function App() {
     setCurrentTask(null);
     setDetail(null);
     setAttachment(null);
+    setKnowledgeAttachment(null);
     setDraft('');
     setError('');
     setSending(false);
@@ -99,6 +113,7 @@ export default function App() {
     if (stamp !== generation.current) return;
     setAttachment(null);
     setSession(item);
+    setKnowledgeAttachment(null);
     setCompany(item.selected_company_id);
     setTurns(messages.turns);
     setActiveId(
@@ -169,6 +184,7 @@ export default function App() {
     const stamp = generation.current;
     setSession(null);
     setCompany(nextCompany);
+    setKnowledgeAttachment(null);
     setTurns([]);
     setActiveId(null);
     setCurrentTask(null);
@@ -355,13 +371,15 @@ export default function App() {
     const identity =
       retryRequest.current?.text === text &&
       retryRequest.current.session === session.session_id &&
-      retryRequest.current.upload === (attachment?.upload_id ?? null)
+      retryRequest.current.upload === (attachment?.upload_id ?? null) &&
+      retryRequest.current.knowledge === (knowledgeAttachment?.file_id ?? null)
         ? retryRequest.current
         : {
             id: requestId(),
             text,
             session: session.session_id,
             upload: attachment?.upload_id ?? null,
+            knowledge: knowledgeAttachment?.file_id ?? null,
           };
     retryRequest.current = identity;
     setSending(true);
@@ -374,6 +392,7 @@ export default function App() {
           client_request_id: identity.id,
           text,
           upload_ids: attachment ? [attachment.upload_id] : [],
+          knowledge_upload_ids: knowledgeAttachment ? [knowledgeAttachment.file_id] : [],
         }),
       });
       if (stamp !== generation.current) return;
@@ -384,6 +403,7 @@ export default function App() {
       );
       setDraft('');
       setAttachment(null);
+      setKnowledgeAttachment(null);
       retryRequest.current = null;
       if (['queued', 'running'].includes(accepted.status)) {
         setStage('已收到，正在办理');
@@ -506,6 +526,7 @@ export default function App() {
             [
               { id: 'chat', label: '对话', Icon: MessageSquare },
               { id: 'memory', label: '记忆管理', Icon: BrainCircuit },
+              { id: 'knowledge', label: '知识资料', Icon: BookOpen },
               { id: 'runs', label: '运行记录', Icon: History },
             ] as const
           ).map(({ id, label, Icon }) => (
@@ -622,7 +643,23 @@ export default function App() {
             </button>
           </div>
         )}
-        {page === 'memory' ? (
+        {page === 'knowledge' ? (
+          <div className="page-scroll">
+            <KnowledgeView
+              key={`${user.user_id}/${company}`}
+              user={user}
+              company={company}
+              sessionId={session?.session_id ?? null}
+              onDetail={setDetail}
+              onDraft={prepareDraft}
+              onAttach={(file) => {
+                setAttachment(null);
+                setKnowledgeAttachment(file);
+                prepareDraft(`请根据《${file.title}》，`);
+              }}
+            />
+          </div>
+        ) : page === 'memory' ? (
           <div className="page-scroll">
             <MemoryView
               key={`${user.user_id}/${company}`}
@@ -815,6 +852,19 @@ export default function App() {
                     <ChevronDown size={13} />
                   </button>
                 )}
+                {knowledgeAttachment && (
+                  <div className="attachment-chip">
+                    <BookOpen size={14} />
+                    <span>{knowledgeAttachment.title} · 知识资料</span>
+                    <button
+                      className="icon-button"
+                      aria-label="移除知识附件"
+                      onClick={() => setKnowledgeAttachment(null)}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                )}
                 {attachment && (
                   <div className="attachment-chip">
                     <Paperclip size={14} />
@@ -921,7 +971,10 @@ export default function App() {
           }
           company={company}
           sessionId={session?.session_id ?? null}
-          onUploaded={setAttachment}
+          onUploaded={(file) => {
+            setKnowledgeAttachment(null);
+            setAttachment(file);
+          }}
           onImportChanged={(batch) => {
             if (['committed', 'no_change'].includes(batch.status))
               setAttachment((previous) =>

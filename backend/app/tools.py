@@ -1,4 +1,6 @@
 import json
+import re
+from datetime import date, timedelta, timezone
 
 from pydantic import ValidationError
 
@@ -15,8 +17,18 @@ from app.values import digest, jsonb, safe_json, uid
 
 
 class ToolExecutor:
-    def __init__(self, db):
+    def __init__(self, db, retrieval=None):
         self.db = db
+        if retrieval is None:
+            from app.config import Settings
+            from app.knowledge_retrieval import KnowledgeRetrieval
+            from app.retrieval_engine import LocalRetrieval
+
+            settings = Settings()
+            retrieval = KnowledgeRetrieval(
+                db, settings, LocalRetrieval(settings.knowledge_model_directory)
+            )
+        self.retrieval = retrieval
 
     def execute(self, execution: Execution, call: dict) -> tuple[dict, dict]:
         name = call.get("function", {}).get("name", "")
@@ -159,6 +171,7 @@ class ToolExecutor:
             "check_purposes",
             "get_task",
             "search_history",
+            "search_knowledge",
         ):
             with db.transaction(readonly=True) as conn:
                 source = read_source(conn, auth, execution.source_id, allow_suppressed=True)
@@ -196,15 +209,46 @@ class ToolExecutor:
         ):
             with db.transaction(readonly=True) as conn:
                 attached = conn.execute(
-                    "SELECT cardinality(upload_ids)>0 AS attached FROM turns WHERE turn_id=%s",
+                    "SELECT cardinality(upload_ids)+cardinality(knowledge_upload_ids)>0 AS attached FROM turns WHERE turn_id=%s",
                     (execution.turn_id,),
                 ).fetchone()["attached"]
-            if attached or execution.import_context:
+            if attached or execution.import_context or execution.reference_context:
                 raise AppError(
                     "NEEDS_CLARIFICATION",
-                    "附件办理轮次只允许预览、查询和界面确认追加。请在单独消息中明确修改任务、偏好或既有发票。",
+                    "资料或附件问答轮次只读。请在单独消息中明确修改任务、偏好或既有发票。",
                     409,
                 )
+        if name in ("search_knowledge", "read_evidence"):
+            execution.reference_context = True
+        if name == "read_evidence":
+            return self.retrieval.read(auth, args["citation_id"])
+        if name == "search_knowledge":
+            with db.transaction(readonly=True) as conn:
+                source = read_source(conn, auth, execution.source_id)
+                if args.get("period"):
+                    validate_scope(
+                        conn, execution, args.get("scope_ref"), args["company_id"], args["period"]
+                    )
+                    require_period(conn, execution, args["company_id"], args["period"])
+                if args.get("as_of") and args["as_of"] not in source["content"]:
+                    raise AppError(
+                        "NEEDS_SCOPE_CLARIFICATION", "指定的资料生效日期需要本轮明确原话。", 422
+                    )
+                current_date = source["created_at"].astimezone(timezone(timedelta(hours=8))).date()
+            args = {k: v for k, v in args.items() if k != "scope_ref"}
+            args["as_of"] = (
+                date.fromisoformat(args["as_of"])
+                if args.get("as_of")
+                else (None if args.get("period") else current_date)
+            )
+            args["entities"] = list(
+                dict.fromkeys(
+                    re.findall(r"(?<![A-Za-z0-9])[FR]\d{3,12}(?![A-Za-z0-9])", source["content"])
+                )
+            )
+            return self.retrieval.search(
+                auth, **args, session_id=execution.session_id, turn_id=execution.turn_id
+            )
         if name == "query_month":
             return {
                 **business.query_month(db, auth, **args),

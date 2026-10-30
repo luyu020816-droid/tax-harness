@@ -4,6 +4,7 @@ export interface Company {
   aliases: string[];
   can_update: boolean;
   can_import_invoices: boolean;
+  can_upload_knowledge: boolean;
 }
 export interface User {
   user_id: string;
@@ -98,7 +99,13 @@ export interface InvoiceWritePlan extends CardBase {
   confirmation_turn_id: string | null;
 }
 export type ResultCard =
-  SummaryCard | ListCard | OperationCard | RulesCard | ImportBatch | InvoiceWritePlan;
+  | SummaryCard
+  | ListCard
+  | OperationCard
+  | RulesCard
+  | ImportBatch
+  | InvoiceWritePlan
+  | KnowledgeQuoteCard;
 export interface Turn {
   request_kind?: 'chat' | 'write_confirmation';
   turn_id: string;
@@ -190,7 +197,72 @@ export type Detail =
   | { kind: 'rule'; data: Rule }
   | { kind: 'run'; id: string }
   | { kind: 'task'; data: Task }
-  | { kind: 'source'; id: string };
+  | { kind: 'source'; id: string }
+  | { kind: 'knowledge'; id: string }
+  | { kind: 'evidence'; id: string };
+
+export interface KnowledgeVersion {
+  version_id: string;
+  file_id: string;
+  edition: number;
+  state: string;
+  original_name: string;
+  job_id: string;
+  stage: string;
+  effective_from: string;
+  effective_to: string | null;
+  error: { code: string; message: string } | null;
+}
+export interface KnowledgeDocument {
+  document_id: string;
+  company_id: string;
+  owner_id: string;
+  scope: 'user_private' | 'company';
+  title: string;
+  revision: number;
+  status: string;
+  active_version_id: string | null;
+  active_edition?: number | null;
+  latest?: {
+    version_id: string;
+    edition: number;
+    state: string;
+    job_id: string;
+    error: { message: string } | null;
+  };
+  versions?: KnowledgeVersion[];
+}
+export interface KnowledgeAttachment {
+  file_id: string;
+  document_id: string;
+  company_id: string;
+  title: string;
+  original_name: string;
+}
+export interface KnowledgeEvidence {
+  citation_id: string;
+  document_id: string;
+  version_id: string;
+  company_id: string;
+  title: string;
+  edition: number;
+  excerpt: string;
+  locator: Record<string, string | number | boolean>[];
+}
+export interface KnowledgeBundle {
+  query_id: string;
+  status: string;
+  retrieval_mode: string;
+  evidence: KnowledgeEvidence[];
+  coverage: { eligible: number; ready: number; pending: number };
+}
+export interface KnowledgeQuoteCard extends CardBase {
+  kind: 'knowledge_quote';
+  citation_id: string;
+  title: string;
+  edition: number;
+  locator_label: string;
+}
 
 export interface UploadedInvoice {
   upload_id: string;

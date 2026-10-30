@@ -81,6 +81,16 @@ def _grant_runtime(conn, settings: Settings) -> None:
         "operations",
         "scope_bindings",
         "write_plans",
+        "knowledge_files",
+        "knowledge_documents",
+        "knowledge_versions",
+        "knowledge_blocks",
+        "knowledge_chunks",
+        "retrieval_profiles",
+        "retrieval_jobs",
+        "retrieval_queries",
+        "retrieval_evidence",
+        "rule_knowledge_refs",
     ]
     conn.execute(
         sql.SQL("GRANT INSERT,UPDATE ON {} TO {}").format(
@@ -89,6 +99,9 @@ def _grant_runtime(conn, settings: Settings) -> None:
     )
     conn.execute(sql.SQL("GRANT DELETE ON history_index TO {}").format(role))
     conn.execute(sql.SQL("GRANT DELETE ON invoice_import_rows TO {}").format(role))
+    conn.execute(sql.SQL("REVOKE INSERT,UPDATE ON rule_knowledge_refs FROM {}").format(role))
+    if conn.execute("SELECT to_regclass('public.retrieval_embeddings') AS t").fetchone()["t"]:
+        conn.execute(sql.SQL("GRANT INSERT,UPDATE ON retrieval_embeddings TO {}").format(role))
     conn.execute(sql.SQL("GRANT UPDATE(next_source_seq,memory_epoch) ON users TO {}").format(role))
     conn.execute(sql.SQL("GRANT UPDATE(data_revision) ON company_heads TO {}").format(role))
     conn.execute(sql.SQL("GRANT UPDATE(purpose,note,revision) ON invoices TO {}").format(role))
@@ -178,6 +191,13 @@ def initialize(settings: Settings, *, test=False, extended=False) -> dict:
             else set()
         )
         for migration in sorted((ROOT / "backend/migrations").glob("[0-9]*.sql")):
+            if (
+                migration.name.startswith("006_")
+                and not conn.execute(
+                    "SELECT 1 FROM pg_available_extensions WHERE name='vector'"
+                ).fetchone()
+            ):
+                continue
             if int(migration.name.split("_", 1)[0]) not in applied:
                 conn.execute(migration.read_text(encoding="utf-8"))
         materials = ROOT / "docs/赛题二：财税Harness初赛材料包-v1.1.0"
@@ -280,6 +300,72 @@ def rules_command(args, settings: Settings):
         return rules.disable(conn, args.version_id)
 
 
+def knowledge_command(args, settings):
+    from app import knowledge_admin
+
+    if args.knowledge_action == "add-version":
+        from app.db import Database
+        from app.identity import Identity
+        from app.knowledge import Knowledge
+
+        if args.file.stat().st_size > settings.knowledge_max_file_bytes:
+            raise AppError("DOCUMENT_TOO_LARGE", "资料最多20 MiB。", 413)
+        database = Database(settings.admin_database_url)
+        database.open()
+        try:
+            with database.transaction(readonly=True) as conn:
+                row = conn.execute(
+                    "SELECT * FROM knowledge_documents WHERE document_id=%s", (args.document_id,)
+                ).fetchone()
+                if not row:
+                    raise AppError("RESOURCE_NOT_FOUND", "企业资料不存在。", 404)
+            return Knowledge(database, settings).upload(
+                Identity(row["owner_id"]),
+                name=args.file.name,
+                content=args.file.read_bytes(),
+                company_id=row["company_id"],
+                title=row["title"],
+                request_id=args.request_id,
+                document_id=args.document_id,
+                expected_revision=args.expected_revision,
+                maintenance=True,
+            )
+        finally:
+            database.close()
+    with psycopg.connect(settings.admin_database_url, row_factory=dict_row) as conn:
+        if args.knowledge_action == "list":
+            return conn.execute(
+                "SELECT * FROM knowledge_documents WHERE company_id=%s ORDER BY created_at DESC",
+                (args.company,),
+            ).fetchall()
+        if args.knowledge_action == "show":
+            return {
+                "document": conn.execute(
+                    "SELECT * FROM knowledge_documents WHERE document_id=%s", (args.document_id,)
+                ).fetchone(),
+                "blocks": conn.execute(
+                    "SELECT b.*,v.edition FROM knowledge_blocks b JOIN knowledge_versions v USING(version_id) WHERE v.document_id=%s ORDER BY v.edition,b.ordinal",
+                    (args.document_id,),
+                ).fetchall(),
+            }
+        if args.knowledge_action == "publish":
+            return knowledge_admin.publish_company(
+                conn, args.document_id, args.version_id, args.expected_revision, args.request_id
+            )
+        if args.knowledge_action == "disable":
+            return knowledge_admin.disable_company(
+                conn, args.document_id, args.expected_revision, args.request_id
+            )
+        if args.knowledge_action == "link-rule":
+            return knowledge_admin.link_rule(
+                conn,
+                args.rule_version_id,
+                json.loads(args.file.read_text(encoding="utf-8")),
+                args.request_id,
+            )
+        return knowledge_admin.revoke_read(conn, args.user_id, args.company_id, args.request_id)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Tax Harness local administration")
     subs = parser.add_subparsers(dest="command", required=True)
@@ -296,6 +382,26 @@ def main() -> None:
             action.add_argument("--replaces")
     for name in ("create-version", "import"):
         r.add_parser(name).add_argument("file")
+    k = subs.add_parser("knowledge").add_subparsers(dest="knowledge_action", required=True)
+    k.add_parser("list").add_argument("--company", required=True)
+    k.add_parser("show").add_argument("document_id")
+    for action_name in ("publish", "disable", "add-version"):
+        command = k.add_parser(action_name)
+        command.add_argument("document_id")
+        command.add_argument("--expected-revision", type=int, required=True)
+        command.add_argument("--request-id", required=True)
+        if action_name == "publish":
+            command.add_argument("--version-id", required=True)
+        if action_name == "add-version":
+            command.add_argument("--file", type=Path, required=True)
+    link = k.add_parser("link-rule")
+    link.add_argument("rule_version_id")
+    link.add_argument("file", type=Path)
+    link.add_argument("--request-id", required=True)
+    revoke = k.add_parser("revoke-read")
+    revoke.add_argument("user_id")
+    revoke.add_argument("company_id")
+    revoke.add_argument("--request-id", required=True)
     args = parser.parse_args()
     if args.command == "configure":
         configure()
@@ -303,6 +409,8 @@ def main() -> None:
     try:
         if args.command == "init-extended":
             result = initialize_extended(Settings())
+        elif args.command == "knowledge":
+            result = knowledge_command(args, Settings())
         else:
             result = (
                 initialize(Settings(), test=args.test)

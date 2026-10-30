@@ -16,6 +16,16 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "ruff>=0.11,<1"]
+knowledge = [
+  "torch==2.8.0",
+  "setuptools==80.9.0",
+  "pypdf==6.21.4",
+  "jieba==0.42.1",
+  "numpy==2.2.6",
+  "transformers==4.57.6",
+  "huggingface-hub>=0.34,<1",
+  "zstandard==0.25.0",
+]
 
 [project.scripts]
 tax-harness = "app.cli:main"
@@ -30,6 +40,7 @@ include = ["app*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 target-version = "py312"

@@ -14,27 +14,38 @@ from app.xlsx_invoices import MAX_FILE_BYTES
 class UploadBodyLimit:
     """Bound actual request bytes before multipart parsing, including chunked bodies."""
 
-    def __init__(self, app):
+    def __init__(self, app, knowledge_max_bytes=20 * 1024 * 1024):
         self.app = app
+        self.knowledge_max_bytes = knowledge_max_bytes
 
     async def __call__(self, scope, receive, send):
+        knowledge = scope.get("path", "") == "/api/v1/knowledge/uploads" or (
+            scope.get("path", "").startswith("/api/v1/knowledge/documents/")
+            and scope.get("path", "").endswith("/versions")
+        )
         if (
             scope["type"] != "http"
-            or scope.get("path") != "/api/v1/uploads/invoices"
+            or (scope.get("path") != "/api/v1/uploads/invoices" and not knowledge)
             or scope.get("method") != "POST"
         ):
             return await self.app(scope, receive, send)
         chunks = []
         size = 0
+        limit = self.knowledge_max_bytes if knowledge else MAX_FILE_BYTES
         while True:
             message = await receive()
             if message["type"] == "http.disconnect":
                 return
             chunk = message.get("body", b"")
             size += len(chunk)
-            if size > MAX_FILE_BYTES + 65536:
+            if size > limit + 65536:
                 return await JSONResponse(
-                    {"code": "UPLOAD_TOO_LARGE", "message": "上传请求超过 5 MiB 文件上限。"},
+                    {
+                        "code": "DOCUMENT_TOO_LARGE" if knowledge else "UPLOAD_TOO_LARGE",
+                        "message": "知识上传最多20 MiB。"
+                        if knowledge
+                        else "上传请求超过 5 MiB 文件上限。",
+                    },
                     status_code=413,
                 )(scope, receive, send)
             chunks.append(chunk)

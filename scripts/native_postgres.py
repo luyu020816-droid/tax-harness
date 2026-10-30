@@ -31,14 +31,15 @@ def main():
         raise SystemExit("Run python -m app.cli configure first.")
     parsed = urlparse(admin)
     port = parsed.port or 54337
-    binaries = ROOT / ".tools/pgsql/bin"
+    prepared = ROOT / ".tools/pgsql-knowledge"
+    binaries = (
+        prepared if (prepared / "pgvector-installation.json").is_file() else ROOT / ".tools/pgsql"
+    ) / "bin"
     data = ROOT / ".local/postgres/data"
     data.parent.mkdir(parents=True, exist_ok=True)
     ctl = str(binaries / "pg_ctl.exe")
     if not Path(ctl).exists():
-        raise SystemExit(
-            "Extract the official PostgreSQL 16 runtime into .tools/pgsql first."
-        )
+        raise SystemExit("Extract the official PostgreSQL 16 runtime into .tools/pgsql first.")
     if args.action != "start":
         run(
             [
@@ -84,9 +85,7 @@ def main():
     if status.returncode:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1):
-                raise SystemExit(
-                    f"Port {port} is occupied; no other server was stopped."
-                )
+                raise SystemExit(f"Port {port} is occupied; no other server was stopped.")
         except (ConnectionRefusedError, TimeoutError, OSError):
             pass
         run(
@@ -102,13 +101,9 @@ def main():
                 "start",
             ]
         )
-    with psycopg.connect(
-        make_conninfo(admin, dbname="postgres"), autocommit=True
-    ) as conn:
+    with psycopg.connect(make_conninfo(admin, dbname="postgres"), autocommit=True) as conn:
         name = parsed.path.removeprefix("/")
-        if not conn.execute(
-            "SELECT 1 FROM pg_database WHERE datname=%s", (name,)
-        ).fetchone():
+        if not conn.execute("SELECT 1 FROM pg_database WHERE datname=%s", (name,)).fetchone():
             conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
     print(f"Project PostgreSQL is ready on 127.0.0.1:{port}.")
 

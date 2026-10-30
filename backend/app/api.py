@@ -13,11 +13,14 @@ from pydantic import Field
 
 from app import business, identity, invoice_write, preferences, rules, tasks, trace, turns
 from app.api_imports import UploadBodyLimit, import_router
+from app.api_knowledge import knowledge_router
 from app.config import ROOT, Settings
 from app.db import Database
 from app.errors import AppError
 from app.identity import Identity
 from app.invoice_imports import InvoiceImports
+from app.knowledge import Knowledge
+from app.knowledge_jobs import KnowledgeJobs
 from app.model import HttpModel
 from app.runtime import Runtime
 from app.tool_schemas import StrictModel
@@ -36,6 +39,7 @@ class TurnBody(StrictModel):
     client_request_id: str = Field(min_length=1, max_length=200)
     text: str = Field(min_length=1, max_length=16000)
     upload_ids: list[UUID] = Field(default_factory=list, max_length=1)
+    knowledge_upload_ids: list[UUID] = Field(default_factory=list, max_length=1)
 
 
 class ControlBody(StrictModel):
@@ -76,6 +80,8 @@ def create_app(
     db = db or Database(settings.database_url)
     model = model or HttpModel(settings)
     runtime = Runtime(db, settings, model)
+    knowledge = Knowledge(db, settings)
+    knowledge_jobs = KnowledgeJobs(db, settings, runtime.tools.retrieval.engine)
     own_ingest = ingest_db is None and bool(settings.ingest_database_url)
     ingest_db = ingest_db or (Database(settings.ingest_database_url) if own_ingest else None)
     imports = InvoiceImports(db, ingest_db)
@@ -92,10 +98,12 @@ def create_app(
             ingest_db.open()
         if start_workers:
             await runtime.start()
+            await knowledge_jobs.start()
         try:
             yield
         finally:
             if start_workers:
+                await knowledge_jobs.stop()
                 await runtime.stop()
             if own_database:
                 db.close()
@@ -110,7 +118,9 @@ def create_app(
 
     auth_dependency = Depends(auth)
     app.include_router(import_router(imports, auth_dependency))
-    app.add_middleware(UploadBodyLimit)
+    app.include_router(knowledge_router(knowledge, runtime.tools.retrieval, auth_dependency))
+    app.add_middleware(UploadBodyLimit, knowledge_max_bytes=settings.knowledge_max_file_bytes)
+    app.state.knowledge, app.state.knowledge_jobs = knowledge, knowledge_jobs
     app.state.imports = imports
 
     @app.get("/api/v1/write-plans/{plan_id}")
@@ -184,6 +194,9 @@ def create_app(
                 "model_mode": model.mode,
                 "maintenance": maintenance,
                 "invoice_import_ready": imports.available(),
+                "knowledge": runtime.tools.retrieval.ready(validate=False)
+                if database_ready
+                else {"ready": False},
             },
             status_code=200 if database_ready and not maintenance else 503,
         )
@@ -251,6 +264,7 @@ def create_app(
             body.client_request_id,
             body.text,
             upload_ids=[str(x) for x in body.upload_ids],
+            knowledge_upload_ids=[str(x) for x in body.knowledge_upload_ids],
         )
         return {**result, "events_url": f"/api/v1/turns/{result['turn_id']}/events"}
 
