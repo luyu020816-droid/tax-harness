@@ -1,6 +1,6 @@
 # PATCH-002：办理协议与模块边界
 
-日期：2026-10-29。协议：trusted-execution-v1，数据库 schema 4。
+日期：2026-10-29。协议：trusted-execution-v1。本文件冻结第1—2步的schema 4办理协议；第3步后的schema与知识增量见[知识契约](PATCH002_KNOWLEDGE_CONTRACTS.md)。
 
 本文件描述路线图第1—2步的已实现接口。知识文档、向量索引和OCR不在本批实现中。完整需求仍以SPEC为准。
 
