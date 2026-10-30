@@ -611,6 +611,67 @@ def test_only_served_quote_can_render_and_document_instructions_cannot_write(
         read_source(conn, AUTH, ref["source_id"])
 
 
+@pytest.mark.parametrize("tool_name", ["search_knowledge", "read_evidence"])
+def test_selecting_one_quote_cannot_drop_required_context(
+    knowledge, db, settings, execution_factory, tool_name
+):
+    from test_answer_renderer import rendered
+    from test_runtime import model_settings, tool
+
+    from app import context
+    from app.tools import ToolExecutor
+    from app.values import canonical
+
+    text = (
+        "主条款：临时借用钥匙须登记并按时归还。\n\n"
+        + ("流程记录须记载时间、经办人和交还情况。" * 62)
+        + "\n\n例外：紧急抢修仍须值班负责人批准，不得省略批准手续。"
+    )
+    uploaded(knowledge, text)
+    previous = knowledge[2].search(AUTH, company_id="C001", query="钥匙借用和例外条件")
+    assert len(previous["evidence"]) >= 2
+    chosen = next(e for e in previous["evidence"] if "例外：" in e["excerpt"])
+    ex = execution_factory("查阅甲企业钥匙借用的制度与例外。")
+    executor = ToolExecutor(db, retrieval=knowledge[2])
+    args = (
+        {"company_id": "C001", "query": "钥匙借用和例外条件"}
+        if tool_name == "search_knowledge"
+        else {"citation_id": chosen["citation_id"]}
+    )
+    call = tool(tool_name, args)["tool_calls"][0]
+    output, ref = executor.execute(ex, call)
+    assert output["ok"]
+    actual = (
+        output["data"]["evidence"]
+        if tool_name == "search_knowledge"
+        else [output["data"], *output["data"].get("related_evidence", [])]
+    )
+    chosen = next(e for e in actual if "例外：" in e["excerpt"])
+    group = {
+        "messages": [
+            {"role": "assistant", "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": call["id"], "content": canonical(output)},
+        ],
+        "sources": [ref],
+        "results": [output],
+    }
+    payload, manifest, _ = context.assemble(db, model_settings(settings), ex, [group])
+    answer = rendered(
+        db,
+        ex,
+        payload,
+        manifest,
+        [{"type": "knowledge_quote", "citation_id": chosen["citation_id"]}],
+    )
+    excerpts = [
+        knowledge[2].read(AUTH, c["citation_id"])["excerpt"]
+        for c in answer.cards
+        if c["kind"] == "knowledge_quote"
+    ]
+    assert "主条款：" in "\n".join(excerpts) and "不得省略批准手续" in "\n".join(excerpts)
+    assert {c["citation_id"] for c in answer.cards} == {e["citation_id"] for e in actual}
+
+
 def test_vector_and_authoritative_file_survive_backup_restore(
     knowledge, db, settings, admin, tmp_path
 ):

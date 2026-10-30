@@ -76,6 +76,34 @@ def read_evidence_in(conn, auth, citation_id, *, lock=False):
     )
 
 
+def read_evidence_group_in(conn, auth, citation_id, *, lock=False):
+    main = read_evidence_in(conn, auth, citation_id, lock=lock)
+    query = conn.execute(
+        "SELECT coverage FROM retrieval_queries WHERE query_id=%s AND user_id=%s",
+        (main["query_id"], auth.user_id),
+    ).fetchone()
+    group = next(
+        (
+            g
+            for g in query["coverage"].get("evidence_groups", [])
+            if g["selected"] and main["chunk_id"] in g["chunk_ids"]
+        ),
+        None,
+    )
+    if not group:
+        # Original M3 citations stay readable; no invented historical group.
+        return [main]
+    if not group.get("chunk_ids_complete", True):
+        raise AppError("SOURCE_INVALIDATED", "引用缺少完整条款关联，请重新检索。", 409)
+    rows = conn.execute(
+        "SELECT citation_id FROM retrieval_evidence WHERE query_id=%s AND chunk_id=ANY(%s::uuid[]) ORDER BY rank",
+        (main["query_id"], group["chunk_ids"]),
+    ).fetchall()
+    if len(rows) != group.get("chunk_count", len(group["chunk_ids"])):
+        raise AppError("SOURCE_INVALIDATED", "必要条款的引用集合不完整，请重新检索。", 409)
+    return [read_evidence_in(conn, auth, str(row["citation_id"]), lock=lock) for row in rows]
+
+
 class KnowledgeRetrieval:
     def __init__(self, db, settings, engine, *, selection_policy=None):
         self.db, self.settings, self.engine = db, settings, engine
@@ -128,12 +156,18 @@ class KnowledgeRetrieval:
 
     def read(self, auth, citation_id):
         with self.db.transaction(readonly=True) as conn:
-            evidence = read_evidence_in(conn, auth, citation_id)
+            group = read_evidence_group_in(conn, auth, citation_id)
+            evidence = next(e for e in group if e["citation_id"] == citation_id)
             epoch = conn.execute(
                 "SELECT knowledge_epoch FROM company_heads WHERE company_id=%s",
                 (evidence["company_id"],),
             ).fetchone()["knowledge_epoch"]
-            return {"kind": "knowledge_evidence", **evidence, "validated_knowledge_epoch": epoch}
+            return {
+                "kind": "knowledge_evidence",
+                **evidence,
+                "validated_knowledge_epoch": epoch,
+                "related_evidence": [e for e in group if e["citation_id"] != citation_id],
+            }
 
     def search(
         self,

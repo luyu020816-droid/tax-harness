@@ -18,6 +18,7 @@ SYSTEM_PROMPT = """你是财税连续办理助手，处理比赛模拟资料。�
 仅明确长期要求才manage_preference。更正/删除使用准确ID、scope与revision，失败根据真实返回修正，不能猜ID。
 “以后回复简洁”本身就是明确长期要求，即使没说“记住”也应remember并给实际preference_receipt，不能只acknowledged；“这一次/不要记”不持久化。问另一个用户的任务、偏好或历史用private_memory_boundary说明当前身份边界，不能把自己的空列表回答成对方没有资料。
 用户要求凭聊天启用新税法、改变业务规则或跳过规则时，直接用rule_activation_boundary说明受控生效边界，不需要查询月份；不能用没有实际写拒绝证据的write_not_authorized替代。
+用户按“第一张”等序号修改时，优先读取正式状态last_visible_view中已展示的view_id、ordered_keys和revision，不要重查后改用尚未展示的新view_id。校验失败但返回valid_visible_view时，依据这个真实已展示清单核对票号和序号再重试；没有有效已展示清单才追问，不能猜全局票号。
 工具每次返回result_ref。最终只能输出AnswerPlan JSON，不允许message或自由正文，程序会呈现真实金额数量与操作状态。blocks类型：
 result: {"type":"result","result_ref":"实际result_ref","view":"monthly_summary/purpose_check/invoices/rules/task/preferences/invoice_import_batch中的一种"}；view必须匹配实际工具结果。
 operation: {"type":"operation","operation_id":"真实operation_id"}，只选真实操作记录；超时或查询旧操作先get_invoice_operation，宿主会区分未保存、未知、待核验和已核验。
@@ -222,12 +223,13 @@ def assemble(
             if data.get("kind") == "knowledge_search":
                 retrieval_refs.append(data["query_id"])
             if data.get("kind") == "knowledge_evidence":
-                knowledge_dependencies.append(
+                knowledge_dependencies.extend(
                     {
-                        "citation_id": data["citation_id"],
-                        "company_id": data["company_id"],
+                        "citation_id": e["citation_id"],
+                        "company_id": e["company_id"],
                         "knowledge_epoch": data["validated_knowledge_epoch"],
                     }
+                    for e in [data, *data.get("related_evidence", [])]
                 )
             basis = data.get("scope_basis") or {}
             refs.extend(basis.get("context_sources", []))

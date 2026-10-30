@@ -40,7 +40,7 @@ def _validate_selection(conn, auth, company_id, invoice_id, selection, execution
         return
     view = owned(conn, "result_views", "view_id", selection["view_id"], auth)
     latest = conn.execute(
-        "SELECT v.view_id FROM result_views v JOIN sources s ON s.source_id=v.result_source_id WHERE v.user_id=%s AND v.session_id=%s AND v.company_id=%s AND v.status='active' AND v.displayed_event_seq IS NOT NULL ORDER BY s.source_seq DESC,s.created_at DESC LIMIT 1",
+        "SELECT v.* FROM result_views v JOIN sources s ON s.source_id=v.result_source_id WHERE v.user_id=%s AND v.session_id=%s AND v.company_id=%s AND v.status='active' AND v.displayed_event_seq IS NOT NULL ORDER BY s.source_seq DESC,s.created_at DESC LIMIT 1",
         (auth.user_id, view["session_id"], company_id),
     ).fetchone()
     head = conn.execute("SELECT * FROM company_heads WHERE company_id=%s", (company_id,)).fetchone()
@@ -53,7 +53,22 @@ def _validate_selection(conn, auth, company_id, invoice_id, selection, execution
         or (execution and str(view["session_id"]) != execution.session_id)
         or any(view[k] != head[k] for k in ("data_revision", "rules_epoch"))
     ):
-        raise AppError("STALE_CONTEXT", "列表已失效或尚未展示，请明确发票编号。", 409)
+        details = {}
+        if (
+            latest
+            and execution
+            and str(latest["session_id"]) == execution.session_id
+            and all(latest[k] == head[k] for k in ("data_revision", "rules_epoch"))
+        ):
+            details["valid_visible_view"] = {
+                k: latest[k] for k in ("view_id", "company_id", "period", "ordered_keys")
+            }
+        raise AppError(
+            "STALE_CONTEXT",
+            "所选列表已失效或尚未展示。若存在valid_visible_view，可按用户原句和该已展示清单重试；不能用本轮新查询的排序替代已展示顺序。",
+            409,
+            details=details,
+        )
     index = selection.get("row_index", 0) - 1
     if (
         index < 0

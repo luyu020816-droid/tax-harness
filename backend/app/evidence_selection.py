@@ -113,9 +113,9 @@ def choose_groups(
                 "seed_chunk_ids": [
                     str(c["chunk_id"]) for c in seeds if lookup[str(c["chunk_id"])] == key
                 ],
-                "chunk_ids": [str(c["chunk_id"]) for c in members[:40]],
+                "chunk_ids": [str(c["chunk_id"]) for c in (members if fits else members[:40])],
                 "chunk_count": len(members),
-                "chunk_ids_complete": len(members) <= 40,
+                "chunk_ids_complete": fits or len(members) <= 40,
                 "estimated_tokens": cost,
                 "selected": fits,
             }

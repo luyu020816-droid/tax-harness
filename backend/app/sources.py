@@ -92,9 +92,9 @@ def read_source(
 
             validate_retrievals(conn, auth, [data["query_id"]])
         elif data.get("kind") == "knowledge_evidence":
-            from app.knowledge_retrieval import read_evidence_in
+            from app.knowledge_retrieval import read_evidence_group_in
 
-            read_evidence_in(conn, auth, data["citation_id"])
+            read_evidence_group_in(conn, auth, data["citation_id"])
     return row
 
 

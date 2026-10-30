@@ -102,6 +102,18 @@ def _result_text(data, view):
         return f"当前适用规则：{_rules(data)}。完整依据可在规则详情核对。", data
     if view == "task":
         if "task" not in data:
+            labels = {
+                "cancelled": "已取消",
+                "deleted": "已删除",
+                "active": "进行中",
+                "waiting_user": "等待补充",
+                "completed": "已完成",
+            }
+            if data.get("task_id") and "memory_epoch" in data and data.get("status") in labels:
+                return (
+                    f"任务操作回执：{data['company_id']} {data.get('period') or '月份待补充'}，状态{labels[data['status']]}。",
+                    None,
+                )
             missing("缺少真实任务结果。")
         task = data["task"]
         return (
@@ -222,50 +234,9 @@ def render(conn, execution, plan, payload, manifest):
                     texts.append(text)
                     reply.cards.append(safe_json(card))
         elif block.type == "knowledge_quote":
-            citation_id = str(block.citation_id)
-            served = []
-            for output in outputs.values():
-                data = output.get("data") or {}
-                if output.get("ok") and data.get("kind") == "knowledge_search":
-                    served.extend(data.get("evidence", []))
-                if output.get("ok") and data.get("kind") == "knowledge_evidence":
-                    served.append(data)
-            original = next((e for e in served if str(e["citation_id"]) == citation_id), None)
-            if not original:
-                missing("只能引用本轮真正入模的知识证据。")
-            from app.knowledge_retrieval import read_evidence_in
-
-            evidence = read_evidence_in(conn, execution.auth, citation_id, lock=True)
-            if (
-                original["excerpt_hash"] != evidence["excerpt_hash"]
-                or original["excerpt"] != evidence["excerpt"]
-            ):
-                missing("实际入模知识与当前引用不一致。")
-            locators = []
-            for locator in evidence["locator"]:
-                kind = locator["type"]
-                locators.append(
-                    f"第{locator['page']}页"
-                    if kind == "pdf"
-                    else f"第{locator['from']}—{locator['to']}行"
-                    if kind == "lines"
-                    else f"第{locator['paragraph']}段"
-                    if kind == "docx_paragraph"
-                    else f"表{locator['table']}第{locator['row']}行（含表头）"
-                )
-            texts.append(
-                f"本轮资料依据：《{evidence['title']}》第{evidence['edition']}版，{'、'.join(dict.fromkeys(locators))}。原文见下方来源卡片；显示时会重新核对引用有效性。"
-            )
-            reply.cards.append(
-                {
-                    "kind": "knowledge_quote",
-                    "company_id": evidence["company_id"],
-                    "citation_id": citation_id,
-                    "title": evidence["title"],
-                    "edition": evidence["edition"],
-                    "locator_label": "、".join(dict.fromkeys(locators)),
-                }
-            )
+            for text, card in _knowledge_quotes(conn, execution, str(block.citation_id), outputs):
+                texts.append(text)
+                reply.cards.append(card)
         elif block.type == "preference_receipt":
             output = outputs.get(str(block.result_ref)) or {}
             pref = output.get("data") or {}
@@ -341,6 +312,60 @@ def render(conn, execution, plan, payload, manifest):
     )
     reply.displayed_view_ids = [c["view_id"] for c in reply.cards if c.get("view_id")]
     return reply
+
+
+def _knowledge_quotes(conn, execution, citation_id, outputs):
+    from app.knowledge_retrieval import read_evidence_group_in
+
+    served = {}
+    for output in outputs.values():
+        data = output.get("data") or {}
+        if not output.get("ok"):
+            continue
+        if data.get("kind") == "knowledge_search":
+            served.update((e["citation_id"], e) for e in data.get("evidence", []))
+        if data.get("kind") == "knowledge_evidence":
+            served.update((e["citation_id"], e) for e in [data, *data.get("related_evidence", [])])
+    if citation_id not in served:
+        missing("只能引用本轮真正入模的知识证据。")
+    group = read_evidence_group_in(conn, execution.auth, citation_id, lock=True)
+    result = []
+    for evidence in group:
+        original = served.get(evidence["citation_id"])
+        if not original:
+            missing("必要条款尚未全部入模，请先用read_evidence重新读取该引用的完整条款组。")
+        if (
+            original["excerpt_hash"] != evidence["excerpt_hash"]
+            or original["excerpt"] != evidence["excerpt"]
+        ):
+            missing("实际入模知识与当前引用不一致。")
+        locators = []
+        for locator in evidence["locator"]:
+            kind = locator["type"]
+            locators.append(
+                f"第{locator['page']}页"
+                if kind == "pdf"
+                else f"第{locator['from']}—{locator['to']}行"
+                if kind == "lines"
+                else f"第{locator['paragraph']}段"
+                if kind == "docx_paragraph"
+                else f"表{locator['table']}第{locator['row']}行（含表头）"
+            )
+        label = "、".join(dict.fromkeys(locators))
+        result.append(
+            (
+                f"本轮资料依据：《{evidence['title']}》第{evidence['edition']}版，{label}。原文见下方来源卡片；显示时会重新核对引用有效性。",
+                {
+                    "kind": "knowledge_quote",
+                    "company_id": evidence["company_id"],
+                    "citation_id": evidence["citation_id"],
+                    "title": evidence["title"],
+                    "edition": evidence["edition"],
+                    "locator_label": label,
+                },
+            )
+        )
+    return result
 
 
 def _explanation(conn, execution, code, outputs, rules, state):

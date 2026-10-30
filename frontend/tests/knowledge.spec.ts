@@ -5,6 +5,7 @@ test('knowledge: private upload, semantic search, quote, new version, disable an
   page,
 }) => {
   test.setTimeout(300000);
+  const evidenceRoot = process.env.UI_EVIDENCE_DIRECTORY ?? '../.local/evidence/patch002-knowledge-ui';
   const failures: string[] = [];
   page.on('pageerror', (error) => failures.push(error.message));
   const title = `差旅审批联调 ${Date.now()}`;
@@ -35,7 +36,7 @@ test('knowledge: private upload, semantic search, quote, new version, disable an
     .filter({ hasText: title });
   await expect(citation.getByText(/但不得省略批准手续/)).toBeVisible({ timeout: 90000 });
   await page.screenshot({
-    path: '../.local/evidence/patch002-knowledge-ui/search-desktop.png',
+    path: `${evidenceRoot}/search-desktop.png`,
     fullPage: true,
   });
   await citation.getByRole('button').click();
@@ -61,7 +62,7 @@ test('knowledge: private upload, semantic search, quote, new version, disable an
   await expect(page.locator('.turn .knowledge-citation').last()).toBeInViewport();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({
-    path: '../.local/evidence/patch002-knowledge-ui/quote-mobile.png',
+    path: `${evidenceRoot}/quote-mobile.png`,
     fullPage: true,
   });
   await page.setViewportSize({ width: 1440, height: 900 });

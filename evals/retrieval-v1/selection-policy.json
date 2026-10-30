@@ -1,0 +1,15 @@
+{
+  "version": "structural-groups-v1",
+  "profile_id": "0892c00a8c75451a31c3f1be37bb51ce1c10814c1074188d2d789283b5824446",
+  "mode": "hybrid",
+  "development_sha256": "ff300092663936e95947fe3a4c994840044a4346ddf1078d3b2e2a3ba96ebbb4",
+  "cutoff": -2.6050246953964233,
+  "calibration": {
+    "objective": "min_false_accepts_then_max_gold_seed_retention",
+    "positive_questions": 24,
+    "negative_questions": 12,
+    "development_false_accepts": 0,
+    "development_gold_seed_retained": 23,
+    "raw_logits_are_probabilities": false
+  }
+}
