@@ -26,16 +26,20 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     count = 0
     with zipfile.ZipFile(args.output, "x", zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(ROOT.rglob("*")):
+        # Traverse only publishable roots: local clean-deployment fixtures can
+        # themselves contain complete runtimes and must never be enumerated.
+        candidates = [ROOT / name for name in ALLOWED_ROOT_FILES]
+        for directory in ALLOWED_DIRECTORIES:
+            candidates.extend((ROOT / directory).rglob("*"))
+        for path in sorted(candidates):
             relative = path.relative_to(ROOT)
             if not path.is_file() or any(
-                part in EXCLUDED_PARTS or part.endswith(".egg-info")
-                for part in relative.parts
+                part in EXCLUDED_PARTS or part.endswith(".egg-info") for part in relative.parts
             ):
                 continue
-            if (
-                len(relative.parts) == 1 and relative.name in ALLOWED_ROOT_FILES
-            ) or relative.parts[0] in ALLOWED_DIRECTORIES:
+            if (len(relative.parts) == 1 and relative.name in ALLOWED_ROOT_FILES) or relative.parts[
+                0
+            ] in ALLOWED_DIRECTORIES:
                 if path.suffix in (".log", ".pyc") or relative.name in (
                     ".env",
                     ".env.local",

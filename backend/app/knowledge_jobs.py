@@ -2,7 +2,7 @@
 
 import asyncio
 import hashlib
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 
 from app.errors import AppError
 from app.identity import Identity
@@ -135,7 +135,19 @@ class KnowledgeJobs:
                 raise AppError("SOURCE_INVALIDATED", "原文件校验失败，未发布。", 503)
             suffix, _ = inspect_file(version["original_name"], content)
             self.stage(job, "parsing")
-            parsed = parse_isolated(content, suffix, self.settings.knowledge_parser_timeout)
+            from app.ocr_status import options
+
+            ocr = options(self.settings) if suffix == ".pdf" else None
+            work = getattr(self.engine, "external_work", nullcontext) if ocr else nullcontext
+            with work():
+                parsed = parse_isolated(
+                    content,
+                    suffix,
+                    self.settings.knowledge_ocr_timeout
+                    if ocr
+                    else self.settings.knowledge_parser_timeout,
+                    ocr=ocr,
+                )
             self.stage(job, "chunking", {"blocks": len(parsed["blocks"])})
             chunks = chunk_blocks(parsed["blocks"], document["title"], self.engine.count)
             profile_id, manifest = self.engine.profile()

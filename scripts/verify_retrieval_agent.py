@@ -18,9 +18,14 @@ def main(args):
     args.output.mkdir(parents=True, exist_ok=False)
     source = args.evaluation.resolve()
     original = json.loads((source / "report.json").read_text(encoding="utf-8"))
-    assert original["split"] == "holdout"
+    assert original["split"] in ("holdout", "development")
     s = Settings()
-    name = "tax_harness_retrieval_holdout_v1_" + digest(str(source))[:8]
+    name = (
+        "tax_harness_retrieval_"
+        + ("dev" if original["split"] == "development" else "holdout")
+        + "_v1_"
+        + digest(str(source))[:8]
+    )
     s = s.model_copy(
         update={
             "database_url": make_conninfo(s.database_url, dbname=name),
@@ -36,9 +41,11 @@ def main(args):
         assert cache["profile_id"] == profile
         engine.vectors, engine.scores = cache["vectors"], cache["rerank_scores"]
         policy, error = load_policy(
-            ROOT / "evals/retrieval-v1/selection-policy.candidate.json", profile
+            args.policy or ROOT / "evals/retrieval-v1/selection-policy.candidate.json", profile
         )
-        assert policy and policy["policy_id"] == original["policy"]["policy_id"], error
+        assert policy and (args.policy or policy["policy_id"] == original["policy"]["policy_id"]), (
+            error
+        )
         retrieval = KnowledgeRetrieval(db, s, engine, selection_policy=policy)
         suite = json.loads((source / "frozen-suite.json").read_text(encoding="utf-8"))
         result = run_model_checks(s, db, retrieval, suite, args.output, question_ids=set(args.case))
@@ -49,7 +56,7 @@ def main(args):
             "policy_id": policy["policy_id"],
             "result": result,
             "inference_counts": engine.counts,
-            "corpus_note": "Same holdout DB after boundary tests; includes auxiliary boundary documents. These probes do not replace or increase the 70-item frozen held-out score.",
+            "corpus_note": "Integration probes on the recorded source split, possibly including boundary documents; no change to the original frozen evaluation score.",
             "code_fingerprint": digest(
                 {
                     p.name: p.read_text(encoding="utf-8")
@@ -65,6 +72,8 @@ def main(args):
             flush=True,
         )
     finally:
+        if "engine" in locals():
+            engine.engine.close()
         db.close()
 
 
@@ -73,4 +82,5 @@ if __name__ == "__main__":
     p.add_argument("--evaluation", required=True, type=Path)
     p.add_argument("--output", required=True, type=Path)
     p.add_argument("--case", action="append", required=True)
+    p.add_argument("--policy", type=Path)
     main(p.parse_args())

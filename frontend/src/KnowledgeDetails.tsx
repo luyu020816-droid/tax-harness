@@ -58,6 +58,9 @@ export function EvidenceDetails({ id }: { id: string }) {
         {companyName(data.company_id)} · 第{data.edition}版 · {locatorLabel(data.locator)}
       </p>
       <blockquote className="knowledge-excerpt">{data.excerpt}</blockquote>
+      {data.locator.some((item) => item.extraction === 'ocr') && (
+        <p className="muted small">扫描件识别文字，请对照原PDF核对。</p>
+      )}
       <a
         className="text-button"
         href={`/api/v1/knowledge/documents/${data.document_id}/file?version_id=${data.version_id}`}

@@ -52,7 +52,7 @@ def run_boundaries(settings, store, jobs, retrieval, documents, fixture_hash):
             owner, company_id="C001", query=query, document_ids=[doc["document_id"]], **kwargs
         )
 
-    first = documents["H01"]
+    first = documents.get("H01") or next(iter(documents.values()))
     private = retrieval.search(
         other, company_id="C001", query="档案借阅的条件", document_ids=[first["document_id"]]
     )

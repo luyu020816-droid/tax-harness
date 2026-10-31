@@ -9,6 +9,7 @@ import math
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 
 from app.errors import AppError
@@ -261,6 +262,15 @@ class LocalRetrieval:
         if self.process:
             self.process.close()
         self.inference_pool.shutdown(wait=True, cancel_futures=True)
+
+    @contextmanager
+    def external_work(self):
+        """Release cached native weights while a bounded OCR job uses the CPU."""
+        with self.lock:
+            if self.process:
+                self.process.close()
+                self.process = None
+            yield
 
     def _remote(self, operation, arguments):
         from app.retrieval_process import LocalInferenceProcess

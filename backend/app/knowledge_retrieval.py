@@ -110,6 +110,9 @@ class KnowledgeRetrieval:
         self.selection_policy = selection_policy
 
     def ready(self, *, validate=True):
+        from app.ocr_status import options
+
+        ocr = options(self.settings, validate=validate)
         installed = self.engine.installed()
         profile_id = None
         if validate and installed["dependencies"] and installed["manifest_present"]:
@@ -147,7 +150,14 @@ class KnowledgeRetrieval:
             "selection_policy_id": policy["policy_id"] if policy else None,
             "selection_calibrated": bool(policy) if validate else None,
             "selection_reason": policy_reason,
-            "ocr": False,
+            "ocr": bool(ocr),
+            "ocr_details": {
+                "provider": "PaddleOCR PP-StructureV3",
+                "ready": bool(ocr),
+                "max_pages": self.settings.knowledge_ocr_max_pages,
+                "max_pixels": self.settings.knowledge_ocr_max_pixels,
+                "timeout_seconds": self.settings.knowledge_ocr_timeout,
+            },
             "ready": bool(self.settings.knowledge_enabled and vector and current and policy)
             if validate
             else None,
@@ -302,6 +312,14 @@ class KnowledgeRetrieval:
                         [dense_vector, profile_id, *params],
                     ).fetchall()
                 candidates = fuse(dense, lexical)[:20]
+                if dense_vector and candidates:
+                    distances = conn.execute(
+                        "SELECT target_id,embedding<=>%s::vector AS distance FROM retrieval_embeddings WHERE profile_id=%s AND target_id=ANY(%s::uuid[])",
+                        (dense_vector, profile_id, [c["chunk_id"] for c in candidates]),
+                    ).fetchall()
+                    lookup = {str(r["target_id"]): r["distance"] for r in distances}
+                    for candidate in candidates:
+                        candidate["distance"] = lookup.get(str(candidate["chunk_id"]))
                 coverage["candidate_channels"] = {
                     "dense": [str(c["chunk_id"]) for c in dense],
                     "lexical": [str(c["chunk_id"]) for c in lexical],

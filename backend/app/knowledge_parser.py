@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import uuid
 import zipfile
 from io import BytesIO
 from pathlib import Path
@@ -31,7 +32,7 @@ def inspect_file(name, content):
     suffix = Path(name).suffix.lower()
     if suffix not in MEDIA or not content:
         raise AppError(
-            "DOCUMENT_UNSUPPORTED", "请选择文本PDF、DOCX、UTF-8 Markdown或TXT文件。", 422
+            "DOCUMENT_UNSUPPORTED", "请选择PDF、DOCX、UTF-8 Markdown或TXT文件。", 422
         )
     if suffix == ".pdf" and not content.startswith(b"%PDF-"):
         raise AppError("DOCUMENT_UNSUPPORTED", "文件内容不是有效PDF。", 422)
@@ -64,7 +65,7 @@ def inspect_file(name, content):
     return suffix, MEDIA[suffix]
 
 
-def extract(content, suffix):
+def extract(content, suffix, ocr=None):
     blocks = []
 
     def add(text, kind, heading, locator):
@@ -115,6 +116,13 @@ def extract(content, suffix):
                 {"type": "lines", "from": start, "to": len(lines)},
             )
     elif suffix == ".pdf":
+        if ocr:
+            from app.ocr_pdf import extract_pdf
+
+            result = extract_pdf(content, ocr)
+            if sum(len(b["content"]) for b in result["blocks"]) > 4_000_000:
+                raise AppError("DOCUMENT_TOO_LARGE", "正文超过400万字符，请拆分资料。", 413)
+            return result
         from pypdf import PdfReader
 
         reader = PdfReader(BytesIO(content), strict=True)
@@ -174,29 +182,56 @@ def extract(content, suffix):
     return {"parser_version": PARSER_VERSION, "blocks": blocks}
 
 
-def parse_isolated(content, suffix, timeout=60):
+def parse_isolated(content, suffix, timeout=60, *, ocr=None):
     """Use a killable child; Windows also caps child memory via a Job Object."""
     with tempfile.TemporaryDirectory(prefix="tax-knowledge-") as directory:
         root = Path(directory)
         (root / "input").write_bytes(content)
-        env = {
-            k: v
-            for k, v in os.environ.items()
-            if not k.startswith(("MODEL_", "DATABASE_", "ADMIN_DATABASE_", "INGEST_DATABASE_"))
+        allowed = {
+            "PATH",
+            "SYSTEMROOT",
+            "WINDIR",
+            "TEMP",
+            "TMP",
+            "USERPROFILE",
+            "LOCALAPPDATA",
+            "APPDATA",
+            "PYTHONPATH",
+            "VIRTUAL_ENV",
+            "COMSPEC",
         }
-        process = subprocess.Popen(
-            [sys.executable, "-m", "app.knowledge_parser_worker", str(root), suffix],
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        env = {k: v for k, v in os.environ.items() if k.upper() in allowed}
+        if ocr:
+            (root / "ocr.json").write_text(json.dumps(ocr), encoding="utf-8")
+        # The OCR interpreter deliberately has no editable backend installation.
+        # Resolve this project's parser independently of the caller's cwd/env.
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+        env.update(
+            PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK="1",
+            HF_HUB_OFFLINE="1",
+            TRANSFORMERS_OFFLINE="1",
+            PADDLE_PDX_CACHE_HOME=str(Path(__file__).resolve().parents[2] / ".local/ocr-cache"),
         )
-        job = _limit_windows(process) if os.name == "nt" else None
+        diagnostic = root / "stderr.log"
+        with diagnostic.open("wb") as stderr:
+            process = subprocess.Popen(
+                [
+                    ocr["python"] if ocr else sys.executable,
+                    "-m",
+                    "app.knowledge_parser_worker",
+                    str(root),
+                    suffix,
+                ],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        job = _limit_windows(process, 6144 if ocr else 512) if os.name == "nt" else None
         try:
             process.wait(timeout=timeout)
         except subprocess.TimeoutExpired as exc:
-            process.kill()
-            process.wait()
+            _stop_parser(process)
             raise AppError("DOCUMENT_PARSE_FAILED", "解析超时，请拆分或检查文件。", 422) from exc
         finally:
             if job:
@@ -204,16 +239,42 @@ def parse_isolated(content, suffix, timeout=60):
 
                 ctypes.windll.kernel32.CloseHandle(job)
         output = root / "output.json"
+
+        def details():
+            key = uuid.uuid4().hex
+            directory = Path(__file__).resolve().parents[2] / ".local/parser-diagnostics"
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / (key + ".log")).write_bytes(diagnostic.read_bytes()[-65536:])
+            return {"diagnostic_id": key, "parser_exit_code": process.returncode}
+
         if process.returncode or not output.exists() or output.stat().st_size > 24 * 1024 * 1024:
-            raise AppError("DOCUMENT_PARSE_FAILED", "解析进程未完成或超过资源上限。", 422)
+            raise AppError(
+                "DOCUMENT_PARSE_FAILED", "解析进程未完成或超过资源上限。", 422, details=details()
+            )
         result = json.loads(output.read_text(encoding="utf-8"))
         if result.get("error"):
             error = result["error"]
-            raise AppError(error["code"], error["message"], 422)
+            raise AppError(error["code"], error["message"], 422, details=details())
         return result
 
 
-def _limit_windows(process):
+def _stop_parser(process):
+    if process.poll() is None:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=5,
+                check=False,
+            )
+        if process.poll() is None:
+            process.kill()
+    process.wait(timeout=5)
+
+
+def _limit_windows(process, memory_mb=512):
     import ctypes as c
     from ctypes import wintypes as w
 
@@ -247,15 +308,15 @@ def _limit_windows(process):
     api.CloseHandle.argtypes = [w.HANDLE]
     handle = api.CreateJobObjectW(None, None)
     limits = Extended()
-    limits.basic.flags = 0x100 | 0x2000  # PROCESS_MEMORY | KILL_ON_JOB_CLOSE
-    limits.process_memory = 512 * 1024 * 1024
+    limits.basic.flags = 0x100 | 0x200 | 0x2000  # PROCESS_MEMORY | JOB_MEMORY | KILL_ON_JOB_CLOSE
+    limits.process_memory = memory_mb * 1024 * 1024
+    limits.job_memory = memory_mb * 1024 * 1024
     if (
         not handle
         or not api.SetInformationJobObject(handle, 9, c.byref(limits), c.sizeof(limits))
         or not api.AssignProcessToJobObject(handle, int(process._handle))
     ):
-        process.kill()
-        process.wait()
+        _stop_parser(process)
         if handle:
             api.CloseHandle(handle)
         raise AppError("DEPENDENCY_UNAVAILABLE", "解析隔离资源限制不可用，未执行无约束解析。", 503)
@@ -298,13 +359,67 @@ def chunk_blocks(blocks, title, token_count):
     def emit():
         content = "\n\n".join(p["content"] for p in pending)
         retrieval = title + "\n" + pending[0]["heading_path"] + "\n" + content
+        locators = []
+        for part in pending:
+            locator = part["locator"]
+            if locator.get("extraction") != "ocr":
+                if locator not in locators:
+                    locators.append(locator)
+                continue
+            # Keep full per-block provenance in knowledge_blocks. Citations
+            # carry one enclosing rectangle per page, avoiding repeated model
+            # hashes consuming the evidence budget before any text is returned.
+            page = next(
+                (
+                    p
+                    for p in locators
+                    if p.get("extraction") == "ocr" and p["page"] == locator["page"]
+                ),
+                None,
+            )
+            if page is None:
+                page = {
+                    k: locator[k]
+                    for k in (
+                        "type",
+                        "page",
+                        "unit",
+                        "bbox",
+                        "bbox_unit",
+                        "origin",
+                        "extraction",
+                        "ocr_version",
+                        "confidence_min",
+                        "confidence_mean",
+                        "normalization",
+                    )
+                    if k in locator
+                }
+                page = {
+                    **page,
+                    "bbox": list(page["bbox"]),
+                    "bbox_kind": "enclosing_blocks",
+                    "layout_blocks": [],
+                }
+                locators.append(page)
+            box = page["bbox"]
+            other = locator["bbox"]
+            page["bbox"] = [
+                min(box[0], other[0]),
+                min(box[1], other[1]),
+                max(box[2], other[2]),
+                max(box[3], other[3]),
+            ]
+            page["confidence_min"] = min(page["confidence_min"], locator["confidence_min"])
+            if locator["layout_block"] not in page["layout_blocks"]:
+                page["layout_blocks"].append(locator["layout_block"])
         chunks.append(
             {
                 "ordinal": len(chunks),
                 "content": content,
                 "retrieval_text": retrieval,
                 "block_ordinals": list(dict.fromkeys(p["ordinal"] for p in pending)),
-                "locator": [p["locator"] for p in pending],
+                "locator": locators,
                 "token_count": token_count(retrieval),
                 "content_hash": text_hash(content),
             }

@@ -19,7 +19,12 @@ import psycopg
 from app.cli import initialize
 from app.config import ROOT, Settings
 from app.db import Database
-from app.evidence_selection import SELECTION_VERSION, load_policy
+from app.evidence_selection import (
+    SELECTION_VERSION,
+    SUPPORT_SELECTION_VERSION,
+    load_policy,
+    support_score,
+)
 from app.identity import Identity
 from app.knowledge import Knowledge
 from app.knowledge_jobs import KnowledgeJobs
@@ -54,6 +59,9 @@ class CachedInference:
 
     def profile(self):
         return self.engine.profile()
+
+    def external_work(self):
+        return self.engine.external_work()
 
     def count(self, text):
         return self.engine.count(text)
@@ -263,7 +271,15 @@ def measure(question, bundle, trace, chunks, items):
             remaining -= cost
         if (
             bundle["coverage"].get("selection_cutoff") is not None
-            and candidate.get("rerank_logit", -100) >= bundle["coverage"]["selection_cutoff"]
+            and support_score(
+                candidate,
+                {
+                    "version": bundle["coverage"].get("selection_version"),
+                    "similarity_weight": bundle["coverage"].get("selection_similarity_weight", 0),
+                    "rerank_floor": bundle["coverage"].get("selection_rerank_floor"),
+                },
+            )
+            >= bundle["coverage"]["selection_cutoff"]
         ):
             qualified.append(candidate["chunk_id"])
 
@@ -355,9 +371,7 @@ def main(args):
     }
     evaluator_sha = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     write(args.output / "code-snapshot.json", code_snapshot)
-    suite = json.loads(
-        (ROOT / "evals/retrieval-v1" / f"{args.split}.json").read_text(encoding="utf-8")
-    )
+    suite = json.loads((args.suite_directory / f"{args.split}.json").read_text(encoding="utf-8"))
     suite_sha = digest(suite)
     write(args.output / "frozen-suite.json", suite)
     settings, db = database(Settings(), args.split, args.output)
@@ -380,7 +394,7 @@ def main(args):
         policy, error = load_policy(args.policy, profile_id)
         assert policy, error
         development = json.loads(
-            (ROOT / "evals/retrieval-v1/development.json").read_text(encoding="utf-8")
+            (args.suite_directory / "development.json").read_text(encoding="utf-8")
         )
         assert policy["development_sha256"] == digest(development), (
             "Development fixture does not match locked policy"
@@ -426,6 +440,44 @@ def main(args):
                 "cutoff": cutoff,
                 "calibration": fit,
             }
+            if args.joint_support:
+                trials = []
+                for weight in (0, 4, 8, 16, 32, 64):
+                    for floor in (-8, -6, -4, 0):
+                        signal = {
+                            "version": SUPPORT_SELECTION_VERSION,
+                            "similarity_weight": weight,
+                            "rerank_floor": floor,
+                        }
+                        positive, negative = [], []
+                        for q in questions:
+                            record = json.loads(
+                                (args.output / (q["id"] + "-baseline.json")).read_text(
+                                    encoding="utf-8"
+                                )
+                            )
+                            scored = [
+                                support_score(c, signal)
+                                for c in record["trace"]["candidates"]
+                                if not q["answerable"]
+                                or set(chunks[c["chunk_id"]]["units"]) & set(q["required_units"])
+                            ]
+                            (positive if q["answerable"] else negative).append(
+                                max(scored, default=-100.0)
+                            )
+                        threshold, stats = calibrate(positive, negative)
+                        trials.append({**signal, "cutoff": threshold, "calibration": stats})
+                best = min(
+                    trials,
+                    key=lambda t: (
+                        t["calibration"]["development_false_accepts"],
+                        -t["calibration"]["development_gold_seed_retained"],
+                        t["similarity_weight"],
+                        -t["rerank_floor"],
+                    ),
+                )
+                raw.update(best)
+                write(args.output / "calibration-trials.json", trials)
             write(args.output / "policy.json", raw)
             policy, error = load_policy(args.output / "policy.json", profile_id)
             assert policy, error
@@ -500,6 +552,7 @@ def main(args):
             flush=True,
         )
     finally:
+        engine.engine.close()
         db.close()
 
 
@@ -510,6 +563,8 @@ if __name__ == "__main__":
     parser.add_argument("--policy", type=Path)
     parser.add_argument("--inference-cache", type=Path)
     parser.add_argument("--live-model", action="store_true")
+    parser.add_argument("--suite-directory", type=Path, default=ROOT / "evals/retrieval-v1")
+    parser.add_argument("--joint-support", action="store_true")
     args = parser.parse_args()
     if args.split == "holdout" and not args.policy:
         parser.error("Holdout requires the locked development policy")

@@ -16,6 +16,8 @@ async def check_replies(settings, db, retrieval, suite, output, question_ids=Non
         return {"executed": False, "reason": "chat_model_not_configured"}
     runtime = Runtime(db, settings, HttpModel(settings), retrieval=retrieval)
     chosen = [q for q in suite["questions"] if q["id"] in ("H01Q2", "H03Q2", "H05Q2", "H17Q2")]
+    if not chosen:
+        chosen = [q for index, q in enumerate(suite["questions"]) if index % 4 == 1]
     chosen += [q for q in suite["boundary_questions"] if "query" in q]
     if question_ids:
         chosen = [

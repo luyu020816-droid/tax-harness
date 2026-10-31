@@ -14,13 +14,23 @@ def denied(*args, **kwargs):
 
 
 if __name__ == "__main__":
-    socket.socket = denied
+    socket.socket.connect = denied
+    socket.socket.connect_ex = denied
+    socket.create_connection = denied
     root = Path(sys.argv[1])
     try:
-        result = extract((root / "input").read_bytes(), sys.argv[2])
+        config = (
+            json.loads((root / "ocr.json").read_text(encoding="utf-8"))
+            if (root / "ocr.json").exists()
+            else None
+        )
+        result = extract((root / "input").read_bytes(), sys.argv[2], ocr=config)
     except AppError as exc:
         result = {"error": {"code": exc.code, "message": exc.message}}
     except Exception:
+        import traceback
+
+        traceback.print_exc()
         result = {
             "error": {
                 "code": "DOCUMENT_PARSE_FAILED",

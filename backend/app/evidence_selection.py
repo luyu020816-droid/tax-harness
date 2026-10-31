@@ -8,6 +8,7 @@ from pathlib import Path
 from app.values import digest
 
 SELECTION_VERSION = "structural-groups-v1"
+SUPPORT_SELECTION_VERSION = "structural-groups-v2"
 LIMIT_TOKENS, LIMIT_GROUPS = 3000, 6
 
 
@@ -15,11 +16,22 @@ def load_policy(path, profile_id, *, version=SELECTION_VERSION):
     try:
         policy = json.loads(Path(path).read_text(encoding="utf-8"))
         if (
-            policy["version"] != version
+            policy["version"]
+            not in (
+                (SELECTION_VERSION, SUPPORT_SELECTION_VERSION)
+                if version == SELECTION_VERSION
+                else (version,)
+            )
             or policy["profile_id"] != profile_id
             or policy["mode"] != "hybrid"
             or not math.isfinite(policy["cutoff"])
             or not re.fullmatch(r"[a-f0-9]{64}", policy["development_sha256"])
+        ):
+            return None, "SELECTION_POLICY_MISMATCH"
+        if policy["version"] == SUPPORT_SELECTION_VERSION and (
+            not math.isfinite(policy.get("similarity_weight", float("nan")))
+            or not 0 <= policy["similarity_weight"] <= 64
+            or not math.isfinite(policy.get("rerank_floor", float("nan")))
         ):
             return None, "SELECTION_POLICY_MISMATCH"
         return {**policy, "policy_id": digest(policy)}, None
@@ -97,9 +109,7 @@ def choose_groups(
             lookup.update({str(c["chunk_id"]): key for c in members})
     calibrated = bool(policy and mode == policy["mode"])
     seeds = [
-        c
-        for c in candidates
-        if not calibrated or c.get("rerank_logit", -math.inf) >= policy["cutoff"]
+        c for c in candidates if not calibrated or support_score(c, policy) >= policy["cutoff"]
     ]
     ordered = list(dict.fromkeys(lookup[str(c["chunk_id"])] for c in seeds))
     chosen, trace, consumed = [], [], 0
@@ -125,7 +135,11 @@ def choose_groups(
             consumed += cost
     omitted = any(not g["selected"] for g in trace)
     return chosen, {
-        "selection_version": SELECTION_VERSION,
+        "selection_version": policy.get("version", SELECTION_VERSION)
+        if policy
+        else SELECTION_VERSION,
+        "selection_similarity_weight": policy.get("similarity_weight", 0) if policy else 0,
+        "selection_rerank_floor": policy.get("rerank_floor") if policy else None,
         "selection_calibrated": calibrated,
         "selection_policy_id": policy["policy_id"] if calibrated else None,
         "selection_cutoff": policy["cutoff"] if calibrated else None,
@@ -135,3 +149,15 @@ def choose_groups(
         "budget_incomplete": omitted,
         "qualified_candidates": len(seeds),
     }
+
+
+def support_score(candidate, policy):
+    logit = candidate.get("rerank_logit", -math.inf)
+    if not math.isfinite(logit):
+        return -100.0
+    if policy.get("version") != SUPPORT_SELECTION_VERSION:
+        return logit
+    distance = candidate.get("distance")
+    if logit < policy["rerank_floor"] or distance is None or not math.isfinite(distance):
+        return -100.0
+    return logit + policy["similarity_weight"] * (1 - distance)

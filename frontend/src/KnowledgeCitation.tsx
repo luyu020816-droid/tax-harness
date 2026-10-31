@@ -8,7 +8,7 @@ export function locatorLabel(items: KnowledgeEvidence['locator']) {
     ...new Set(
       items.map((item) =>
         item.type === 'pdf'
-          ? `第${item.page}页`
+          ? `${item.extraction === 'ocr' ? 'OCR识别·' : ''}第${item.page}页`
           : item.type === 'lines'
             ? `第${item.from}—${item.to}行`
             : item.type === 'docx_paragraph'
@@ -81,6 +81,9 @@ export function KnowledgeCitation({
         <ExternalLink size={13} />
       </button>
       {!compact && <blockquote className="knowledge-excerpt">{evidence.excerpt}</blockquote>}
+      {!compact && evidence.locator.some((item) => item.extraction === 'ocr') && (
+        <p className="muted small">扫描件识别文字，请对照原PDF核对。</p>
+      )}
     </section>
   );
 }

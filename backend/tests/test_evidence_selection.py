@@ -31,6 +31,16 @@ def candidate(identity, score=5):
 POLICY = {"policy_id": "policy-test", "mode": "hybrid", "cutoff": 2}
 
 
+def test_joint_support_requires_both_finite_dense_and_rerank_floor():
+    from app.evidence_selection import SUPPORT_SELECTION_VERSION, support_score
+
+    policy = {"version": SUPPORT_SELECTION_VERSION, "similarity_weight": 64, "rerank_floor": -6}
+    assert support_score({"rerank_logit": -5, "distance": 0.2}, policy) == pytest.approx(46.2)
+    assert support_score({"rerank_logit": -7, "distance": 0}, policy) < -90
+    assert support_score({"rerank_logit": 5}, policy) < -90
+    assert support_score({"rerank_logit": 5, "distance": float("nan")}, policy) < -90
+
+
 def test_exception_subheading_follows_main_clause_across_chunks():
     blocks = [block(0, "## 第1条 规定"), block(1, "### 例外与限制"), block(2, "## 第2条 其他")]
     chunks = [chunk("main", 0, [0]), chunk("exception", 1, [1]), chunk("other", 2, [2])]

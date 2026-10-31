@@ -35,9 +35,16 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     knowledge_enabled: bool = True
     knowledge_model_directory: Path = ROOT / ".local/retrieval-models"
-    knowledge_selection_policy: Path = ROOT / "evals/retrieval-v1/selection-policy.json"
+    knowledge_selection_policy: Path = ROOT / "evals/retrieval-v2/selection-policy.json"
     knowledge_max_file_bytes: int = Field(default=20 * 1024 * 1024, ge=1024, le=20 * 1024 * 1024)
     knowledge_parser_timeout: int = Field(default=60, ge=1, le=120)
+    knowledge_ocr_enabled: bool = True
+    knowledge_ocr_runtime: Path = ROOT / ".local/ocr-runtime"
+    knowledge_ocr_model_directory: Path = ROOT / ".local/ocr-models"
+    knowledge_ocr_timeout: int = Field(default=600, ge=60, le=600)
+    knowledge_ocr_max_pages: int = Field(default=50, ge=1, le=50)
+    knowledge_ocr_max_pixels: int = Field(default=20_000_000, ge=1_000_000, le=20_000_000)
+    knowledge_ocr_min_confidence: float = Field(default=0.75, ge=0.5, le=0.99)
     knowledge_lease_seconds: int = Field(default=90, ge=30)
     history_enabled: bool = True
     history_selection_policy: Path = ROOT / "evals/history-v1/selection-policy.json"

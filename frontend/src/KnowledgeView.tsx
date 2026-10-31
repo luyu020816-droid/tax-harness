@@ -151,7 +151,7 @@ function UploadKnowledge({
           </label>
         </div>
         <p className="muted small">
-          支持文本PDF、DOCX、Markdown和TXT；扫描页需要后续OCR支持。资料用于检索问答，不会自动变更业务规则。
+          支持PDF、DOCX、Markdown和TXT；扫描页需启用本地识别，低质量或复杂版面会提示处理失败。资料用于检索问答，不会自动变更业务规则。
         </p>
         {error && (
           <p className="error-note" role="alert">
@@ -386,7 +386,7 @@ export function KnowledgeView({
         <div className="empty-panel">
           <BookOpen size={30} />
           <h3>还没有可见的知识资料</h3>
-          <p>上传制度或文本PDF，完成索引后即可检索、引用。</p>
+          <p>上传制度或PDF，完成索引后即可检索、引用。</p>
         </div>
       ) : (
         <div className="memory-list">
