@@ -1,0 +1,69 @@
+{
+  "date": "2026-10-31",
+  "implementation_commit": "cbcaa14",
+  "code_fingerprint": "e7debc6039345deb283bcae1a1d092d2fbfb76535be54380bf77955c7920a960",
+  "scope": "Code and original execution evidence only; not a competition compliance or award certificate",
+  "program_tests": {
+    "passed": 280,
+    "log_sha256": "273f9d61ca22afc6441cfe16f78c0b1a280a2e1a34dd647258c7abce7467eda9"
+  },
+  "live_business": {
+    "passed": 39,
+    "total": 40,
+    "human_success_rate": null,
+    "failures": [
+      {
+        "case_id": "L08-02",
+        "automatic_failures": [
+          "step 1: Turn ended with failed",
+          "Turn ended with failed"
+        ]
+      }
+    ]
+  },
+  "history_replays": [
+    {
+      "passed": 8,
+      "total": 8,
+      "native_restarts": 0,
+      "same_frozen_corpus": true
+    },
+    {
+      "passed": 8,
+      "total": 8,
+      "native_restarts": 0,
+      "same_frozen_corpus": true
+    },
+    {
+      "passed": 8,
+      "total": 8,
+      "native_restarts": 0,
+      "same_frozen_corpus": true
+    }
+  ],
+  "fault_rehearsal": {
+    "passed": 10,
+    "tables": 56,
+    "fingerprint": "227a55800d7a9aea847e6b219e92b1e831bac327100ac6f66fede6e50a2ec9ba"
+  },
+  "red_before_fix": {
+    "raw_protocol_counterexamples": 6,
+    "unrelated_preference_suppression_reproduced": true
+  },
+  "summary_negative_control": {
+    "kind": "negative_control_not_quality_pass",
+    "summary_published": true,
+    "source_labels_retained": true,
+    "critical_fact_absent_from_summary": true,
+    "original_text_preserved": true,
+    "limitation_reproduced": true
+  },
+  "open_limits": [
+    "unrecognized or unexecuted sub-intents",
+    "summary semantic coverage and per-fact history suppression",
+    "knowledge conclusions vs source presentation",
+    "native CPU crash root cause and broad unseen-input quality",
+    "L08-02 invalid history view repair escalates into unnecessary date queries and context exhaustion"
+  ],
+  "human_semantic_acceptance": "pending"
+}
