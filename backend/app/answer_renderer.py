@@ -133,6 +133,68 @@ def _result_text(data, view):
     missing("不支持该结果视图。")
 
 
+def _validate_delivery(conn, execution, plan, reply, outputs):
+    """A true selected result is insufficient if other executed work is hidden.
+
+    The durable execution ledger outlives dropped context groups. It records
+    performed work, not a claim that every natural-language intent was found.
+    """
+    delivered = {(c["kind"], c.get("company_id"), c.get("period")) for c in reply.cards}
+    missing_results = set()
+    for row in conn.execute(
+        "SELECT e.name,e.arguments FROM tool_executions e JOIN runs r USING(run_id) "
+        "WHERE r.turn_id=%s AND e.state='done' AND e.name IN ('query_month','check_purposes')",
+        (execution.turn_id,),
+    ).fetchall():
+        kind = {"query_month": "monthly_summary", "check_purposes": "purpose_check"}[row["name"]]
+        identity = (kind, row["arguments"]["company_id"], row["arguments"]["period"])
+        if identity not in delivered:
+            missing_results.add(identity)
+    delivered_operations = {str(c["operation_id"]) for c in reply.cards if c["kind"] == "operation"}
+    missing_operations = [
+        str(r["operation_id"])
+        for r in conn.execute(
+            "SELECT operation_id FROM operations WHERE user_id=%s AND source_id=%s AND state IN ('committed','no_change') ORDER BY committed_at",
+            (execution.auth.user_id, execution.source_id),
+        ).fetchall()
+        if str(r["operation_id"]) not in delivered_operations
+    ]
+    delivered_preferences = {
+        str(outputs[str(b.result_ref)]["data"]["preference_id"])
+        for b in plan.blocks
+        if b.type == "preference_receipt"
+    }
+    missing_preferences = [
+        str(r["result_ref"]["preference_id"])
+        for r in conn.execute(
+            "SELECT result_ref FROM memory_change_ops WHERE user_id=%s AND target_type='preference' AND state='committed' AND request_id LIKE %s",
+            (execution.auth.user_id, f"tool:{execution.source_id}:%"),
+        ).fetchall()
+        if str(r["result_ref"]["preference_id"]) not in delivered_preferences
+    ]
+    from app.history_retrieval import continuation_in
+
+    continuation = continuation_in(conn, execution)
+    if continuation and not any(c["kind"] == "history_page" for c in reply.cards):
+        missing_results.add(("history_page", continuation.get("company_id"), None))
+    if missing_results or missing_operations or missing_preferences:
+        raise AppError(
+            "REPLY_EVIDENCE_MISSING",
+            "最终答复遗漏本轮已执行结果、已提交回执或请求的续页。未交付成功，请补齐真实依据；已提交数据不得重复修改。",
+            422,
+            details={
+                "results": [
+                    {"view": kind, "company_id": company, "period": period}
+                    for kind, company, period in sorted(missing_results)
+                ],
+                "operation_ids": missing_operations,
+                "preference_ids": missing_preferences,
+                **({"history_arguments": continuation} if continuation else {}),
+                "instruction": "选择本轮已入模的完整结果及回执；旧结果不在当前输入时先重新读取。不要通过重写措辞或无关说明绕过缺项。",
+            },
+        )
+
+
 def render(conn, execution, plan, payload, manifest):
     outputs = _results(conn, execution, payload)
     state = json.loads(payload["messages"][0]["content"].split("\n正式状态：\n", 1)[1])
@@ -331,6 +393,7 @@ def render(conn, execution, plan, payload, manifest):
         }.values()
     )
     reply.displayed_view_ids = [c["view_id"] for c in reply.cards if c.get("view_id")]
+    _validate_delivery(conn, execution, plan, reply, outputs)
     return reply
 
 

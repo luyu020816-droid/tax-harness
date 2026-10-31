@@ -100,7 +100,6 @@ def suppress_old_history(
     *,
     kind=None,
     target_id=None,
-    obsolete_value=None,
     before_seq=None,
 ) -> None:
     ids = [str(r["source_id"]) for r in refs]
@@ -110,12 +109,9 @@ def suppress_old_history(
             "UPDATE sources SET recall_state='suppressed' WHERE user_id=%s AND source_id=ANY(%s::uuid[])",
             (auth.user_id, ids),
         )
-    if obsolete_value and before_seq:
-        conn.execute(
-            "UPDATE sources SET recall_state='suppressed' WHERE user_id=%s AND source_seq<%s "
-            "AND position(lower(%s) in lower(content))>0",
-            (auth.user_id, before_seq, obsolete_value),
-        )
+    # Invalidate provenance and actual dependents, never all messages containing
+    # the same words. A preference value may also be an unrelated business name
+    # in another company; substring equality is not a dependency relationship.
     if kind and target_id and before_seq:
         conn.execute(
             "UPDATE sources SET recall_state='suppressed' WHERE user_id=%s AND role<>'user' AND source_seq<%s "

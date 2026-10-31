@@ -96,7 +96,6 @@ def change_preference(
                 old["source_refs"],
                 kind="preference",
                 target_id=old["preference_id"],
-                obsolete_value=old["value"],
                 before_seq=change["source_seq"],
             )
             result = conn.execute(

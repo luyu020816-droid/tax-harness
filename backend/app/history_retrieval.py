@@ -235,6 +235,58 @@ def navigation_in(conn, auth, session_id, selected_company, epoch, before):
     )
 
 
+def continuation_in(conn, execution):
+    """Resolve explicit page controls against the last *published* page.
+
+    This narrow control grammar is not general intent recognition. An explicit
+    change of dates/company is a new search and must not inherit an old cursor.
+    """
+    source = read_source(conn, execution.auth, execution.source_id, allow_suppressed=True)
+    clauses = re.split(r"[，,。；;！!\n]", source["content"])
+    if not any(
+        re.fullmatch(r"(?:请|再|继续|接着|往后|翻到|给我|查看|看|翻)*(?:下一页|下页)", c.strip())
+        for c in clauses
+    ):
+        return None
+    if re.search(r"\d{4}\s*(?:年|[-/])\s*\d{1,2}|\d{1,2}\s*月", source["content"]):
+        return None
+    session = owned(conn, "sessions", "session_id", execution.session_id, execution.auth)
+    epoch = conn.execute(
+        "SELECT memory_epoch FROM users WHERE user_id=%s", (execution.auth.user_id,)
+    ).fetchone()["memory_epoch"]
+    navigation = navigation_in(
+        conn,
+        execution.auth,
+        execution.session_id,
+        session["selected_company_id"],
+        epoch,
+        execution.source_seq,
+    )
+    page = (navigation or {}).get("page")
+    if not page:
+        published = conn.execute(
+            "SELECT 1 FROM turns WHERE user_id=%s AND session_id=%s AND status='completed' AND source_seq<%s "
+            'AND final_cards @> \'[{"kind":"history_page"}]\'::jsonb LIMIT 1',
+            (execution.auth.user_id, execution.session_id, execution.source_seq),
+        ).fetchone()
+        if published:
+            raise AppError(
+                "SOURCE_INVALIDATED",
+                "历史导航已因范围、记忆或权限变化失效，请明确发起新的历史查找。",
+                409,
+            )
+        return None
+    from app.turns import mentioned_companies
+
+    companies = mentioned_companies(conn, source["content"])
+    expected = page["arguments"]
+    if companies and set(companies) != set(
+        expected.get("company_ids") or [expected.get("company_id")]
+    ):
+        return None
+    return expected
+
+
 class HistoryRetrieval:
     def __init__(self, db, settings, engine, *, selection_policy=None):
         self.db, self.settings, self.engine = db, settings, engine

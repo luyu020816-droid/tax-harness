@@ -322,6 +322,19 @@ class ToolExecutor:
             return InvoiceImports(db).get(auth, args["batch_id"], args.get("cursor", 0))
         with db.transaction(readonly=True) as conn:
             original = read_source(conn, auth, execution.source_id)["content"]
+            from app.history_retrieval import continuation_in
+
+            continuation = continuation_in(conn, execution)
+            if continuation and args.get("cursor") != continuation["cursor"]:
+                raise AppError(
+                    "HISTORY_CONTINUATION_REQUIRED",
+                    "本轮要求继续已展示的历史页，不能省略或替换游标后重查第一页。",
+                    422,
+                    details={
+                        "arguments": continuation,
+                        "instruction": "使用这些已核验的完整参数调用search_history；末页也应保持游标，不能重回第一页。",
+                    },
+                )
             cursor_scope = None
             if args.get("cursor"):
                 try:
