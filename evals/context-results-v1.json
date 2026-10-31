@@ -1,0 +1,60 @@
+{
+  "date": "2026-10-31",
+  "final_code_fingerprint": "e9e3db8725f4d580c3bdd91925ebe01b1a8811b05cb15c14c181296950894de8",
+  "human_review": "pending",
+  "native_root_cause_closed": false,
+  "native_switches": {
+    "cycles": 18,
+    "restarts": 0
+  },
+  "native_concurrent": {
+    "callers": 4,
+    "restarts": 0,
+    "seconds": 64.953,
+    "profile_id": "0892c00a8c75451a31c3f1be37bb51ce1c10814c1074188d2d789283b5824446"
+  },
+  "agent_rehearsal": {
+    "passed": 7,
+    "total": 8,
+    "native_restarts": 0,
+    "code_fingerprint": "a5acc6fab1d7eda2aa10faa0aceb78ad1f9edacf8d7e65095ffb66fdf3b32114"
+  },
+  "business_single_run": {
+    "automatic_passes": 40,
+    "code_fingerprint": "215c3aca3a21fc8f4c127801678388d4961d31ac4edd10ce7e4bf6573812d48a",
+    "full_40_by_3": false,
+    "final_success_rate": null
+  },
+  "long_context_repetitions": [
+    {
+      "passed": 4,
+      "checks": 4,
+      "code_fingerprint": "9453b81e9ee5edcce14eb0001c3b141fe75995353f63aa488633110f87988cd9",
+      "scope": "Real model/runtime with deliberately seeded public synthetic long history; not naturally accumulated production conversations."
+    },
+    {
+      "passed": 4,
+      "checks": 4,
+      "code_fingerprint": "9453b81e9ee5edcce14eb0001c3b141fe75995353f63aa488633110f87988cd9",
+      "scope": "Real model/runtime with deliberately seeded public synthetic long history; not naturally accumulated production conversations."
+    },
+    {
+      "passed": 4,
+      "checks": 4,
+      "code_fingerprint": "9453b81e9ee5edcce14eb0001c3b141fe75995353f63aa488633110f87988cd9",
+      "scope": "Real model/runtime with deliberately seeded public synthetic long history; not naturally accumulated production conversations."
+    }
+  ],
+  "remaining": [
+    "Native access violation not reproduced/root cause unclosed",
+    "History date_end omitted cursor in rehearsal (7/8)",
+    "One of three long replies omitted monthly check while returning correct F002 data",
+    "Team semantic acceptance and full competition acceptance pending"
+  ],
+  "notes": "Public synthetic histories deliberately seeded to force compaction. Repeated same scenarios are not independent holdout scores. Business and live probes precede final error-message-only compatibility change; code fingerprints retained.",
+  "final_program_regression": {
+    "passed": 257,
+    "seconds": 317.33,
+    "code_fingerprint": "e9e3db8725f4d580c3bdd91925ebe01b1a8811b05cb15c14c181296950894de8"
+  }
+}

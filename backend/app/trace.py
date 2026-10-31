@@ -6,6 +6,14 @@ from app.values import jsonb, safe_json, uid
 
 
 def record_context(conn, execution: Execution, step: int, payload: dict, manifest: dict) -> str:
+    # A runtime step can make several bounded compaction requests. Give every
+    # actual request its own monotonically increasing trace position.
+    previous = conn.execute(
+        "SELECT coalesce(max(model_step),0) AS n FROM context_snapshots WHERE run_id=%s",
+        (execution.run_id,),
+    ).fetchone()["n"]
+    manifest = {**manifest, "runtime_step": step}
+    step = max(step, previous + 1)
     context_id = uid()
     conn.execute(
         "INSERT INTO context_snapshots(context_id,run_id,model_step,payload,payload_hash,manifest,token_count,count_kind) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",

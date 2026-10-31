@@ -163,10 +163,15 @@ async def run(args):
                 ),
                 "policy_id": policy["policy_id"],
                 "inference_counts": engine.counts,
+                "native_restarts": engine.engine.process.restarts if engine.engine.process else 0,
                 "scope": "Supplemental live Agent rehearsal in a fresh database with the same frozen synthetic corpus and actual profile-bound inference cache; not a new independent holdout score. Final natural-language semantic acceptance is pending.",
             },
         )
+        if not all(r["pass"] for r in records):
+            raise SystemExit(1)
     finally:
+        if "engine" in locals():
+            engine.engine.close()
         db.close()
 
 

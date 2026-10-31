@@ -146,7 +146,10 @@ def assemble(
         if summary:
             for ref in summary["covered_sources"]:
                 try:
-                    read_source(conn, execution.auth, ref["source_id"])
+                    cited = read_source(conn, execution.auth, ref["source_id"])
+                    if cited["revision"] != ref["revision"]:
+                        summary = None
+                        break
                 except AppError:
                     summary = None
                     break
@@ -208,6 +211,8 @@ def assemble(
         {"source_id": execution.source_id, "revision": source["revision"], "allow_suppressed": True}
     ]
     refs.extend(ref for g in [*selected, *groups] for ref in g.get("sources", []))
+    if summary:
+        refs.extend(summary["covered_sources"])
     heads = dict(core["company_heads"])
     evidence = core.get("task_evidence")
     rule_refs = list(evidence["rule_refs"]) if evidence else []

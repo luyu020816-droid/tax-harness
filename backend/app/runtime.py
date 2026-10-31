@@ -216,6 +216,20 @@ class Runtime:
                 await heartbeat
 
     async def _loop(self, execution):
+        from types import SimpleNamespace
+
+        model_calls = 0
+
+        async def complete(payload):
+            nonlocal model_calls
+            if model_calls >= self.settings.max_model_steps:
+                raise AppError(
+                    "RUN_LIMIT_EXCEEDED", "本轮模型调用预算已用尽，已保存状态仍保留。", 422
+                )
+            model_calls += 1
+            return await self.model.complete(payload)
+
+        budgeted_model = SimpleNamespace(complete=complete)
         groups = []
         tool_count = 0
         retry_used = False
@@ -249,7 +263,7 @@ class Runtime:
 
                 compaction_attempted = True
                 try:
-                    await compact(self.db, self.settings, self.model, execution, _dropped, step)
+                    await compact(self.db, self.settings, budgeted_model, execution, _dropped, step)
                 except AppError as exc:
                     if exc.code in ("SOURCE_INVALIDATED", "STALE_CONTEXT"):
                         raise
@@ -268,7 +282,7 @@ class Runtime:
                 context_id = record_context(conn, execution, step, payload, manifest)
             started = time.monotonic()
             try:
-                response = await self.model.complete(payload)
+                response = await complete(payload)
             except AppError as exc:
                 if exc.code == "CONTEXT_CAPACITY_EXCEEDED" and budget is None:
                     budget = int(self.settings.context_budget * 0.7)
