@@ -1,5 +1,7 @@
 # 知识检索依赖、迁移与验证
 
+2026-10-31更新：完整安装（含独立OCR）与恢复以[当前部署说明](PATCH002_DEPLOYMENT.md)为准，知识默认选择策略已切到retrieval-v2；本文保留此前BGE安装与迁移细节。
+
 适用：本次已验证的Windows x64 / Python 3.12 / PostgreSQL 16.15。整改目录`D:\tax-harness-remediation`，数据库54338，预览8105。原54337和朋友8104不受本批变更影响。Linux/Compose组合尚未验收。
 
 ## 1. 独立依赖

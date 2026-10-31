@@ -1,0 +1,96 @@
+{
+  "date": "2026-10-31",
+  "implementation_commit": "15850bf",
+  "code_fingerprint": "e0829d442ea35e85a1a03dee5366415636b0ba712037af48f0405b182b8515af",
+  "model_id": "deepseek-v4-flash",
+  "program_tests": {
+    "passed": 264,
+    "log_sha256": "6a586f9d6bef54fb6dc1eb8f7d3007b4d9bea60d1c7ddda05391dc130cbe8792"
+  },
+  "live_business": {
+    "passed": 40,
+    "total": 40,
+    "human_success_rate": null
+  },
+  "knowledge": {
+    "original_independent_score": "47/48 unchanged",
+    "frozen_suite_sha256": "6ab0ff33dc3681270ce3cb3d47286d6165bd172435bf57ad42a00fbbbbd5c067",
+    "profile_id": "0892c00a8c75451a31c3f1be37bb51ce1c10814c1074188d2d789283b5824446",
+    "policy_id": "e2ba520edba7a936eb8852491ac0a25fc6022108c834357fd1c5840bf0e8d7a6",
+    "final_same_frozen_suite_replay": {
+      "questions": 24,
+      "answerable": 16,
+      "unanswerable": 8,
+      "lexical_recall20": 0.9375,
+      "dense_recall20": 1.0,
+      "rrf_recall20": 1.0,
+      "reranked_recall20": 1.0,
+      "lexical_ndcg10": 0.8193238690778336,
+      "dense_ndcg10": 1.0,
+      "rrf_ndcg10": 0.9322692221534029,
+      "reranked_ndcg10": 0.9949825493217617,
+      "complete_evidence": 1.0,
+      "legacy_topk_complete_evidence": 1.0,
+      "unexpanded_filtered_complete_evidence": 0.8125,
+      "citation_checks": 1.0,
+      "unanswerable_retained_evidence": 0,
+      "unanswerable_no_evidence_rate": 1.0,
+      "paired_recall_rrf_minus_lexical": {
+        "mean_difference": 0.0625,
+        "lower_95": 0.0,
+        "upper_95": 0.15625,
+        "families": 8,
+        "method": "paired_document_family_percentile_bootstrap",
+        "seed": 20261030,
+        "samples": 2000
+      },
+      "paired_ndcg_reranked_minus_rrf": {
+        "mean_difference": 0.06271332716835884,
+        "lower_95": 0.01534808558274385,
+        "upper_95": 0.125295733548029,
+        "families": 8,
+        "method": "paired_document_family_percentile_bootstrap",
+        "seed": 20261030,
+        "samples": 2000
+      }
+    },
+    "boundaries": {
+      "passed": 10,
+      "total": 10
+    },
+    "live_agent": {
+      "passed": 12,
+      "total": 12
+    },
+    "human_semantic_review": "pending"
+  },
+  "fault_recovery": {
+    "passed": 10,
+    "tables": 56,
+    "fingerprint": "674d6b0ca55f95a9f49c1037f5169fb107d4f367dcd13257ff8653e513cc6122",
+    "chat_model": "not used in fault injection; actual BGE vectors"
+  },
+  "clean_deployment": {
+    "pass": true,
+    "platform": "Windows x64 / Python 3.12 / native PostgreSQL 16",
+    "fresh_venvs": 2,
+    "database_port": 54339,
+    "http_port": 8106,
+    "real_model_turns": 2,
+    "source_archive_sha256": "0b8744091b511743cdcdd87c37bf104fb909c86cb6dfc91d8f4214a9de5b976b",
+    "scope": "Clean directory on same Windows machine; public binary/weight cache imported; not another OS or Docker."
+  },
+  "ocr_browser": {
+    "passed": 1,
+    "scope": "real synthetic scanned PDF; desktop and 390px; source fidelity human review pending"
+  },
+  "manual_start_ready": true,
+  "open_items": [
+    "native CPU crash root cause",
+    "history last-page cursor omission",
+    "complex multi-intent omission",
+    "real-source OCR and final semantic human signoff",
+    "extended import live validation and remaining UI matrix",
+    "competition package/video/submission"
+  ]
+}

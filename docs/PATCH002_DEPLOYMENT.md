@@ -36,7 +36,7 @@ PDF 原文件是权威来源，扫描识别文本是派生内容。支持文本�
 
 ## 就绪与降级
 
-`/api/v1/ready` 检查核心数据库与模型配置；知识的完整验证接口检查 BGE profile、选择策略、向量存储，OCR 独立报告可执行文件、固定包版本及模型校验。OCR缺失不能冒充“识别完成”；embedding缺失不会生成假向量。业务SQL查询不依赖知识向量。底层依赖故障与无答案分别返回 unavailable/partial 和 not_found。
+`/api/v1/ready` 检查核心数据库与模型配置，知识快速状态标明not_checked；完整程序校验 `KnowledgeRetrieval.ready(validate=True)` 检查 BGE profile、选择策略、向量存储，OCR 独立检查可执行文件、固定包版本及模型hash。配置存在不等于接口在线，模型在线性由真实调用另验。OCR缺失不能冒充“识别完成”；embedding缺失不会生成假向量。业务SQL查询不依赖知识向量。底层依赖故障与无答案分别返回 unavailable/partial 和 not_found。
 
 ## 备份与恢复
 
