@@ -117,6 +117,7 @@ export interface Turn {
   final_message: string | null;
   final_cards: ResultCard[];
   next_event_seq: number;
+  active_run_generation: number;
   selected_company_id?: string | null;
   error: { code: string; message: string } | null;
   runs?: { run_id: string; state: string }[];

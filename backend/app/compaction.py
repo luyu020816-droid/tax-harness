@@ -6,6 +6,7 @@ from app.events import emit
 from app.execution import guard
 from app.model_requests import build_request
 from app.sources import read_source
+from app.summary_evidence import collect, pack, unpack
 from app.trace import record_context
 from app.values import canonical, digest, jsonb, safe_json, uid
 
@@ -108,6 +109,17 @@ async def _complete_candidate(db, model, execution, step, payload, manifest):
 def _decode(response):
     try:
         data = json.loads(response["message"].get("content") or "")
+        # Observed provider shape: [["s1", "s2"]]. A single list wrapper
+        # has an unambiguous equivalent; actual IDs still require exact coverage
+        # below. Never infer missing labels, flatten recursively or accept extras.
+        labels = data["covered_sources"]
+        if (
+            isinstance(labels, list)
+            and len(labels) == 1
+            and isinstance(labels[0], list)
+            and all(isinstance(v, str) for v in labels[0])
+        ):
+            data["covered_sources"] = labels[0]
         if (
             response["message"].get("tool_calls")
             or not isinstance(data["summary"], str)
@@ -141,8 +153,13 @@ async def compact(db, settings, model, execution, groups, step: int) -> bool:
                 source = read_source(conn, execution.auth, ref["source_id"])
                 if source["revision"] != ref["revision"]:
                     raise AppError("SOURCE_INVALIDATED", "旧摘要来源已变化。", 409)
-            text, processed = previous["content"], previous["covered_sources"]
+            packet = unpack(previous["content"])
+            text = packet["navigation"] if packet else previous["content"]
+            processed = previous["covered_sources"]
     refs = list({ref["source_id"]: ref for ref in [*processed, *refs]}.values())
+    with db.transaction() as conn:
+        guard(conn, execution)
+        protected = collect(conn, execution, refs, settings.summary_evidence_budget)
     pending = list(groups)
     batches = 0
     requests = 0
@@ -206,7 +223,9 @@ async def compact(db, settings, model, execution, groups, step: int) -> bool:
                 or not current < expected
                 or requests >= settings.max_model_steps - step
             ):
-                raise AppError("SUMMARY_INVALID", "摘要格式或来源覆盖无效，旧视图和原文已保留。", 422)
+                raise AppError(
+                    "SUMMARY_INVALID", "摘要格式或来源覆盖无效，旧视图和原文已保留。", 422
+                )
             repair = build_request(
                 settings,
                 [
@@ -269,7 +288,7 @@ async def compact(db, settings, model, execution, groups, step: int) -> bool:
                 scope,
                 jsonb(refs),
                 execution.expected_epoch,
-                text,
+                pack(text, protected),
                 generation,
             ),
         )
@@ -290,6 +309,7 @@ async def compact(db, settings, model, execution, groups, step: int) -> bool:
                     "generation": generation,
                     "batches": batches,
                     "requests": requests,
+                    "protected_excerpts": len(protected),
                 }
             ),
         )

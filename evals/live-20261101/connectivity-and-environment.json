@@ -1,0 +1,42 @@
+{
+  "initial_probe": {
+    "mode": "live",
+    "connected": false,
+    "error": {
+      "code": "MODEL_UNAVAILABLE",
+      "message": "模型连接暂时不可用，已保留本轮进度。",
+      "retryable": true,
+      "details": {}
+    }
+  },
+  "retry": {
+    "attempts": [
+      {
+        "route": "default",
+        "model_id": "deepseek-flash",
+        "mode": "live",
+        "time_utc": "2026-11-01T02:51:03.462032+00:00",
+        "connected": true,
+        "usage": {
+          "prompt_tokens": 40,
+          "completion_tokens": 5,
+          "total_tokens": 45,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "prompt_cache_hit_tokens": 0,
+          "prompt_cache_miss_tokens": 40
+        },
+        "finish_reason": "stop"
+      }
+    ]
+  },
+  "prerequisite_failure": {
+    "business_cases_completed": 0,
+    "cause": "PostgreSQL was not running, causing connection timeouts; the incomplete test process tree was stopped.",
+    "recovery": "Started the project PostgreSQL with the existing data directory and waited for automatic recovery. The start helper timed out after 40s, but PostgreSQL continued recovery and became ready.",
+    "database_ready_log_utc": "2026-11-01 03:00:42.040 UTC",
+    "data_reset": false,
+    "first_attempt_directory": ".local/live-20261101-r1"
+  }
+}

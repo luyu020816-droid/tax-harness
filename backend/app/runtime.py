@@ -215,6 +215,39 @@ class Runtime:
             with suppress(asyncio.CancelledError):
                 await heartbeat
 
+    def _recovery_results(self, execution):
+        """Read durable results before asking the model to resume an old source."""
+        with self.db.transaction(readonly=True) as conn:
+            rows = conn.execute(
+                "SELECT operation_id FROM operations WHERE user_id=%s AND source_id=%s ORDER BY committed_at",
+                (execution.auth.user_id, execution.source_id),
+            ).fetchall()
+        if len(rows) > self.settings.max_tool_calls:
+            raise AppError("RUN_LIMIT_EXCEEDED", "恢复核验超出工具预算，请分批核对原操作。", 422)
+        groups = []
+        for row in rows:
+            call = {
+                "id": uid(),
+                "type": "function",
+                "function": {
+                    "name": "get_invoice_operation",
+                    "arguments": canonical({"operation_id": str(row["operation_id"])}),
+                },
+            }
+            output, ref = self.tools.execute(execution, call)
+            groups.append(
+                {
+                    "messages": [
+                        {"role": "assistant", "content": None, "tool_calls": [call]},
+                        {"role": "tool", "tool_call_id": call["id"], "content": canonical(output)},
+                    ],
+                    "sources": [ref],
+                    "results": [output],
+                    "memory_epoch": execution.expected_epoch,
+                }
+            )
+        return groups
+
     async def _loop(self, execution):
         from types import SimpleNamespace
 
@@ -232,6 +265,9 @@ class Runtime:
         budgeted_model = SimpleNamespace(complete=complete)
         groups = []
         tool_count = 0
+        if execution.generation > 1:
+            groups = await asyncio.to_thread(self._recovery_results, execution)
+            tool_count = sum(len(g["results"]) for g in groups)
         retry_used = False
         stale_retry = False
         reply_retries = 0
@@ -258,7 +294,12 @@ class Runtime:
                     )
                 else:
                     raise
-            if _dropped and not compaction_attempted and step < self.settings.max_model_steps:
+            if (
+                _dropped
+                and self.settings.context_auto_compact
+                and not compaction_attempted
+                and step < self.settings.max_model_steps
+            ):
                 from app.compaction import compact
 
                 compaction_attempted = True

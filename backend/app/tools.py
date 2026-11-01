@@ -167,6 +167,10 @@ class ToolExecutor:
 
     def _dispatch(self, execution, name, args):
         db, auth = self.db, execution.auth
+        if name == "search_history" and not self.retrieval.settings.context_history_search:
+            raise AppError("TOOL_DISABLED", "本输入策略未启用历史搜索，请使用已有依据或追问。", 422)
+        if name == "read_summary_source" and not self.retrieval.settings.context_use_summary:
+            raise AppError("TOOL_DISABLED", "本输入策略未启用摘要。", 422)
         if args.get("company_id") and name in (
             "query_month",
             "find_invoices",
@@ -221,8 +225,16 @@ class ToolExecutor:
                     "资料或附件问答轮次只读。请在单独消息中明确修改任务、偏好或既有发票。",
                     409,
                 )
-        if name in ("search_knowledge", "read_evidence", "search_history", "read_history"):
+        if name in (
+            "search_knowledge",
+            "read_evidence",
+            "search_history",
+            "read_history",
+            "read_summary_source",
+        ):
             execution.reference_context = True
+        if name == "read_summary_source":
+            return self.history.read_summary(execution, **args)
         if name == "read_history":
             result = self.history.read(auth, args["citation_id"], char_start=args.get("char_start"))
             return {k: v for k, v in result.items() if k != "excerpt"}

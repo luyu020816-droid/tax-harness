@@ -1,7 +1,8 @@
-"""Reproduce a semantic limitation, not a summary-quality passing score.
+"""Inject a lossy narrative and verify deterministic excerpt protection.
 
 Uses a deliberately incomplete injected summary in a fresh isolated database.
-No live model or private text. Exit 0 means the limitation was reproduced.
+No live model or private text. Exit 0 means the missing narrative facts survived
+in checked verbatim excerpts. This is not a universal semantic-quality score.
 """
 
 import argparse
@@ -14,6 +15,7 @@ from app.config import Settings
 from app.identity import Identity, create_session
 from app.runtime import Runtime
 from app.sources import add_source, assess, next_sequence
+from app.summary_evidence import unpack
 from app.turns import accept_turn
 from app.values import uid
 from evaluate_retrieval import database, write
@@ -70,28 +72,30 @@ async def main(args):
             raw = conn.execute(
                 "SELECT content FROM sources WHERE source_id=%s", (source["source_id"],)
             ).fetchone()["content"]
+        packet = unpack(summary["content"])
+        quotes = "".join(u["quote"] for u in packet["protected_excerpts"])
         observation = {
-            "kind": "negative_control_not_quality_pass",
+            "kind": "lossy_navigation_with_protected_excerpts",
             "summary_published": published,
             "source_labels_retained": len(summary["covered_sources"]) == 1,
-            "critical_fact_absent_from_summary": "Q7421" not in summary["content"]
-            and "不得外发" not in summary["content"],
+            "critical_fact_absent_from_navigation": "Q7421" not in packet["navigation"]
+            and "不得外发" not in packet["navigation"],
+            "protected_excerpts_preserve_original": quotes == original,
             "original_text_preserved": raw == original,
         }
-        observation["limitation_reproduced"] = all(
+        observation["protection_verified"] = all(
             observation[k]
             for k in (
                 "summary_published",
                 "source_labels_retained",
-                "critical_fact_absent_from_summary",
+                "critical_fact_absent_from_navigation",
+                "protected_excerpts_preserve_original",
                 "original_text_preserved",
             )
         )
         write(args.output / "observation.json", observation)
-        assert observation["limitation_reproduced"], observation
-        print(
-            "LIMITATION REPRODUCED: source labels do not prove semantic coverage; original text remains intact."
-        )
+        assert observation["protection_verified"], observation
+        print("PROTECTION VERIFIED: lossy navigation cannot remove protected original excerpts.")
     finally:
         runtime.tools.retrieval.engine.close()
         db.close()

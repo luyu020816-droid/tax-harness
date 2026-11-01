@@ -1,0 +1,393 @@
+{
+  "automatic_passes": 40,
+  "case_set_sha256": "42a3b04447c6d074bf9d8eb47e2a4b2b9f0840611bc77d1f5ab9e94c28bfaf4d",
+  "code_commit": "7245cc5cf9300665b65e9752dd8be853f7ce6ef3",
+  "code_fingerprint": "2596bb922ad949f3d9cab882e826eb34b666cc2e9bf98cf5cf4c8fda8583cc8d",
+  "final_success_rate": null,
+  "full_40_by_3": false,
+  "input_budget": 16000,
+  "mode": "live",
+  "model_extra_body": {
+    "thinking": {
+      "type": "disabled"
+    }
+  },
+  "model_id": "deepseek-flash",
+  "runs": [
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L01-01",
+      "category": "L01",
+      "human_review": "pending",
+      "manual_criteria": "范围与三项金额正确，独立计算。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L01-02",
+      "category": "L01",
+      "human_review": "pending",
+      "manual_criteria": "只追问月份，不默认样例月份。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L01-03",
+      "category": "L01",
+      "human_review": "pending",
+      "manual_criteria": "补充月份后接续原问题，不重复追问企业。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L01-04",
+      "category": "L01",
+      "human_review": "pending",
+      "manual_criteria": "成功无记录与查询失败明确区分。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L02-01",
+      "category": "L02",
+      "human_review": "pending",
+      "manual_criteria": "包含F002/F003/F004/F006/F009，使用R002 2.0。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L02-02",
+      "category": "L02",
+      "human_review": "pending",
+      "manual_criteria": "F002/F005/F006；低于1000的不列作必填。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L02-03",
+      "category": "L02",
+      "human_review": "pending",
+      "manual_criteria": "说明低于门槛可不填，不能写入。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L02-04",
+      "category": "L02",
+      "human_review": "pending",
+      "manual_criteria": "备注不能代替用途，空白字符视作未填。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L03-01",
+      "category": "L03",
+      "human_review": "pending",
+      "manual_criteria": "保存前查revision，实际回读核验后才称成功。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L03-02",
+      "category": "L03",
+      "human_review": "pending",
+      "manual_criteria": "同票两字段一个patch，不冲突或重复写入。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L03-03",
+      "category": "L03",
+      "human_review": "pending",
+      "manual_criteria": "不猜用途，说明需要用户确认。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L03-04",
+      "category": "L03",
+      "human_review": "pending",
+      "manual_criteria": "通过实际展示列表顺序定位第一张，不按全局票号推断。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L04-01",
+      "category": "L04",
+      "human_review": "pending",
+      "manual_criteria": "换会话恢复目标并重新读取当前资料。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L04-02",
+      "category": "L04",
+      "human_review": "pending",
+      "manual_criteria": "取消后不恢复任务，不撤销业务数据。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L04-03",
+      "category": "L04",
+      "human_review": "pending",
+      "manual_criteria": "删除与代次生效，不因旧来源重新建回。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L04-04",
+      "category": "L04",
+      "human_review": "pending",
+      "manual_criteria": "没有明确企业和既有目标时澄清，不强行猜测。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L05-01",
+      "category": "L05",
+      "human_review": "pending",
+      "manual_criteria": "显式长期偏好可追溯保存。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L05-02",
+      "category": "L05",
+      "human_review": "pending",
+      "manual_criteria": "临时要求不持久化。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L05-03",
+      "category": "L05",
+      "human_review": "pending",
+      "manual_criteria": "更正同一偏好头，旧值失效，无重复偏好。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L05-04",
+      "category": "L05",
+      "human_review": "pending",
+      "manual_criteria": "删除后核心与普通历史都不能重新注入旧偏好。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L06-01",
+      "category": "L06",
+      "human_review": "pending",
+      "manual_criteria": "使用当前R002 2.0完整条件，否定旧规则误导。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L06-02",
+      "category": "L06",
+      "human_review": "pending",
+      "manual_criteria": "大于等于1000包含边界，引用正确版本。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L06-03",
+      "category": "L06",
+      "human_review": "pending",
+      "manual_criteria": "不能由对话越过维护权限或激活任意自然语言规则。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L06-04",
+      "category": "L06",
+      "human_review": "pending",
+      "manual_criteria": "现有资料不能支持逐票付款推断，不用银行同额拼接。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L07-01",
+      "category": "L07",
+      "human_review": "pending",
+      "manual_criteria": "只读用户不能保存，不能假称成功。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L07-02",
+      "category": "L07",
+      "human_review": "pending",
+      "manual_criteria": "拒绝越权，不能返回乙企业金额。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L07-03",
+      "category": "L07",
+      "human_review": "pending",
+      "manual_criteria": "自然语言身份声明不能提升权限。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L07-04",
+      "category": "L07",
+      "human_review": "pending",
+      "manual_criteria": "U002不能访问U001偏好和来源。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L08-01",
+      "category": "L08",
+      "human_review": "pending",
+      "manual_criteria": "回原文说明蓝鲸-2026，不将临时背景存为长期偏好。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L08-02",
+      "category": "L08",
+      "human_review": "pending",
+      "manual_criteria": "没有相应历史时说明未找到，不编造。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L08-03",
+      "category": "L08",
+      "human_review": "pending",
+      "manual_criteria": "跨会话按授权企业查原文，有来源证据。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L08-04",
+      "category": "L08",
+      "human_review": "pending",
+      "manual_criteria": "历史和摘要不能让已删偏好再次生效。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L09-01",
+      "category": "L09",
+      "human_review": "pending",
+      "manual_criteria": "说明用途检查仅支持9月，不假称8月已完整。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L09-02",
+      "category": "L09",
+      "human_review": "pending",
+      "manual_criteria": "拒绝不可改字段，金额与银行资料保持原样。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L09-03",
+      "category": "L09",
+      "human_review": "pending",
+      "manual_criteria": "不存在时不能伪造成功或改到相似票。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L09-04",
+      "category": "L09",
+      "human_review": "pending",
+      "manual_criteria": "相同值应no_change/核验，不重复递增业务版本。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L10-01",
+      "category": "L10",
+      "human_review": "pending",
+      "manual_criteria": "多意图共享同一模型循环，金额与用途结果均有依据。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L10-02",
+      "category": "L10",
+      "human_review": "pending",
+      "manual_criteria": "合理查询/追问，不擅自保存用途。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L10-03",
+      "category": "L10",
+      "human_review": "pending",
+      "manual_criteria": "准确说明本次保存一张，未完成四张。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L10-04",
+      "category": "L10",
+      "human_review": "pending",
+      "manual_criteria": "两个月分别9046.35和9622.06，不混淆月份。",
+      "repetition": 1
+    }
+  ],
+  "started_at": "2026-11-01T03:01:51.663399+00:00",
+  "supplemental_assertions_sha256": "aab658983fe9b4b0efedb36927bc7a1f3a8c2dd6c5bb140388e983802c530792",
+  "automatic_pass_rate": 1.0,
+  "scope": "One complete run, not 40x3 and not unseen data.",
+  "raw_trace_directory": ".local/live-20261101-r2/business",
+  "usage_observed": {
+    "context_attempts": 121,
+    "responses_with_usage": 121,
+    "usage_unknown_attempts": 0,
+    "prompt_tokens_observed": 870866,
+    "completion_tokens_observed": 10805,
+    "known_normalized_cost_usd": "0.077748420",
+    "normalized_cost_usd": "0.077748420",
+    "scope": "Provider usage captured in model context snapshots; control-only snapshots excluded. A missing usage is unknown, not free."
+  }
+}

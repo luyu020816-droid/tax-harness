@@ -292,6 +292,68 @@ class HistoryRetrieval:
         self.db, self.settings, self.engine = db, settings, engine
         self.selection_policy = selection_policy
 
+    def read_summary(self, execution, source_id, quote):
+        """Exact source read from a currently valid summary; no corpus search."""
+        from app.execution import guard
+        from app.summary_evidence import validate
+        from app.turns import mentioned_companies
+
+        started = time.monotonic()
+        with self.db.transaction() as conn:
+            guard(conn, execution, shared=True)
+            company = conn.execute(
+                "SELECT selected_company_id FROM sessions WHERE session_id=%s",
+                (execution.session_id,),
+            ).fetchone()["selected_company_id"]
+            current = read_source(conn, execution.auth, execution.source_id)
+            requested = mentioned_companies(conn, current["content"])
+            if requested and (not company or set(requested) != {company}):
+                raise AppError(
+                    "TARGET_SCOPE_MISMATCH", "摘要范围与当前明确企业不一致，请重新检索。", 422
+                )
+            row = conn.execute(
+                "SELECT * FROM summaries WHERE user_id=%s AND scope=%s AND memory_epoch=%s AND status='active' ORDER BY generation DESC LIMIT 1",
+                (execution.auth.user_id, company or "@user", execution.expected_epoch),
+            ).fetchone()
+            if not row:
+                raise AppError("SOURCE_INVALIDATED", "当前没有可用摘要。", 409)
+            packet = validate(conn, execution, row["content"], row["covered_sources"])
+            if not any(
+                u["source_id"] == source_id and quote in u["quote"]
+                for u in packet["protected_excerpts"]
+            ):
+                raise AppError("SOURCE_INVALIDATED", "引用不是当前摘要的受保护摘录。", 409)
+            source = read_source(conn, execution.auth, source_id, company_id=company)
+            start = source["content"].find(quote)
+        candidate = {
+            **source,
+            "chunk_id": source_id,
+            "source_revision": source["revision"],
+            "char_start": start,
+            "char_end": start + len(quote),
+            "excerpt": quote,
+            "excerpt_hash": digest(quote),
+        }
+        return self._persist(
+            execution.auth,
+            {"company_id": company, "query": "", "summary_id": str(row["summary_id"])},
+            {
+                "memory_epoch": execution.expected_epoch,
+                "company_id": company,
+                "company_ids": [company] if company else [],
+                "before_source_seq": execution.source_seq,
+                "session_id": execution.session_id,
+                "origin_turn_id": execution.turn_id,
+            },
+            [candidate],
+            {"eligible": 1, "ready": 1, "pending": 0, "coverage_kind": "protected_excerpt_only"},
+            "summary_source_read",
+            "ok",
+            None,
+            None,
+            started,
+        )
+
     def read(self, auth, citation_id, *, char_start=None):
         with self.db.transaction(readonly=True) as conn:
             original = read_evidence_in(conn, auth, citation_id)

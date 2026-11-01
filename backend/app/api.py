@@ -48,6 +48,11 @@ class ControlBody(StrictModel):
     expected_revision: int | None = Field(default=None, ge=1)
 
 
+class RetryTurnBody(StrictModel):
+    request_id: str = Field(min_length=1, max_length=200)
+    expected_generation: int = Field(ge=1)
+
+
 class PreferenceBody(ControlBody):
     scope: str | None = None
     key: str | None = None
@@ -285,6 +290,12 @@ def create_app(
     @app.post("/api/v1/turns/{turn_id}/cancel")
     def cancel(turn_id: UUID, body: ControlBody, current=auth_dependency):
         return turns.cancel_turn(db, current, str(turn_id), body.request_id, body.expected_revision)
+
+    @app.post("/api/v1/turns/{turn_id}/retry", status_code=202)
+    def retry_turn(turn_id: UUID, body: RetryTurnBody, current=auth_dependency):
+        return turns.retry_turn(
+            db, current, str(turn_id), body.request_id, body.expected_generation
+        )
 
     @app.get("/api/v1/pending-clarifications")
     def pending(current=auth_dependency):

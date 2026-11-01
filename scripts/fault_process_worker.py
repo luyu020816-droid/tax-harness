@@ -5,12 +5,12 @@ import time
 from contextlib import contextmanager
 
 import psycopg
+from advanced_common import write
 from app import invoice_write
 from app.config import Settings
 from app.db import Database
 from app.identity import Identity
 from app.runtime import Runtime
-from evaluate_retrieval import write
 
 
 class NoModel:

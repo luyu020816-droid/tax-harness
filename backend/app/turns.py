@@ -1,7 +1,7 @@
 from app.errors import AppError
 from app.events import emit
 from app.identity import Identity, assert_access, owned
-from app.sources import add_source, advance_progress, assess, next_sequence
+from app.sources import add_source, advance_progress, assess, next_sequence, read_source
 from app.values import digest, jsonb, safe_json, uid
 
 
@@ -118,6 +118,61 @@ def read_turn(db, auth: Identity, turn_id: str) -> dict:
         return safe_json(
             {**turn, "runs": runs, "operations": operations, "selected_company_id": selected}
         )
+
+
+def retry_turn(db, auth: Identity, turn_id: str, request_id: str, expected_generation: int):
+    """Requeue the original source, preserving its operation idempotency keys."""
+    fingerprint = digest(["retry_turn", turn_id, expected_generation])
+    with db.transaction() as conn:
+        conn.execute("SELECT 1 FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,))
+        turn = owned(conn, "turns", "turn_id", turn_id, auth, lock=True)
+        _assert_turn_access(conn, auth, turn_id)
+        prior = conn.execute(
+            "SELECT * FROM memory_change_ops WHERE user_id=%s AND request_id=%s",
+            (auth.user_id, request_id),
+        ).fetchone()
+        if prior:
+            if prior["request_hash"] != fingerprint:
+                raise AppError("IDEMPOTENCY_CONFLICT", "恢复请求编号的内容不同。", 409)
+            return safe_json(turn)
+        error = turn["error"] or {}
+        if (
+            turn["status"] != "failed"
+            or error.get("code")
+            not in ("RUN_LIMIT_EXCEEDED", "MODEL_UNAVAILABLE", "DATABASE_UNAVAILABLE")
+            or turn["active_run_generation"] != expected_generation
+        ):
+            raise AppError(
+                "VERSION_CONFLICT", "只有当前失败的可恢复轮次可以继续，请刷新记录。", 409
+            )
+        sources = conn.execute(
+            "SELECT s.source_id FROM sources s JOIN work_items w USING(source_id) WHERE s.turn_id=%s AND w.kind='turn' FOR UPDATE OF w",
+            (turn_id,),
+        ).fetchall()
+        if len(sources) != 1:
+            raise AppError("SOURCE_INVALIDATED", "原任务执行来源不完整。", 409)
+        source_id = str(sources[0]["source_id"])
+        read_source(conn, auth, source_id)
+        conn.execute(
+            "UPDATE work_items SET state='ready',lease_until=NULL,fencing_token=fencing_token+1,last_error=NULL WHERE source_id=%s AND kind='turn'",
+            (source_id,),
+        )
+        result = conn.execute(
+            "UPDATE turns SET status='queued',error=NULL,updated_at=now() WHERE turn_id=%s RETURNING *",
+            (turn_id,),
+        ).fetchone()
+        conn.execute(
+            "INSERT INTO memory_change_ops(change_id,user_id,request_id,request_hash,target_type,target_id,action,state,result_ref) VALUES(%s,%s,%s,%s,'turn',%s,'retry','committed',%s)",
+            (uid(), auth.user_id, request_id, fingerprint, turn_id, jsonb({"turn_id": turn_id})),
+        )
+        emit(
+            conn,
+            turn_id,
+            None,
+            "recovery_queued",
+            {"generation": expected_generation, "source_id": source_id},
+        )
+        return safe_json(result)
 
 
 def list_pending(db, auth: Identity) -> list[dict]:

@@ -1,0 +1,14 @@
+{
+  "backend_sha256": "defc67095974c2bfc0cdccaa8184051d16c9edf832728430aaddd2f3ca5ceccd",
+  "tests": 75,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "seconds": 165.814,
+  "scope": "Final recovery prompt and feedback: advanced, renderer, runtime, compaction, judge boundaries, faults",
+  "additional_recovery_feedback_assertion": {
+    "passed": 1,
+    "raw_junit": ".local/advanced-1031/recovery-feedback-test.xml"
+  },
+  "raw_junit": ".local/advanced-1031/backend-targeted-final.xml"
+}

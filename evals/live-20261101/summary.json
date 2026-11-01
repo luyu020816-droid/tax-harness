@@ -1,0 +1,169 @@
+{
+  "date": "2026-11-01",
+  "finished_at": "2026-11-01T03:15:41.940269+00:00",
+  "model_id": "deepseek-flash",
+  "mode": "live",
+  "app_sha256": "defc67095974c2bfc0cdccaa8184051d16c9edf832728430aaddd2f3ca5ceccd",
+  "business": {
+    "cases": 40,
+    "automatic_passes": 40,
+    "user_turns": 54,
+    "failures": [],
+    "usage": {
+      "context_attempts": 121,
+      "responses_with_usage": 121,
+      "usage_unknown_attempts": 0,
+      "prompt_tokens_observed": 870866,
+      "completion_tokens_observed": 10805,
+      "known_normalized_cost_usd": "0.077748420",
+      "normalized_cost_usd": "0.077748420",
+      "scope": "Provider usage captured in model context snapshots; control-only snapshots excluded. A missing usage is unknown, not free."
+    },
+    "human_semantic_review": "pending"
+  },
+  "long_context": {
+    "passed": 4,
+    "checks": [
+      {
+        "id": "C01_C02_long_agent",
+        "pass": true,
+        "summary_requests": 2,
+        "invoice_writes": 0,
+        "human_semantic_review": "pending"
+      },
+      {
+        "id": "cross_session",
+        "pass": true,
+        "human_semantic_review": "pending"
+      },
+      {
+        "id": "C04_capacity",
+        "pass": true
+      },
+      {
+        "id": "C03_real_inflight_epoch",
+        "pass": true
+      }
+    ],
+    "usage": {
+      "context_attempts": 13,
+      "responses_with_usage": 12,
+      "usage_unknown_attempts": 1,
+      "prompt_tokens_observed": 88981,
+      "completion_tokens_observed": 1448,
+      "known_normalized_cost_usd": "0.008251278",
+      "normalized_cost_usd": null,
+      "scope": "Provider usage captured in model context snapshots; control-only snapshots excluded. A missing usage is unknown, not free."
+    }
+  },
+  "comparison": {
+    "window": {
+      "cases": 18,
+      "correct": 8,
+      "answer_correct": 8,
+      "summary_preparation_failures": 0,
+      "accuracy": 0.4444444444444444,
+      "model_attempts": 53,
+      "missing_usage_calls": 0,
+      "known_cost_usd": "0.024070854",
+      "estimated_cost_usd": "0.024070854",
+      "prompt_tokens_observed": 358621,
+      "completion_tokens_observed": 3179,
+      "tool_calls": 24,
+      "total_ms": 95423,
+      "p50_ms": 3688,
+      "p95_ms": 10703
+    },
+    "summary": {
+      "cases": 18,
+      "correct": 14,
+      "answer_correct": 14,
+      "summary_preparation_failures": 1,
+      "accuracy": 0.7777777777777778,
+      "model_attempts": 50,
+      "missing_usage_calls": 0,
+      "known_cost_usd": "0.025851396",
+      "estimated_cost_usd": "0.025851396",
+      "prompt_tokens_observed": 310818,
+      "completion_tokens_observed": 4393,
+      "tool_calls": 25,
+      "total_ms": 93015,
+      "p50_ms": 4625,
+      "p95_ms": 9203
+    },
+    "summary_search": {
+      "cases": 18,
+      "correct": 18,
+      "answer_correct": 18,
+      "summary_preparation_failures": 0,
+      "accuracy": 1.0,
+      "model_attempts": 44,
+      "missing_usage_calls": 0,
+      "known_cost_usd": "0.027821328",
+      "estimated_cost_usd": "0.027821328",
+      "prompt_tokens_observed": 289108,
+      "completion_tokens_observed": 4417,
+      "tool_calls": 26,
+      "total_ms": 80768,
+      "p50_ms": 3750,
+      "p95_ms": 6329
+    }
+  },
+  "recovery": {
+    "passed": 3,
+    "cases": 3,
+    "usage": {
+      "context_attempts": 3,
+      "responses_with_usage": 3,
+      "usage_unknown_attempts": 0,
+      "prompt_tokens_observed": 21140,
+      "completion_tokens_observed": 154,
+      "known_normalized_cost_usd": "0.002529576",
+      "normalized_cost_usd": "0.002529576",
+      "scope": "Provider usage captured in model context snapshots; control-only snapshots excluded. A missing usage is unknown, not free."
+    }
+  },
+  "stages": [
+    {
+      "name": "business40",
+      "return_code": 0,
+      "elapsed_seconds": 282.656
+    },
+    {
+      "name": "long_context",
+      "return_code": 0,
+      "elapsed_seconds": 30.235
+    },
+    {
+      "name": "strategy_comparison",
+      "return_code": 0,
+      "elapsed_seconds": 369.109
+    },
+    {
+      "name": "recovery_live",
+      "return_code": 0,
+      "elapsed_seconds": 15.828
+    }
+  ],
+  "price_snapshot": {
+    "model": "deepseek-flash",
+    "currency": "USD",
+    "as_of": "2026-10-31",
+    "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+    "scenario": "fixed_off_peak_normalization_not_invoice",
+    "input_cache_hit_per_million": "0.003",
+    "input_cache_miss_per_million": "0.15",
+    "output_per_million": "0.6"
+  },
+  "full_provider_bill_known": false,
+  "source_code_changed_during_tests": false,
+  "limits": [
+    "Frozen regression/development samples, not unseen-data evidence.",
+    "Torch/BGE/OCR runtime not covered; live retrieval here uses actual lexical fallback.",
+    "Provider billing cannot be determined from usage alone; normalized prices are historical fixed snapshot.",
+    "One unsupported summary-source array shape remains; unsafe candidate rejected and original evidence retained."
+  ],
+  "provider_host": "api.deepseek.com",
+  "connectivity_responses_with_usage": 1,
+  "business_scope": "40 cases / 54 user turns / 121 provider responses with usage."
+}

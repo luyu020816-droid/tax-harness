@@ -1,0 +1,8 @@
+{
+  "prefix": "tax_harness_bonus_",
+  "databases": 70,
+  "bytes": 787271242,
+  "retained_for_reproducibility": true,
+  "automatic_cleanup": false,
+  "scope": "Only new bonus evaluation databases; excludes production, shared tests, and the older summary-probe helper database."
+}

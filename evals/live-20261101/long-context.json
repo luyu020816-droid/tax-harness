@@ -1,0 +1,41 @@
+{
+  "rows": [
+    {
+      "id": "C01_C02_long_agent",
+      "pass": true,
+      "summary_requests": 2,
+      "invoice_writes": 0,
+      "human_semantic_review": "pending"
+    },
+    {
+      "id": "cross_session",
+      "pass": true,
+      "human_semantic_review": "pending"
+    },
+    {
+      "id": "C04_capacity",
+      "pass": true
+    },
+    {
+      "id": "C03_real_inflight_epoch",
+      "pass": true
+    }
+  ],
+  "passed": 4,
+  "code_fingerprint": "2596bb922ad949f3d9cab882e826eb34b666cc2e9bf98cf5cf4c8fda8583cc8d",
+  "model_id": "deepseek-flash",
+  "budget": 16000,
+  "human_review": "pending",
+  "scope": "Real model/runtime with deliberately seeded public synthetic long history; not naturally accumulated production conversations.",
+  "raw_trace_directory": ".local/live-20261101-r2/long-context",
+  "usage_observed": {
+    "context_attempts": 13,
+    "responses_with_usage": 12,
+    "usage_unknown_attempts": 1,
+    "prompt_tokens_observed": 88981,
+    "completion_tokens_observed": 1448,
+    "known_normalized_cost_usd": "0.008251278",
+    "normalized_cost_usd": null,
+    "scope": "Provider usage captured in model context snapshots; control-only snapshots excluded. A missing usage is unknown, not free."
+  }
+}

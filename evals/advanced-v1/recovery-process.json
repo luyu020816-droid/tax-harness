@@ -1,0 +1,32 @@
+{
+  "kind": "real_process_and_database_faults_no_live_model",
+  "records": [
+    {
+      "mode": "before",
+      "pass": true,
+      "operations": 1,
+      "invoice_revision": 2,
+      "first_action": "read_prior_result",
+      "operation_id": "e629390b-642a-40eb-9085-2fbb93b3ec29",
+      "old_fence_rejected": true
+    },
+    {
+      "mode": "after",
+      "pass": true,
+      "operations": 1,
+      "invoice_revision": 2,
+      "first_action": "read_prior_result",
+      "operation_id": "c129e616-0667-4e8c-b20c-60a2f38758d3",
+      "old_fence_rejected": true
+    },
+    {
+      "mode": "read-failure",
+      "pass": true,
+      "operations": 1,
+      "invoice_revision": 2,
+      "first_action": "read_prior_result",
+      "operation_id": "a93f5479-8b3a-4863-b9e8-93f20df0c453",
+      "old_fence_rejected": true
+    }
+  ]
+}

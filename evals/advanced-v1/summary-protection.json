@@ -1,0 +1,9 @@
+{
+  "kind": "lossy_navigation_with_protected_excerpts",
+  "summary_published": true,
+  "source_labels_retained": true,
+  "critical_fact_absent_from_navigation": true,
+  "protected_excerpts_preserve_original": true,
+  "original_text_preserved": true,
+  "protection_verified": true
+}

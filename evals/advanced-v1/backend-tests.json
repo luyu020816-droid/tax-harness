@@ -1,0 +1,27 @@
+{
+  "command": "cd backend; ..\\.venv\\Scripts\\python.exe -m pytest -q --tb=short --junitxml=../.local/advanced-1031/backend-final.xml",
+  "backend_sha256": "64f6ff50f674c0f95bc0491fbcb6722e3a9cf351975fa12b6d01ab8847d4c7af",
+  "tests": 291,
+  "passed": 290,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 1,
+  "seconds": 583.977,
+  "skip_reasons": [
+    {
+      "test": "test_model_execution_stays_on_one_thread_across_background_callers",
+      "reason": "could not import 'torch': No module named 'torch'"
+    }
+  ],
+  "initial_attempt": {
+    "passed": 259,
+    "failed": 24,
+    "errors": 3,
+    "skipped": 1,
+    "notes": "pgvector absent; three database connection/out-of-memory errors. Preserved as first attempt, not counted as success."
+  },
+  "remediation": "Verified project-local pgvector 0.8.6 installed additively without server restart, missing test migrations applied; representative failures passed; final suite run serially.",
+  "limits": "ProgramEngine synthetic vectors test protocol/authority only. Real dense inference not validated; torch threading test skipped.",
+  "raw_junit": ".local/advanced-1031/backend-final.xml",
+  "stage": "Full suite before the final recovery reply prompt/feedback refinement; later targeted report covers that refinement."
+}

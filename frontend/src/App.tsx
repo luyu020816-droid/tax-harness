@@ -73,6 +73,9 @@ export default function App() {
     upload: string | null;
     knowledge: string | null;
   } | null>(null);
+  const resumeRequest = useRef<{ turnId: string; generation: number; requestId: string } | null>(
+    null
+  );
   const acknowledged = useRef(new Set<string>());
 
   const changed = useCallback(() => setVersion((v) => v + 1), []);
@@ -412,6 +415,39 @@ export default function App() {
     } catch (err) {
       if (stamp === generation.current)
         setError((err as Error).message || '连接中断，输入已保留；重试将使用同一请求编号。');
+    } finally {
+      if (stamp === generation.current) setSending(false);
+    }
+  }
+
+  async function resumeFailed(turn: Turn) {
+    if (sending || activeId) return;
+    setSending(true);
+    const stamp = generation.current;
+    const request =
+      resumeRequest.current?.turnId === turn.turn_id &&
+      resumeRequest.current.generation === turn.active_run_generation
+        ? resumeRequest.current
+        : { turnId: turn.turn_id, generation: turn.active_run_generation, requestId: requestId() };
+    resumeRequest.current = request;
+    try {
+      const accepted = await api<Turn>(`/turns/${turn.turn_id}/retry`, {
+        method: 'POST',
+        body: body({
+          request_id: request.requestId,
+          expected_generation: turn.active_run_generation,
+        }),
+      });
+      if (stamp !== generation.current) return;
+      resumeRequest.current = null;
+      setTurns((old) =>
+        old.map((item) => (item.turn_id === turn.turn_id ? { ...item, ...accepted } : item))
+      );
+      setActiveId(turn.turn_id);
+      setStage('先核对上次保存结果');
+      setError('');
+    } catch (err) {
+      if (stamp === generation.current) setError((err as Error).message);
     } finally {
       if (stamp === generation.current) setSending(false);
     }
@@ -807,6 +843,21 @@ export default function App() {
                                 <div>
                                   <strong>本轮未能完成</strong>
                                   <p>{turn.error.message}</p>
+                                  {turn.status === 'failed' &&
+                                    [
+                                      'RUN_LIMIT_EXCEEDED',
+                                      'MODEL_UNAVAILABLE',
+                                      'DATABASE_UNAVAILABLE',
+                                    ].includes(turn.error.code) && (
+                                      <button
+                                        className="text-button"
+                                        disabled={sending || !!activeId}
+                                        onClick={() => void resumeFailed(turn)}
+                                      >
+                                        核对结果并继续
+                                        <ChevronRight size={13} />
+                                      </button>
+                                    )}
                                   {turn.runs?.at(-1) && (
                                     <button
                                       className="text-button"

@@ -1,0 +1,72 @@
+{
+  "automatic_passes": 3,
+  "case_set_sha256": "42a3b04447c6d074bf9d8eb47e2a4b2b9f0840611bc77d1f5ab9e94c28bfaf4d",
+  "code_commit": "7245cc5cf9300665b65e9752dd8be853f7ce6ef3",
+  "code_fingerprint": "2596bb922ad949f3d9cab882e826eb34b666cc2e9bf98cf5cf4c8fda8583cc8d",
+  "final_success_rate": null,
+  "full_40_by_3": false,
+  "input_budget": 16000,
+  "mode": "live",
+  "model_extra_body": {
+    "thinking": {
+      "type": "disabled"
+    }
+  },
+  "model_id": "deepseek-flash",
+  "runs": [
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L08-02",
+      "category": "L08",
+      "human_review": "pending",
+      "manual_criteria": "没有相应历史时说明未找到，不编造。",
+      "repetition": 1
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L08-02",
+      "category": "L08",
+      "human_review": "pending",
+      "manual_criteria": "没有相应历史时说明未找到，不编造。",
+      "repetition": 2
+    },
+    {
+      "automatic_failures": [],
+      "automatic_pass": true,
+      "case_id": "L08-02",
+      "category": "L08",
+      "human_review": "pending",
+      "manual_criteria": "没有相应历史时说明未找到，不编造。",
+      "repetition": 3
+    }
+  ],
+  "started_at": "2026-10-31T14:16:05.320614+00:00",
+  "supplemental_assertions_sha256": "aab658983fe9b4b0efedb36927bc7a1f3a8c2dd6c5bb140388e983802c530792",
+  "trace_observations": [
+    {
+      "repetition": 1,
+      "status": "completed",
+      "final_message": "本轮历史查找没有找到匹配原文，不能编造过去说过的内容。",
+      "tool_calls": 1,
+      "trace_sha256": "52b1616c3ba859a3c90d7d7348d4d0a28b6b37a5d4dd324887cf52f27e7b9167"
+    },
+    {
+      "repetition": 2,
+      "status": "completed",
+      "final_message": "本次找到的历史片段不足以支持回答，不能据此推断过去的说法或当前业务状态。",
+      "tool_calls": 2,
+      "trace_sha256": "b524a446dbe3739d3567c389e48d55c5b966d23027e45405c3e5f64e3be8a21c"
+    },
+    {
+      "repetition": 3,
+      "status": "completed",
+      "final_message": "本轮历史查找没有找到匹配原文，不能编造过去说过的内容。",
+      "tool_calls": 1,
+      "trace_sha256": "d77a656093d33b4d15c04c7f3e0d7b079226ad6c3251ffc33972f0d6f0e243ba"
+    }
+  ],
+  "raw_trace_directory": ".local/advanced-1031/history-absence-v2",
+  "scope_note": "Only L08-02 repeated three times; not a rerun of the full 40-case suite. Human review fields remain pending. Observed search counts 1/2/1; the second run used insufficient-evidence wording."
+}

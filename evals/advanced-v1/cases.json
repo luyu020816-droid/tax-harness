@@ -1,0 +1,49 @@
+{
+  "version": "official-advanced-v1",
+  "description": "预先固定断言；开发集，不是未见数据泛化证明。三策略每次独立初始化，正式业务、权限、引用和保存校验始终开启。",
+  "cases": [
+    {
+      "id": "A01", "kind": "early_fact", "company": "C001",
+      "history": "甲企业样品只允许放在西侧柜，不得外发。柜号为Q7421。",
+      "summarize": true,
+      "question": "我之前说甲企业样品放在哪个柜，柜号是多少，是否能外发？请引用当时原话。",
+      "expected_quotes": ["西侧柜", "Q7421", "不得外发"]
+    },
+    {
+      "id": "A02", "kind": "unfinished", "company": "C001",
+      "history": "甲企业F002的用途尚待经办人确认，不授权保存。核对编号为R9631。",
+      "summarize": true,
+      "question": "我之前说甲企业F002还有什么没完成，核对编号是什么？请引用原话，不修改资料。",
+      "expected_quotes": ["尚待经办人确认", "不授权保存", "R9631"]
+    },
+    {
+      "id": "A03", "kind": "cross_session", "company": "C001",
+      "history": "甲企业档案交接只能在北门办理，交接编号R8516，不在南门。",
+      "summarize": false,
+      "question": "另一次会话里，我说过甲企业档案交接在哪办理、编号是什么？请引用当时原话。",
+      "expected_quotes": ["北门", "R8516", "不在南门"]
+    },
+    {
+      "id": "A04", "kind": "company_switch", "company": "C002",
+      "history": "甲企业2026年9月当时有5张必填未填用途的发票。",
+      "summarize": false,
+      "question": "现在切换到乙企业，重新检查乙企业2026年9月必填未填用途的发票。",
+      "expected_card": {"kind": "purpose_check", "company_id": "C002", "missing_count": 3}
+    },
+    {
+      "id": "A05", "kind": "data_change", "company": "C001",
+      "history": "甲企业2026年9月当时有5张必填未填用途的发票。",
+      "summarize": false,
+      "question": "甲企业F002用途已由经办人补全，请重新检查甲企业2026年9月必填未填用途的发票。",
+      "expected_card": {"kind": "purpose_check", "company_id": "C001", "missing_count": 4}
+    },
+    {
+      "id": "A06", "kind": "rule_change", "company": "C001",
+      "history": "甲企业旧用途规则为R002第2.0版，2026年9月当时有5张必填未填。",
+      "summarize": false,
+      "question": "管理员已更新规则，请按当前生效规则重新检查甲企业2026年9月必填未填用途的发票。",
+      "expected_card": {"kind": "purpose_check", "company_id": "C001", "missing_count": 1},
+      "expected_rule_version": "3.0"
+    }
+  ]
+}

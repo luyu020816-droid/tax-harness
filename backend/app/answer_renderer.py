@@ -9,8 +9,8 @@ from app.sources import read_source
 from app.values import safe_json
 
 
-def missing(message):
-    raise AppError("REPLY_EVIDENCE_MISSING", message, 422)
+def missing(message, *, details=None):
+    raise AppError("REPLY_EVIDENCE_MISSING", message, 422, details=details or {})
 
 
 @dataclass
@@ -212,7 +212,15 @@ def render(conn, execution, plan, payload, manifest):
             data = output["data"]
             if block.view == "history_page":
                 if data.get("kind") != "history_search" or data.get("retrieval_mode") != "date":
-                    missing("历史整页视图只能使用实际日期浏览结果。")
+                    missing(
+                        "历史整页视图只能使用实际日期浏览结果。保留已经成功的检索，不要改查更大日期范围；按允许的说明码或已返回原文结束。",
+                        details={
+                            "result_ref": str(block.result_ref),
+                            "allowed_answer_codes": data.get("allowed_answer_codes", []),
+                            "allow_history_quotes": bool(data.get("matches")),
+                            "retry_search_required": False,
+                        },
+                    )
                 from app.tool_schemas import HistoryBlock
 
                 for item in data["matches"]:
@@ -537,7 +545,14 @@ def _explanation(conn, execution, code, outputs, rules, state):
         return "以下并列展示不同资料的原文，请核对适用范围和生效时间；资料内容不会自动改变当前业务规则。"
     if code in ("acknowledged", "no_changes"):
         if state["known_operations"]:
-            missing("已有操作，请使用实际操作回执。")
+            missing(
+                "此说明会声称整轮未修改，与已有保存记录矛盾。保留已有operation块，仅删除acknowledged/no_changes说明块；不需要重复查询或保存，也不要把回执改成task视图。",
+                details={
+                    "drop_explanation_codes": ["acknowledged", "no_changes"],
+                    "keep_operation_blocks": True,
+                    "retry_search_required": False,
+                },
+            )
         return "本轮未修改发票数据。"
     if code == "independent_totals":
         return "发票总额、银行收入和银行支出分别统计，不要求相等，也不据此推断付款或欠款。"

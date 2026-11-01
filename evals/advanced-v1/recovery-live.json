@@ -1,0 +1,45 @@
+{
+  "kind": "real_process_and_database_faults",
+  "model_mode": "live",
+  "records": [
+    {
+      "mode": "before",
+      "pass": true,
+      "operations": 1,
+      "invoice_revision": 2,
+      "first_action": "read_prior_result",
+      "operation_id": "e2113005-e718-4053-92b9-455a630204bd",
+      "old_fence_rejected": true
+    },
+    {
+      "mode": "after",
+      "pass": true,
+      "operations": 1,
+      "invoice_revision": 2,
+      "first_action": "read_prior_result",
+      "operation_id": "19f03b52-aa8c-4e26-9cd7-8cf09434454b",
+      "old_fence_rejected": true
+    },
+    {
+      "mode": "read-failure",
+      "pass": true,
+      "operations": 1,
+      "invoice_revision": 2,
+      "first_action": "read_prior_result",
+      "operation_id": "1effc0c6-09a3-4aac-bffa-5426e49eb7d3",
+      "old_fence_rejected": true
+    }
+  ],
+  "backend_sha256": "defc67095974c2bfc0cdccaa8184051d16c9edf832728430aaddd2f3ca5ceccd",
+  "raw_trace_directory": ".local/advanced-1031/recovery-live-v3",
+  "earlier_attempts": [
+    {
+      "directory": ".local/advanced-1031/recovery-live-v1",
+      "outcome": "termination command failed before completion; owned process tree subsequently terminated explicitly"
+    },
+    {
+      "directory": ".local/advanced-1031/recovery-live-v2",
+      "outcome": "before-case saved once but model appended contradictory no_changes; reply rejected, evidence retained; prompt and exact error feedback fixed"
+    }
+  ]
+}

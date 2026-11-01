@@ -1,0 +1,45 @@
+{
+  "kind": "real_process_and_database_faults",
+  "model_mode": "live",
+  "records": [
+    {
+      "mode": "before",
+      "pass": true,
+      "operations": 1,
+      "invoice_revision": 2,
+      "first_action": "read_prior_result",
+      "operation_id": "9f7491ed-02bc-43ee-ada0-dbe9957de31a",
+      "old_fence_rejected": true
+    },
+    {
+      "mode": "after",
+      "pass": true,
+      "operations": 1,
+      "invoice_revision": 2,
+      "first_action": "read_prior_result",
+      "operation_id": "fc21ea0d-a37f-4719-8afb-c36ae0bedf28",
+      "old_fence_rejected": true
+    },
+    {
+      "mode": "read-failure",
+      "pass": true,
+      "operations": 1,
+      "invoice_revision": 2,
+      "first_action": "read_prior_result",
+      "operation_id": "cfb5e332-d514-4423-a806-ad4a83a5c22b",
+      "old_fence_rejected": true
+    }
+  ],
+  "app_sha256": "defc67095974c2bfc0cdccaa8184051d16c9edf832728430aaddd2f3ca5ceccd",
+  "raw_trace_directory": ".local/live-20261101-r2/recovery",
+  "usage_observed": {
+    "context_attempts": 3,
+    "responses_with_usage": 3,
+    "usage_unknown_attempts": 0,
+    "prompt_tokens_observed": 21140,
+    "completion_tokens_observed": 154,
+    "known_normalized_cost_usd": "0.002529576",
+    "normalized_cost_usd": "0.002529576",
+    "scope": "Provider usage captured in model context snapshots; control-only snapshots excluded. A missing usage is unknown, not free."
+  }
+}

@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     worker_count: int = Field(default=2, ge=1, le=8)
     lease_seconds: int = Field(default=90, ge=30)
     cookie_secure: bool = False
+    summary_evidence_budget: int = Field(default=3000, ge=256, le=8000)
+    context_recent_turns: int = Field(default=12, ge=0, le=12)
+    context_use_summary: bool = True
+    context_auto_compact: bool = True
+    context_history_search: bool = True
     knowledge_enabled: bool = True
     knowledge_model_directory: Path = ROOT / ".local/retrieval-models"
     knowledge_selection_policy: Path = ROOT / "evals/retrieval-v2/selection-policy.json"
