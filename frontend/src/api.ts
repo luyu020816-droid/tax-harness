@@ -19,7 +19,18 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
       ...options.headers,
     },
   });
-  const data = await response.json();
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new ApiError(
+      'SERVICE_UNAVAILABLE',
+      response.ok
+        ? '服务返回了无法读取的结果，请重试。'
+        : `无法连接业务服务（HTTP ${response.status}），请检查本地后端是否已启动。`,
+      response.status
+    );
+  }
   if (!response.ok)
     throw new ApiError(
       data.code ?? 'REQUEST_FAILED',

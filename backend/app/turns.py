@@ -298,9 +298,22 @@ def session_messages(db, auth: Identity, session_id: str, before_seq=None) -> di
         ).fetchall()
         for row in rows[:20]:
             _assert_turn_access(conn, auth, str(row["turn_id"]))
+        # History must retain the same trace entry points as live turn polling.
+        visible = rows[:20]
+        by_turn = {}
+        if visible:
+            runs = conn.execute(
+                "SELECT turn_id,run_id,generation,state,started_at,finished_at FROM runs "
+                "WHERE turn_id=ANY(%s::uuid[]) ORDER BY turn_id,generation",
+                ([row["turn_id"] for row in visible],),
+            ).fetchall()
+            for run in runs:
+                by_turn.setdefault(run["turn_id"], []).append(run)
+        for row in visible:
+            row["runs"] = by_turn.get(row["turn_id"], [])
         return safe_json(
             {
-                "turns": list(reversed(rows[:20])),
+                "turns": list(reversed(visible)),
                 "has_more": len(rows) > 20,
                 "next_cursor": rows[19]["source_seq"] if len(rows) > 20 else None,
             }

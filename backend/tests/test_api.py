@@ -2,6 +2,20 @@ from fastapi.testclient import TestClient
 
 from app.api import create_app
 from app.values import uid
+from app.identity import Identity
+from app.turns import session_messages
+import pytest
+from app.errors import AppError
+
+
+def test_history_retains_run_links_and_session_ownership(db, execution_factory):
+    execution = execution_factory("查询本企业资料")
+    result = session_messages(db, Identity("U001"), execution.session_id)
+    assert len(result["turns"]) == 1
+    assert result["turns"][0]["runs"][0]["run_id"] == execution.run_id
+    assert result["turns"][0]["runs"][0]["generation"] == 1
+    with pytest.raises(AppError):
+        session_messages(db, Identity("U002"), execution.session_id)
 
 
 def test_B01_api_permissions_and_memory_management(db, settings):

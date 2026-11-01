@@ -469,7 +469,7 @@ def create_app(
     def frontend(path: str):
         if path.startswith("api/"):
             raise AppError("RESOURCE_NOT_FOUND", "接口不存在。", 404)
-        index = ROOT / "frontend/dist/index.html"
+        index = ROOT / "frontend/dist" / ("showcase.html" if path == "showcase.html" else "index.html")
         if index.exists():
             return FileResponse(index)
         return JSONResponse({"message": "前端尚未构建，请运行 npm run build。"}, status_code=503)

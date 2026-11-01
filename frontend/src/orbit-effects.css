@@ -1,0 +1,308 @@
+/* Low-contrast ambient light remains behind both the welcome and active chat. */
+[data-theme='orbit'] .workspace {
+  position: relative;
+  isolation: isolate;
+}
+[data-theme='orbit'] .workspace::before,
+[data-theme='orbit'] .workspace::after {
+  content: '';
+  position: absolute;
+  inset: -15%;
+  z-index: -1;
+  pointer-events: none;
+}
+[data-theme='orbit'] .workspace::before {
+  background:
+    radial-gradient(ellipse 45% 40% at 8% 28%, #4bcede1c, transparent 75%),
+    radial-gradient(ellipse 47% 55% at 87% 63%, #8562e52a, transparent 75%),
+    radial-gradient(ellipse 30% 25% at 57% 5%, #637bc51a, transparent 80%);
+  animation: orbit-ambient-drift 28s ease-in-out infinite alternate;
+}
+[data-theme='orbit'] .workspace::after {
+  background:
+    radial-gradient(ellipse 65% 14% at 45% 50%, #8476e410, transparent 78%),
+    radial-gradient(ellipse 35% 38% at 80% 22%, #4bd7e414, transparent 78%);
+  animation: orbit-ambient-tide 36s ease-in-out -12s infinite alternate;
+}
+[data-theme='orbit'] .orbit-chat-layout > .welcome-backdrop {
+  display: none;
+}
+@keyframes orbit-ambient-drift {
+  from {
+    transform: translate(-3%, -2%) scale(1);
+  }
+  50% {
+    transform: translate(3%, 3%) scale(1.05);
+  }
+  to {
+    transform: translate(6%, -3%) scale(1.02);
+  }
+}
+@keyframes orbit-ambient-tide {
+  from {
+    transform: translate(4%, -5%) rotate(-8deg);
+    opacity: 0.55;
+  }
+  to {
+    transform: translate(-5%, 7%) rotate(8deg);
+    opacity: 1;
+  }
+}
+@media (max-width: 760px) {
+  [data-theme='orbit'] .workspace::before {
+    opacity: 0.7;
+  }
+  [data-theme='orbit'] .workspace::after {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-theme='orbit'] .workspace::before,
+  [data-theme='orbit'] .workspace::after {
+    animation: none;
+    transform: none;
+  }
+}
+
+/* Feedback uses transforms and opacity; chat content keeps a stable layout. */
+[data-theme='orbit']
+  :is(
+    .new-chat,
+    .sidebar nav button,
+    .recent-section button,
+    .orbit-rule-list button,
+    .orbit-starters button,
+    .send-button,
+    .orbit-context-link
+  ) {
+  transition:
+    transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 240ms,
+    border-color 240ms,
+    background 200ms,
+    color 200ms;
+}
+.orbit-starters button {
+  isolation: isolate;
+  overflow: hidden;
+  transform-style: preserve-3d;
+}
+.orbit-starters button::before,
+.orbit-rule-list button::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    220px circle at var(--pointer-x, 50%) var(--pointer-y, 50%),
+    #75e8ff22,
+    transparent 65%
+  );
+  transition: opacity 240ms;
+}
+.orbit-starters button::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -80%;
+  width: 55%;
+  height: 100%;
+  transform: skewX(-22deg);
+  background: linear-gradient(90deg, transparent, #d3c8ff15, transparent);
+  pointer-events: none;
+}
+.orbit-starters button > svg {
+  transition:
+    transform 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    filter 240ms;
+}
+.orbit-starters button:focus-visible {
+  border-color: #bca4ff;
+  box-shadow: 0 0 25px #a88df025;
+}
+.orbit-rule-list button {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: 1px solid transparent;
+}
+[data-theme='orbit'] .composer {
+  position: relative;
+  isolation: isolate;
+  transition:
+    border-color 240ms,
+    box-shadow 300ms,
+    background 240ms;
+}
+[data-theme='orbit'] .composer::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    330px circle at var(--pointer-x, 70%) var(--pointer-y, 100%),
+    #a58aff12,
+    transparent 70%
+  );
+  transition: opacity 250ms;
+}
+[data-theme='orbit'] .composer:focus-within {
+  border-color: #9b8de0;
+  box-shadow:
+    0 0 0 1px #aa91ff1a,
+    0 0 35px #796ce018,
+    0 8px 35px #0003;
+}
+[data-theme='orbit'] .composer:focus-within::before {
+  opacity: 1;
+}
+[data-theme='orbit'] .send-button {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+[data-theme='orbit'] .send-button::before {
+  content: '';
+  position: absolute;
+  inset: -100%;
+  z-index: -1;
+  background: linear-gradient(110deg, transparent 42%, #ffffff90 50%, transparent 58%);
+  transform: translateX(-80%);
+  pointer-events: none;
+}
+[data-theme='orbit'] .send-button > svg {
+  transition: transform 220ms;
+}
+[data-theme='orbit'] .orbit-mini-scene {
+  transition: transform 450ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.orbit-mini-ring {
+  transition:
+    border-color 400ms,
+    box-shadow 400ms;
+}
+.orbit-click-wave {
+  position: fixed;
+  z-index: 120;
+  pointer-events: none;
+  border: 1px solid #a7deff9c;
+  border-radius: 50%;
+  background: radial-gradient(circle, #a78bfa18, #60def022 45%, transparent 70%);
+  box-shadow:
+    inset 0 0 15px #82dbf228,
+    0 0 18px #a990ff28;
+  will-change: transform, opacity;
+}
+[data-theme='orbit']
+  :is(
+    .new-chat,
+    .sidebar nav button,
+    .recent-section button,
+    .orbit-starters button,
+    .orbit-rule-list button,
+    .send-button:not(:disabled)
+  ):active {
+  transform: scale(0.97);
+  transition-duration: 90ms;
+}
+@media (hover: hover) and (pointer: fine) {
+  .orbit-starters button[data-orbit-lit='true'] {
+    transform: perspective(650px) translateY(-4px) rotateX(var(--tilt-x, 0deg))
+      rotateY(var(--tilt-y, 0deg));
+    border-color: #a99bff;
+    box-shadow:
+      0 12px 28px #0004,
+      0 0 22px #a489f51c,
+      inset 0 1px #d7d0ff1a;
+  }
+  :is(.orbit-starters button, .orbit-rule-list button)[data-orbit-lit='true']::before {
+    opacity: 1;
+  }
+  .orbit-starters button:hover::after {
+    animation: orbit-sheen 700ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  .orbit-starters button:hover > svg:first-child {
+    transform: translateY(-2px) rotate(-7deg);
+    filter: drop-shadow(0 0 7px #ad94ff80);
+  }
+  .orbit-starters button:hover > svg:last-child {
+    transform: translate(2px, -2px);
+    color: #80e7ef;
+  }
+  [data-theme='orbit'] .orbit-rule-list button:hover {
+    transform: translateX(3px);
+    border-color: #69608a;
+    box-shadow: 0 0 20px #a08cf51a;
+  }
+  [data-theme='orbit'] .sidebar nav button:hover,
+  [data-theme='orbit'] .recent-section button:hover {
+    transform: translateX(3px);
+  }
+  [data-theme='orbit'] .new-chat:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 20px #aa91ff1f;
+    border-color: #9a86ca;
+  }
+  [data-theme='orbit'] .composer[data-orbit-lit='true']::before {
+    opacity: 1;
+  }
+  [data-theme='orbit'] .send-button:not(:disabled):hover {
+    transform: translateY(-3px) scale(1.08);
+    box-shadow:
+      0 0 24px #83d9fa55,
+      0 6px 16px #0005;
+  }
+  [data-theme='orbit'] .send-button:not(:disabled):hover::before {
+    animation: orbit-button-sheen 800ms ease both;
+  }
+  [data-theme='orbit'] .send-button:not(:disabled):hover > svg {
+    transform: translateY(-2px);
+  }
+  [data-theme='orbit'] .orbit-mini-scene[data-orbit-lit='true'] {
+    transform: perspective(650px) rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg))
+      scale(1.04);
+  }
+  .orbit-mini-scene:hover .orbit-mini-ring {
+    border-color: #a696ff99;
+    box-shadow: 0 0 24px #a489e918;
+  }
+}
+@keyframes orbit-sheen {
+  to {
+    left: 150%;
+  }
+}
+@keyframes orbit-button-sheen {
+  to {
+    transform: translateX(80%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-theme='orbit']
+    :is(
+      .orbit-starters button,
+      .orbit-starters button > svg,
+      .orbit-rule-list button,
+      .sidebar nav button,
+      .recent-section button,
+      .new-chat,
+      .send-button,
+      .send-button > svg,
+      .composer,
+      .orbit-mini-scene
+    ) {
+    transition: none;
+    transform: none !important;
+  }
+  .orbit-starters button::after,
+  [data-theme='orbit'] .send-button::before,
+  .orbit-click-wave {
+    display: none;
+    animation: none;
+  }
+}

@@ -27,6 +27,7 @@ import { MemoryView } from './MemoryView';
 import { KnowledgeView } from './KnowledgeView';
 import { Results } from './Results';
 import { RunsView } from './RunsView';
+import { OrbitContext, OrbitWelcome } from './OrbitWorkspace';
 import type {
   Detail,
   InvoiceWritePlan,
@@ -40,7 +41,8 @@ import type {
 
 type Page = 'chat' | 'memory' | 'runs' | 'knowledge';
 
-export default function App() {
+export default function App({ appearance = 'default' }: { appearance?: 'default' | 'orbit' }) {
+  const orbit = appearance === 'orbit';
   const [user, setUser] = useState<User | null>(null);
   const [booting, setBooting] = useState(true);
   const [session, setSession] = useState<Session | null>(null);
@@ -543,7 +545,8 @@ export default function App() {
         <div className="sidebar-brand">
           <BrandMark />
           <div>
-            <strong>财税助手</strong>
+            <strong>{orbit ? 'HARNESS' : '财税助手'}</strong>
+            {orbit && <small className="orbit-brand-caption">财税智控工作空间</small>}
           </div>
           <button
             className="icon-button mobile-close"
@@ -601,6 +604,7 @@ export default function App() {
                 void openSession(item, user).catch((err) => setError(err.message));
               }}
               title={item.title ?? '新对话'}
+              aria-label={`打开会话：${item.title || '新对话'}`}
             >
               <MessageSquare size={14} />
               <span>{item.title || '新对话'}</span>
@@ -631,6 +635,19 @@ export default function App() {
             >
               <Menu size={20} />
             </button>
+            {orbit && (
+              <span className="orbit-page-label">
+                {
+                  {
+                    chat: '对话工作台',
+                    memory: '记忆管理',
+                    knowledge: '知识资料',
+                    runs: '运行记录',
+                  }[page]
+                }
+                <span>/ INTELLIGENCE, UNDER CONTROL.</span>
+              </span>
+            )}
             <label className="select-label">
               <span className="sr-only">当前企业</span>
               <select
@@ -748,7 +765,9 @@ export default function App() {
                 )}
               </div>
             )}
-            <div className={`chat-workspace${turnList.length === 0 ? ' is-empty' : ''}`}>
+            <div
+              className={`chat-workspace${turnList.length === 0 ? ' is-empty' : ''}${orbit ? ' orbit-chat-layout' : ''}`}
+            >
               <div className="welcome-backdrop" aria-hidden="true" />
               <div
                 className="conversation-scroll"
@@ -763,7 +782,9 @@ export default function App() {
                 }}
               >
                 <div className="conversation-content">
-                  {turnList.length === 0 ? (
+                  {turnList.length === 0 && orbit ? (
+                    <OrbitWelcome onDraft={prepareDraft} />
+                  ) : turnList.length === 0 ? (
                     <section className="welcome">
                       <div className="welcome-brand">
                         <span className="welcome-emblem" aria-hidden="true">
@@ -1009,6 +1030,18 @@ export default function App() {
                 )}
                 <p className="composer-footnote">比赛模拟资料 · 保存状态以实际核验结果为准</p>
               </div>
+              {orbit && (
+                <OrbitContext
+                  company={company}
+                  task={currentTask}
+                  taskError={taskError}
+                  turns={turnList}
+                  active={!!activeId || sending}
+                  stage={sending ? '正在发送需求' : stage}
+                  modelReady={user.model_ready}
+                  onDetail={setDetail}
+                />
+              )}
             </div>
           </>
         )}
