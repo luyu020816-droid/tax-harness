@@ -1,0 +1,10 @@
+ALTER TABLE users ADD COLUMN is_active boolean NOT NULL DEFAULT true;
+ALTER TABLE users ADD COLUMN auth_epoch bigint NOT NULL DEFAULT 1;
+ALTER TABLE login_sessions ADD COLUMN auth_epoch bigint NOT NULL DEFAULT 1;
+ALTER TABLE login_sessions ADD COLUMN revoked_at timestamptz;
+ALTER TABLE memory_change_ops ADD COLUMN created_at timestamptz;
+ALTER TABLE memory_change_ops ALTER COLUMN created_at SET DEFAULT clock_timestamp();
+CREATE INDEX login_sessions_user ON login_sessions(user_id,expires_at);
+CREATE INDEX turns_admission ON turns(user_id,created_at DESC);
+CREATE INDEX work_user_queue ON work_items(user_id,kind,state,lease_until);
+INSERT INTO schema_migrations(version) VALUES(12);

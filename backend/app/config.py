@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,14 +31,27 @@ class Settings(BaseSettings):
     max_tool_calls: int = Field(default=16, ge=1, le=60)
     turn_timeout: int = Field(default=180, ge=10)
     demo_mode: bool = True
+    deployment_mode: Literal["demo", "production"] = "demo"
+    login_ttl_seconds: int = Field(default=43200, ge=300, le=86400)
+    requests_per_minute: int = Field(default=60, ge=1, le=1000)
+    max_pending_per_user: int = Field(default=20, ge=1, le=1000)
+    max_pending_global: int = Field(default=200, ge=1, le=10000)
+    max_active_runs: int = Field(default=4, ge=1, le=100)
+    max_retrieval_requests: int = Field(default=4, ge=1, le=32)
+    json_max_bytes: int = Field(default=1024 * 1024, ge=65536, le=4 * 1024 * 1024)
+    statement_timeout_ms: int = Field(default=15000, ge=1000, le=60000)
+    lock_timeout_ms: int = Field(default=3000, ge=100, le=10000)
     worker_count: int = Field(default=2, ge=1, le=8)
     lease_seconds: int = Field(default=90, ge=30)
     cookie_secure: bool = False
+    insight_price_file: Path = ROOT / ".local/insight-prices.json"
     summary_evidence_budget: int = Field(default=3000, ge=256, le=8000)
     context_recent_turns: int = Field(default=12, ge=0, le=12)
     context_use_summary: bool = True
     context_auto_compact: bool = True
-    context_history_search: bool = True
+    context_history_search: bool = (
+        False  # Legacy experiment setting; cannot enable online chat search.
+    )
     knowledge_enabled: bool = True
     knowledge_model_directory: Path = ROOT / ".local/retrieval-models"
     knowledge_selection_policy: Path = ROOT / "evals/retrieval-v2/selection-policy.json"
@@ -51,7 +65,9 @@ class Settings(BaseSettings):
     knowledge_ocr_max_pixels: int = Field(default=20_000_000, ge=1_000_000, le=20_000_000)
     knowledge_ocr_min_confidence: float = Field(default=0.75, ge=0.5, le=0.99)
     knowledge_lease_seconds: int = Field(default=90, ge=30)
-    history_enabled: bool = True
+    history_enabled: bool = (
+        False  # Retained for historical reports; online history indexing is disabled.
+    )
     history_selection_policy: Path = ROOT / "evals/history-v1/selection-policy.json"
 
     @property

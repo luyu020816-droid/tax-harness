@@ -88,12 +88,19 @@ def validate_source_scope(conn, auth, source, companies):
 
 def read_evidence_in(conn, auth, citation_id):
     row = conn.execute(
-        "SELECT e.*,q.company_id,q.scope_snapshot FROM history_evidence e JOIN history_queries q USING(query_id) WHERE e.citation_id=%s AND q.user_id=%s",
+        "SELECT e.*,q.company_id,q.scope_snapshot,q.query_plan FROM history_evidence e JOIN history_queries q USING(query_id) WHERE e.citation_id=%s AND q.user_id=%s",
         (citation_id, auth.user_id),
     ).fetchone()
     if not row:
         raise AppError("SOURCE_INVALIDATED", "历史引用不存在或不可访问。", 409)
+    if not row["query_plan"].get("summary_id"):
+        raise AppError("HISTORY_RETRIEVAL_DISABLED", "普通历史不再参与知识检索。", 403)
     source = read_source(conn, auth, str(row["source_id"]), company_id=row["company_id"])
+    turn = conn.execute(
+        "SELECT session_id FROM turns WHERE turn_id=%s", (source["turn_id"],)
+    ).fetchone()
+    if not turn or str(turn["session_id"]) != row["scope_snapshot"].get("session_id"):
+        raise AppError("SOURCE_INVALIDATED", "摘要引用不属于原会话。", 409)
     companies = row["scope_snapshot"].get(
         "company_ids", [row["company_id"]] if row["company_id"] else []
     )
@@ -157,6 +164,10 @@ def validate_query_in(conn, auth, query_id):
 
 
 def navigation_in(conn, auth, session_id, selected_company, epoch, before):
+    return None
+
+
+def _navigation_legacy(conn, auth, session_id, selected_company, epoch, before):
     """Only IDs from completed replies; no historical body becomes formal state."""
     page, citations = None, []
     published = conn.execute(
@@ -236,6 +247,10 @@ def navigation_in(conn, auth, session_id, selected_company, epoch, before):
 
 
 def continuation_in(conn, execution):
+    return None
+
+
+def _continuation_legacy(conn, execution):
     """Resolve explicit page controls against the last *published* page.
 
     This narrow control grammar is not general intent recognition. An explicit
@@ -312,8 +327,13 @@ class HistoryRetrieval:
                     "TARGET_SCOPE_MISMATCH", "摘要范围与当前明确企业不一致，请重新检索。", 422
                 )
             row = conn.execute(
-                "SELECT * FROM summaries WHERE user_id=%s AND scope=%s AND memory_epoch=%s AND status='active' ORDER BY generation DESC LIMIT 1",
-                (execution.auth.user_id, company or "@user", execution.expected_epoch),
+                "SELECT * FROM summaries WHERE user_id=%s AND session_id=%s AND scope=%s AND memory_epoch=%s AND status='active' ORDER BY generation DESC LIMIT 1",
+                (
+                    execution.auth.user_id,
+                    execution.session_id,
+                    company or "@user",
+                    execution.expected_epoch,
+                ),
             ).fetchone()
             if not row:
                 raise AppError("SOURCE_INVALIDATED", "当前没有可用摘要。", 409)
@@ -354,7 +374,20 @@ class HistoryRetrieval:
             started,
         )
 
-    def read(self, auth, citation_id, *, char_start=None):
+    def read(self, auth, citation_id, *, char_start=None, session_id=None):
+        if session_id is None:
+            raise AppError("HISTORY_RETRIEVAL_DISABLED", "请在原会话核对摘要依据。", 403)
+        with self.db.transaction(readonly=True) as conn:
+            row = conn.execute(
+                "SELECT q.scope_snapshot FROM history_evidence e JOIN history_queries q USING(query_id) WHERE e.citation_id=%s AND q.user_id=%s",
+                (citation_id, auth.user_id),
+            ).fetchone()
+            if not row or row["scope_snapshot"].get("session_id") != str(session_id):
+                raise AppError("SOURCE_INVALIDATED", "摘要引用不属于当前会话。", 409)
+            owned(conn, "sessions", "session_id", session_id, auth)
+        return self._read_legacy(auth, citation_id, char_start=char_start)
+
+    def _read_legacy(self, auth, citation_id, *, char_start=None):
         with self.db.transaction(readonly=True) as conn:
             original = read_evidence_in(conn, auth, citation_id)
             if char_start is None:
@@ -385,6 +418,7 @@ class HistoryRetrieval:
             "company_id": original["company_id"],
             "query": "",
             "origin_citation_id": citation_id,
+            "summary_id": query["query_plan"]["summary_id"],
             "char_start": char_start,
         }
         snapshot = {**query["scope_snapshot"], "memory_epoch": epoch}
@@ -402,7 +436,12 @@ class HistoryRetrieval:
         )
         return result["evidence"][0]
 
-    def search(
+    def search(self, auth, **kwargs):
+        raise AppError(
+            "HISTORY_RETRIEVAL_DISABLED", "仅检索手动提交的知识资料，普通会话不参与召回。", 403
+        )
+
+    def _search_legacy(
         self,
         auth,
         *,

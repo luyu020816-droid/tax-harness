@@ -26,6 +26,11 @@ def collect(conn, execution, refs, budget):
     for ref in refs:
         source = read_source(conn, execution.auth, ref["source_id"])
         validate_source_scope(conn, execution.auth, source, companies)
+        turn = conn.execute(
+            "SELECT session_id FROM turns WHERE turn_id=%s", (source["turn_id"],)
+        ).fetchone()
+        if not turn or str(turn["session_id"]) != str(execution.session_id):
+            raise AppError("SUMMARY_INVALID", "摘要来源不属于当前会话。", 409)
         if source["revision"] != ref["revision"]:
             raise AppError("SOURCE_INVALIDATED", "摘要原话修订已变化。", 409)
         if source["role"] != "user":

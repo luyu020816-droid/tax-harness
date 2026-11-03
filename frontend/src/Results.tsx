@@ -2,6 +2,7 @@ import { ImportReceipt } from './ImportReceipt';
 import { WritePlanCard } from './WritePlanCard';
 import { KnowledgeCitation } from './KnowledgeCitation';
 import { HistoryCitation } from './HistoryCitation';
+import { KnowledgeDraftCard } from './KnowledgeText';
 import { ArrowUpRight, CheckCheck, ChevronRight, CircleAlert } from 'lucide-react';
 import { companyName, dateTime, money } from './api';
 import type { Detail, InvoiceWritePlan, ResultCard, Rule } from './types';
@@ -34,6 +35,15 @@ export function Results({
   onConfirm: (plan: InvoiceWritePlan) => Promise<void>;
   onPlanChanged: () => Promise<void>;
 }) {
+  if (card.kind === 'knowledge_draft')
+    return (
+      <KnowledgeDraftCard
+        company={card.company_id}
+        title={card.title}
+        content={card.content}
+        requestKey={card.draft_request_id}
+      />
+    );
   if (card.kind === 'knowledge_quote')
     return <KnowledgeCitation id={card.citation_id} onDetail={onDetail} />;
   if (card.kind === 'history_quote') return <HistoryCitation card={card} />;

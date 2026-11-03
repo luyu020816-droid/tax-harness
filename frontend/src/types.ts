@@ -20,6 +20,9 @@ export interface Session {
   selected_company_id: string | null;
   title?: string;
   updated_at: string;
+  pinned_at?: string | null;
+  archived_at?: string | null;
+  organization_revision?: number;
 }
 export interface Invoice {
   invoice_id: string;
@@ -99,6 +102,14 @@ export interface InvoiceWritePlan extends CardBase {
   confirmation_turn_id: string | null;
 }
 export type ResultCard =
+  | {
+      kind: 'knowledge_draft';
+      company_id: string;
+      title: string;
+      content: string;
+      submitted: false;
+      draft_request_id: string;
+    }
   | SummaryCard
   | ListCard
   | OperationCard
@@ -270,6 +281,7 @@ export interface KnowledgeQuoteCard extends CardBase {
 
 export interface HistoryQuoteCard {
   kind: 'history_quote';
+  session_id?: string;
   company_id: string | null;
   citation_id: string;
   source_id: string;

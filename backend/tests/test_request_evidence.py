@@ -153,12 +153,12 @@ async def test_month_correction_reuses_only_confirmed_year(db, settings):
 def test_history_excludes_current_question_and_its_own_tool_results(
     db, execution_factory, source_factory
 ):
-    old = source_factory("以前确认过发票用途是办公采购")
+    source_factory("以前确认过发票用途是办公采购")
     ex = execution_factory("我去年提过的发票用途具体是什么？")
     executor = ToolExecutor(db)
     for _ in range(2):
         output, _ = executor.execute(
             ex, tool("search_history", {"company_id": "C001", "query": "用途"})["tool_calls"][0]
         )
-        assert output["ok"]
-        assert [m["source_id"] for m in output["data"]["matches"]] == [str(old["source_id"])]
+        assert not output["ok"]
+        assert output["error"]["code"] == "HISTORY_RETRIEVAL_DISABLED"

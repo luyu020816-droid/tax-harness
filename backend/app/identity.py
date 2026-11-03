@@ -1,6 +1,6 @@
 import hashlib
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.errors import AppError
 from app.events import interrupt_session
@@ -10,11 +10,12 @@ from app.values import uid
 @dataclass(frozen=True)
 class Identity:
     user_id: str
+    token_hash: str | None = field(default=None, repr=False, compare=False)
 
 
 def assert_access(conn, auth: Identity, company_id: str, *, write: bool = False) -> dict:
     row = conn.execute(
-        "SELECT * FROM user_company_grants WHERE user_id=%s AND company_id=%s",
+        "SELECT g.* FROM user_company_grants g JOIN users u USING(user_id) WHERE g.user_id=%s AND g.company_id=%s AND u.is_active",
         (auth.user_id, company_id),
     ).fetchone()
     if not row or not row["can_read"] or (write and not row["can_update"]):
@@ -51,20 +52,42 @@ def owned(conn, table: str, key: str, resource_id: str, auth: Identity, *, lock=
     row = conn.execute(query, (resource_id, auth.user_id)).fetchone()
     if not row:
         raise AppError("RESOURCE_NOT_FOUND", "记录不存在或无权访问。", 404)
+    if table == "sessions" and row.get("deleted_at"):
+        raise AppError("RESOURCE_NOT_FOUND", "会话已删除。", 404)
+    from app.resource_access import session_allowed, turn_allowed
+
+    if table == "sessions" and not session_allowed(conn, auth.user_id, resource_id):
+        raise AppError("RESOURCE_NOT_FOUND", "会话不存在或当前无权访问。", 404)
+    if table == "turns":
+        session = conn.execute(
+            "SELECT deleted_at FROM sessions WHERE session_id=%s", (row["session_id"],)
+        ).fetchone()
+        if not session or session["deleted_at"]:
+            raise AppError("RESOURCE_NOT_FOUND", "会话已删除。", 404)
+        if not turn_allowed(conn, auth.user_id, resource_id):
+            raise AppError("ACCESS_DENIED", "当前企业权限已变化，无法访问此记录。", 403)
     if row.get("company_id"):
         assert_access(conn, auth, row["company_id"])
     return row
 
 
-def login(db, user_id: str) -> str:
+def login(db, user_id: str, *, ttl_seconds=43200, previous_token=None) -> str:
     token = secrets.token_urlsafe(40)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     with db.transaction() as conn:
-        if not conn.execute("SELECT 1 FROM users WHERE user_id=%s", (user_id,)).fetchone():
+        user = conn.execute(
+            "SELECT auth_epoch FROM users WHERE user_id=%s AND is_active FOR UPDATE", (user_id,)
+        ).fetchone()
+        if not user:
             raise AppError("INVALID_ARGUMENT", "请选择比赛提供的模拟用户。")
+        if previous_token:
+            conn.execute(
+                "UPDATE login_sessions SET revoked_at=clock_timestamp() WHERE token_hash=%s AND revoked_at IS NULL",
+                (hashlib.sha256(previous_token.encode()).hexdigest(),),
+            )
         conn.execute(
-            "INSERT INTO login_sessions(token_hash,user_id,expires_at) VALUES(%s,%s,now()+interval '12 hours')",
-            (token_hash, user_id),
+            "INSERT INTO login_sessions(token_hash,user_id,expires_at,auth_epoch) VALUES(%s,%s,clock_timestamp()+%s*interval '1 second',%s)",
+            (token_hash, user_id, ttl_seconds, user["auth_epoch"]),
         )
     return token
 
@@ -74,12 +97,42 @@ def authenticate(db, token: str | None) -> Identity:
         raise AppError("UNAUTHENTICATED", "请先选择模拟用户。", 401)
     with db.transaction(readonly=True) as conn:
         row = conn.execute(
-            "SELECT user_id FROM login_sessions WHERE token_hash=%s AND expires_at>now()",
+            "SELECT l.user_id FROM login_sessions l JOIN users u USING(user_id) WHERE l.token_hash=%s AND l.expires_at>clock_timestamp() AND l.revoked_at IS NULL AND l.auth_epoch=u.auth_epoch AND u.is_active",
             (hashlib.sha256(token.encode()).hexdigest(),),
         ).fetchone()
         if not row:
             raise AppError("UNAUTHENTICATED", "登录已失效，请重新选择用户。", 401)
-        return Identity(row["user_id"])
+        return Identity(row["user_id"], hashlib.sha256(token.encode()).hexdigest())
+
+
+def assert_login_active(conn, auth: Identity):
+    if not auth.token_hash:
+        raise AppError("UNAUTHENTICATED", "需要有效的登录会话。", 401)
+    if not conn.execute(
+        "SELECT 1 FROM login_sessions l JOIN users u USING(user_id) WHERE l.token_hash=%s AND l.user_id=%s AND l.expires_at>clock_timestamp() AND l.revoked_at IS NULL AND l.auth_epoch=u.auth_epoch AND u.is_active",
+        (auth.token_hash, auth.user_id),
+    ).fetchone():
+        raise AppError("UNAUTHENTICATED", "登录已过期或已退出。", 401)
+
+
+def logout(db, token):
+    if token:
+        with db.transaction() as conn:
+            conn.execute(
+                "UPDATE login_sessions SET revoked_at=clock_timestamp() WHERE token_hash=%s AND revoked_at IS NULL",
+                (hashlib.sha256(token.encode()).hexdigest(),),
+            )
+
+
+def logout_all(db, auth):
+    with db.transaction() as conn:
+        conn.execute("SELECT 1 FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,))
+        assert_login_active(conn, auth)
+        conn.execute("UPDATE users SET auth_epoch=auth_epoch+1 WHERE user_id=%s", (auth.user_id,))
+        conn.execute(
+            "UPDATE login_sessions SET revoked_at=clock_timestamp() WHERE user_id=%s AND revoked_at IS NULL",
+            (auth.user_id,),
+        )
 
 
 def me(db, auth: Identity) -> dict:

@@ -1,10 +1,9 @@
 import json
 
 import pytest
-from test_compaction import closed_group
+from test_compaction import closed_group, compact
 from test_runtime import model_settings
 
-from app.compaction import compact
 from app.context import assemble, validate
 from app.errors import AppError
 

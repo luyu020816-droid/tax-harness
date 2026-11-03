@@ -14,6 +14,7 @@ from app.events import emit
 from app.execution import Execution, guard
 from app.identity import Identity, assert_access, owned
 from app.model import ModelAdapter
+from app.resource_access import session_allowed
 from app.sources import add_source, advance_progress, assess, read_source
 from app.tool_schemas import FinalReply
 from app.tools import ToolExecutor
@@ -53,13 +54,21 @@ class Runtime:
         if in_maintenance(self.settings.database_url):
             return None
         with self.db.transaction() as conn:
+            # Serialize only lease allocation, shared across all web processes.
+            conn.execute("SELECT pg_advisory_xact_lock(8123419416)")
+            active = conn.execute(
+                "SELECT count(*) n FROM work_items WHERE kind='turn' AND state='running' AND lease_until>clock_timestamp()"
+            ).fetchone()["n"]
+            if active >= self.settings.max_active_runs:
+                return None
             user = conn.execute(
-                "SELECT u.* FROM users u WHERE EXISTS(SELECT 1 FROM work_items w JOIN sources s USING(source_id) "
+                "SELECT u.* FROM users u WHERE u.is_active AND EXISTS(SELECT 1 FROM work_items w JOIN sources s USING(source_id) "
                 "JOIN turns t ON t.turn_id=s.turn_id WHERE w.user_id=u.user_id AND w.kind='turn' "
                 "AND (w.state='ready' OR (w.state='running' AND w.lease_until<clock_timestamp())) "
                 "AND t.status IN ('queued','running')) AND NOT EXISTS(SELECT 1 FROM work_items x "
                 "WHERE x.user_id=u.user_id AND x.state='running' AND x.lease_until>clock_timestamp()) "
-                "ORDER BY u.user_id FOR UPDATE OF u SKIP LOCKED LIMIT 1"
+                "ORDER BY (SELECT min(s.created_at) FROM work_items w JOIN sources s USING(source_id) JOIN turns t ON t.turn_id=s.turn_id "
+                "WHERE w.user_id=u.user_id AND w.kind='turn' AND t.status IN ('queued','running') AND (w.state='ready' OR (w.state='running' AND w.lease_until<clock_timestamp()))),u.user_id FOR UPDATE OF u SKIP LOCKED LIMIT 1"
             ).fetchone()
             if not user:
                 return None
@@ -77,21 +86,28 @@ class Runtime:
             work = conn.execute(
                 "SELECT * FROM work_items WHERE work_id=%s FOR UPDATE", (candidate["work_id"],)
             ).fetchone()
-            if candidate["recall_state"] != "active":
+            if candidate["recall_state"] != "active" or not session_allowed(
+                conn, user["user_id"], turn["session_id"]
+            ):
                 conn.execute(
                     "UPDATE turns SET status='interrupted',error=%s WHERE turn_id=%s",
                     (
                         jsonb(
                             {
                                 "code": "SOURCE_INVALIDATED",
-                                "message": "原指令包含已更正或删除的信息，请按当前任务发新消息继续。",
+                                "message": "原指令来源或企业权限已失效，请在有权限的新会话中继续。",
                             }
                         ),
                         turn["turn_id"],
                     ),
                 )
                 conn.execute(
-                    "UPDATE work_items SET state='invalidated' WHERE work_id=%s", (work["work_id"],)
+                    "UPDATE work_items SET state='invalidated',fencing_token=fencing_token+1,lease_until=NULL WHERE work_id=%s",
+                    (work["work_id"],),
+                )
+                conn.execute(
+                    "UPDATE runs SET state='interrupted',finished_at=clock_timestamp() WHERE turn_id=%s AND finished_at IS NULL",
+                    (turn["turn_id"],),
                 )
                 assess(conn, str(candidate["source_id"]), "invalidated")
                 emit(conn, str(turn["turn_id"]), None, "failed", {"code": "SOURCE_INVALIDATED"})
@@ -132,6 +148,16 @@ class Runtime:
                     generation,
                     digest([self.settings.model_id, self.settings.input_budget]),
                 ),
+            )
+            from app.telemetry import snapshot
+
+            insight_snapshot = snapshot(self.settings, getattr(self.model, "mode", "unknown"))
+            insight_snapshot["dataset_profile"] = conn.execute(
+                "SELECT profile FROM dataset_metadata WHERE singleton_id=1"
+            ).fetchone()["profile"]
+            conn.execute(
+                "UPDATE runs SET insight_snapshot=%s WHERE run_id=%s",
+                (jsonb(insight_snapshot), run_id),
             )
             return Execution(
                 Identity(user["user_id"]),
@@ -217,6 +243,14 @@ class Runtime:
 
     def _recovery_results(self, execution):
         """Read durable results before asking the model to resume an old source."""
+        from app.telemetry import phase
+
+        with phase(self.db, execution, "recovery:" + uid(), "host", "恢复前核对旧操作") as span:
+            groups = self._read_recovery_results(execution)
+            span["attributes"]["operation_count"] = len(groups)
+            return groups
+
+    def _read_recovery_results(self, execution):
         with self.db.transaction(readonly=True) as conn:
             rows = conn.execute(
                 "SELECT operation_id FROM operations WHERE user_id=%s AND source_id=%s ORDER BY committed_at",
@@ -248,6 +282,12 @@ class Runtime:
             )
         return groups
 
+    def _assemble_measured(self, execution, groups, *, budget=None):
+        from app.telemetry import phase
+
+        with phase(self.db, execution, "context:" + uid(), "context", "上下文组装"):
+            return context.assemble(self.db, self.settings, execution, groups, budget=budget)
+
     async def _loop(self, execution):
         from types import SimpleNamespace
 
@@ -262,7 +302,11 @@ class Runtime:
             model_calls += 1
             return await self.model.complete(payload)
 
-        budgeted_model = SimpleNamespace(complete=complete)
+        budgeted_model = SimpleNamespace(
+            complete=complete,
+            mode=getattr(self.model, "mode", "unknown"),
+            dispatch_enabled=getattr(self.model, "dispatch_enabled", True),
+        )
         groups = []
         tool_count = 0
         if execution.generation > 1:
@@ -276,7 +320,7 @@ class Runtime:
         for step in range(1, self.settings.max_model_steps + 1):
             try:
                 payload, manifest, _dropped = await asyncio.to_thread(
-                    context.assemble, self.db, self.settings, execution, groups, budget=budget
+                    self._assemble_measured, execution, groups, budget=budget
                 )
             except AppError as exc:
                 if exc.code == "STALE_CONTEXT" and not stale_retry:
@@ -290,7 +334,7 @@ class Runtime:
                     groups = []
                     stale_retry = True
                     payload, manifest, _dropped = await asyncio.to_thread(
-                        context.assemble, self.db, self.settings, execution, groups, budget=budget
+                        self._assemble_measured, execution, groups, budget=budget
                     )
                 else:
                     raise
@@ -323,7 +367,11 @@ class Runtime:
                 context_id = record_context(conn, execution, step, payload, manifest)
             started = time.monotonic()
             try:
-                response = await complete(payload)
+                from app import telemetry
+
+                response = await telemetry.complete(
+                    self.db, budgeted_model, execution, context_id, payload
+                )
             except AppError as exc:
                 if exc.code == "CONTEXT_CAPACITY_EXCEEDED" and budget is None:
                     budget = int(self.settings.context_budget * 0.7)

@@ -5,7 +5,7 @@ from psycopg_pool import ConnectionPool
 
 
 class Database:
-    def __init__(self, dsn: str):
+    def __init__(self, dsn: str, *, statement_timeout_ms=15000, lock_timeout_ms=3000):
         self.dsn = dsn
         self.pool = ConnectionPool(
             dsn,
@@ -13,7 +13,12 @@ class Database:
             max_size=10,
             timeout=5,
             open=False,
-            kwargs={"row_factory": dict_row, "autocommit": True, "connect_timeout": 3},
+            kwargs={
+                "row_factory": dict_row,
+                "autocommit": True,
+                "connect_timeout": 3,
+                "options": f"-c statement_timeout={int(statement_timeout_ms)} -c lock_timeout={int(lock_timeout_ms)}",
+            },
         )
 
     def open(self) -> None:
@@ -35,4 +40,4 @@ class Database:
                 row["version"]
                 for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
             }
-            return {5, 7, 8} <= versions
+            return {5, 7, 8, 10, 11, 12} <= versions

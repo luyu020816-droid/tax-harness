@@ -3,6 +3,7 @@
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from threading import BoundedSemaphore
 
 from app.errors import AppError
 from app.evidence_selection import choose_groups, load_policy
@@ -108,6 +109,7 @@ class KnowledgeRetrieval:
     def __init__(self, db, settings, engine, *, selection_policy=None):
         self.db, self.settings, self.engine = db, settings, engine
         self.selection_policy = selection_policy
+        self.search_slots = BoundedSemaphore(settings.max_retrieval_requests)
 
     def ready(self, *, validate=True):
         from app.ocr_status import options
@@ -179,7 +181,21 @@ class KnowledgeRetrieval:
                 "related_evidence": [e for e in group if e["citation_id"] != citation_id],
             }
 
-    def search(
+    def search(self, auth, **kwargs):
+        if not self.search_slots.acquire(blocking=False):
+            raise AppError(
+                "RETRIEVAL_BUSY",
+                "知识检索当前繁忙，请稍后重试。",
+                429,
+                retryable=True,
+                details={"retry_after_seconds": 5},
+            )
+        try:
+            return self._search(auth, **kwargs)
+        finally:
+            self.search_slots.release()
+
+    def _search(
         self,
         auth,
         *,

@@ -52,6 +52,32 @@ def test_task_mutation_has_a_factual_receipt(db, settings, execution_factory, ac
 
 
 async def test_unshown_query_is_rejected_then_retries_the_actual_displayed_view(db, settings):
+    class ViewModel(ScriptedModel):
+        async def complete(self, payload):
+            # Compression is a separate harness request. Do not consume the
+            # next business callback, which expects a tool result's data.
+            try:
+                request = json.loads(payload["messages"][-1].get("content") or "")
+            except json.JSONDecodeError:
+                request = None
+            if isinstance(request, dict) and "closed_turns" in request and "source_ids" in request:
+                self.requests.append(payload)
+                return {
+                    "message": {
+                        "role": "assistant",
+                        "content": json.dumps(
+                            {
+                                "summary": "历史已检查用途；当前列表、授权与保存状态须重新核对。",
+                                "covered_sources": request["source_ids"],
+                            },
+                            ensure_ascii=False,
+                        ),
+                    },
+                    "usage": None,
+                    "finish_reason": "stop",
+                }
+            return await super().complete(payload)
+
     config = model_settings(settings)
     session = create_session(db, AUTH, "C001")
     runtime = Runtime(
@@ -107,7 +133,7 @@ async def test_unshown_query_is_rejected_then_retries_the_actual_displayed_view(
         assert data["status"] == "authorized"
         return tool("update_invoice", {"plan_id": data["plan_id"]})
 
-    runtime.model = ScriptedModel(
+    runtime.model = ViewModel(
         [
             tool("check_purposes", {"company_id": "C001", "period": "2026-09"}),
             unshown,

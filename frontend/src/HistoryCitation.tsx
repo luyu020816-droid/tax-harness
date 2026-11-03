@@ -18,7 +18,10 @@ export function HistoryCitation({ card }: { card: HistoryQuoteCard }) {
     let revision = 0;
     const refresh = () => {
       const current = ++revision;
-      void api<HistoryEvidence>(`/evidence/${card.citation_id}`, { signal: controller.signal })
+      void api<HistoryEvidence>(
+        `/evidence/${card.citation_id}${card.session_id ? `?session_id=${card.session_id}` : ''}`,
+        { signal: controller.signal }
+      )
         .then((value) => {
           if (!controller.signal.aborted && current === revision) {
             setEvidence(value);
@@ -40,7 +43,7 @@ export function HistoryCitation({ card }: { card: HistoryQuoteCard }) {
       controller.abort();
       clearInterval(timer);
     };
-  }, [card.citation_id]);
+  }, [card.citation_id, card.session_id]);
   if (error)
     return (
       <p className="error-note" role="status">

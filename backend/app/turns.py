@@ -1,6 +1,7 @@
 from app.errors import AppError
 from app.events import emit
 from app.identity import Identity, assert_access, owned
+from app.resource_access import SESSION_TITLE, SESSION_VISIBLE, TURN_VISIBLE, turn_allowed
 from app.sources import add_source, advance_progress, assess, next_sequence, read_source
 from app.values import digest, jsonb, safe_json, uid
 
@@ -24,6 +25,7 @@ def accept_turn(
     *,
     upload_ids=None,
     knowledge_upload_ids=None,
+    limits=None,
 ) -> dict:
     if not text.strip() or len(text) > 16000 or len(client_request_id) > 200:
         raise AppError("INVALID_ARGUMENT", "消息不能为空且最多 16000 字符，请求编号最多 200 字符。")
@@ -41,6 +43,8 @@ def accept_turn(
     with db.transaction() as conn:
         conn.execute("SELECT * FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,))
         session = owned(conn, "sessions", "session_id", session_id, auth)
+        if session.get("archived_at"):
+            raise AppError("SESSION_ARCHIVED", "请先取消归档，再继续此会话。", 409)
         if knowledge_upload_ids:
             from app.knowledge import upload_metadata as knowledge_metadata
 
@@ -65,6 +69,9 @@ def accept_turn(
                     "IDEMPOTENCY_CONFLICT", "相同请求编号的内容不同，已拒绝重复受理。", 409
                 )
             return safe_json(previous)
+        from app.admission import check
+
+        check(conn, auth.user_id, limits)
         sequence = next_sequence(conn, auth)
         turn_id = uid()
         companies = mentioned_companies(conn, text)
@@ -120,7 +127,9 @@ def read_turn(db, auth: Identity, turn_id: str) -> dict:
         )
 
 
-def retry_turn(db, auth: Identity, turn_id: str, request_id: str, expected_generation: int):
+def retry_turn(
+    db, auth: Identity, turn_id: str, request_id: str, expected_generation: int, *, limits=None
+):
     """Requeue the original source, preserving its operation idempotency keys."""
     fingerprint = digest(["retry_turn", turn_id, expected_generation])
     with db.transaction() as conn:
@@ -153,6 +162,9 @@ def retry_turn(db, auth: Identity, turn_id: str, request_id: str, expected_gener
             raise AppError("SOURCE_INVALIDATED", "原任务执行来源不完整。", 409)
         source_id = str(sources[0]["source_id"])
         read_source(conn, auth, source_id)
+        from app.admission import check
+
+        check(conn, auth.user_id, limits)
         conn.execute(
             "UPDATE work_items SET state='ready',lease_until=NULL,fencing_token=fencing_token+1,last_error=NULL WHERE source_id=%s AND kind='turn'",
             (source_id,),
@@ -179,8 +191,10 @@ def list_pending(db, auth: Identity) -> list[dict]:
     with db.transaction(readonly=True) as conn:
         return safe_json(
             conn.execute(
-                "SELECT turn_id,source_seq,pending_clarification,updated_at FROM turns WHERE user_id=%s AND status='waiting_user' AND pending_clarification->>'state'='waiting_user' ORDER BY source_seq DESC",
-                (auth.user_id,),
+                "SELECT t.turn_id,t.source_seq,t.pending_clarification,t.updated_at FROM turns t JOIN sessions s USING(session_id) WHERE "
+                + TURN_VISIBLE
+                + " AND s.deleted_at IS NULL AND t.status='waiting_user' AND t.pending_clarification->>'state'='waiting_user' ORDER BY t.source_seq DESC",
+                {"user": auth.user_id},
             ).fetchall()
         )
 
@@ -283,8 +297,12 @@ def list_sessions(db, auth: Identity) -> list[dict]:
     with db.transaction(readonly=True) as conn:
         return safe_json(
             conn.execute(
-                "SELECT s.*,(SELECT t.text FROM turns t WHERE t.session_id=s.session_id ORDER BY source_seq LIMIT 1) AS title FROM sessions s WHERE user_id=%s ORDER BY updated_at DESC LIMIT 100",
-                (auth.user_id,),
+                "SELECT s.*, "
+                + SESSION_TITLE
+                + " AS title FROM sessions s WHERE "
+                + SESSION_VISIBLE
+                + " AND s.archived_at IS NULL ORDER BY s.pinned_at DESC NULLS LAST,s.updated_at DESC,s.session_id DESC LIMIT 100",
+                {"user": auth.user_id},
             ).fetchall()
         )
 
@@ -321,9 +339,5 @@ def session_messages(db, auth: Identity, session_id: str, before_seq=None) -> di
 
 
 def _assert_turn_access(conn, auth, turn_id):
-    scopes = conn.execute(
-        "SELECT DISTINCT ss.company_id FROM source_scopes ss JOIN sources s USING(source_id) WHERE s.turn_id=%s",
-        (turn_id,),
-    ).fetchall()
-    for scope in scopes:
-        assert_access(conn, auth, scope["company_id"])
+    if not turn_allowed(conn, auth.user_id, turn_id):
+        raise AppError("ACCESS_DENIED", "当前企业权限已变化，无法访问此记录。", 403)

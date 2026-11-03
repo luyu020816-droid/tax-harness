@@ -41,7 +41,7 @@ def guard(conn, execution: Execution, *, shared=False) -> dict:
         (execution.work_id,),
     ).fetchone()
     valid = (
-        turn
+        user and user["is_active"] and turn
         and work
         and turn["status"] == "running"
         and turn["active_run_generation"] == execution.generation
@@ -49,6 +49,10 @@ def guard(conn, execution: Execution, *, shared=False) -> dict:
         and work["lease_valid"]
         and work["fencing_token"] == execution.fencing_token
     )
+    session = conn.execute(
+        "SELECT deleted_at FROM sessions WHERE session_id=%s", (execution.session_id,)
+    ).fetchone()
+    valid = valid and session and not session["deleted_at"]
     if not valid:
         raise AppError("SOURCE_INVALIDATED", "本次执行已取消、超时或由新执行接管。", 409)
     if user["memory_epoch"] != execution.expected_epoch:

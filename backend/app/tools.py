@@ -34,6 +34,23 @@ class ToolExecutor:
         self.history = HistoryRetrieval(db, retrieval.settings, retrieval.engine)
 
     def execute(self, execution: Execution, call: dict) -> tuple[dict, dict]:
+        from app.telemetry import phase
+
+        with phase(
+            self.db,
+            execution,
+            "tool:" + call["id"],
+            "tool",
+            call.get("function", {}).get("name", "unknown"),
+            tool_call_id=call["id"],
+        ) as span:
+            result = self._execute(execution, call)
+            if not result[0].get("ok"):
+                span["status"] = "failed"
+                span["error_code"] = result[0].get("error", {}).get("code")
+            return result
+
+    def _execute(self, execution: Execution, call: dict) -> tuple[dict, dict]:
         name = call.get("function", {}).get("name", "")
         raw = call.get("function", {}).get("arguments", "{}")
         call_id = call["id"]
@@ -167,8 +184,23 @@ class ToolExecutor:
 
     def _dispatch(self, execution, name, args):
         db, auth = self.db, execution.auth
-        if name == "search_history" and not self.retrieval.settings.context_history_search:
-            raise AppError("TOOL_DISABLED", "本输入策略未启用历史搜索，请使用已有依据或追问。", 422)
+        if name == "prepare_knowledge_text":
+            from app.knowledge import upload_access
+
+            with db.transaction(readonly=True) as conn:
+                upload_access(conn, auth, args["company_id"])
+            if not args["content"].strip():
+                raise AppError("INVALID_ARGUMENT", "知识正文不能为空。", 422)
+            return {
+                "kind": "knowledge_draft",
+                **args,
+                "submitted": False,
+                "draft_request_id": f"draft:{execution.source_id}:{digest(args)}",
+            }
+        if name == "search_history":
+            raise AppError(
+                "HISTORY_RETRIEVAL_DISABLED", "普通会话不参与知识检索，请手动提交知识资料。", 403
+            )
         if name == "read_summary_source" and not self.retrieval.settings.context_use_summary:
             raise AppError("TOOL_DISABLED", "本输入策略未启用摘要。", 422)
         if args.get("company_id") and name in (
@@ -236,7 +268,12 @@ class ToolExecutor:
         if name == "read_summary_source":
             return self.history.read_summary(execution, **args)
         if name == "read_history":
-            result = self.history.read(auth, args["citation_id"], char_start=args.get("char_start"))
+            result = self.history.read(
+                auth,
+                args["citation_id"],
+                char_start=args.get("char_start"),
+                session_id=execution.session_id,
+            )
             return {k: v for k, v in result.items() if k != "excerpt"}
         if name == "read_evidence":
             return self.retrieval.read(auth, args["citation_id"])

@@ -12,6 +12,7 @@ import {
   ClipboardCheck,
   History,
   LoaderCircle,
+  LogOut,
   Menu,
   MessageSquare,
   Plus,
@@ -27,6 +28,7 @@ import { MemoryView } from './MemoryView';
 import { KnowledgeView } from './KnowledgeView';
 import { Results } from './Results';
 import { RunsView } from './RunsView';
+import { SessionHistory } from './SessionHistory';
 import { OrbitContext, OrbitWelcome } from './OrbitWorkspace';
 import type {
   Detail,
@@ -180,6 +182,17 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
       if (stamp === generation.current) setError((err as Error).message);
     } finally {
       if (stamp === generation.current) setBooting(false);
+    }
+  }
+
+  async function logout() {
+    try {
+      await api('/auth/logout', { method: 'POST' });
+      clearWorkspace();
+      setUser(null);
+      setBooting(false);
+    } catch (err) {
+      setError((err as Error).message);
     }
   }
 
@@ -366,7 +379,15 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
   }
 
   async function send() {
-    if (!session || !draft.trim() || activeId || sending || draft.length > 16000) return;
+    if (
+      !session ||
+      session.archived_at ||
+      !draft.trim() ||
+      activeId ||
+      sending ||
+      draft.length > 16000
+    )
+      return;
     if (!user?.model_ready) {
       setError('模型暂未连接，请完成本地配置并重启服务后办理。');
       return;
@@ -566,7 +587,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
               { id: 'chat', label: '对话', Icon: MessageSquare },
               { id: 'memory', label: '记忆管理', Icon: BrainCircuit },
               { id: 'knowledge', label: '知识资料', Icon: BookOpen },
-              { id: 'runs', label: '运行记录', Icon: History },
+              { id: 'runs', label: '运行洞察', Icon: History },
             ] as const
           ).map(({ id, label, Icon }) => (
             <button
@@ -583,34 +604,41 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
             </button>
           ))}
         </nav>
-        <div className="recent-section">
-          <span className="nav-label">最近会话</span>
-          {sessions.slice(0, 8).map((item) => (
-            <button
-              key={item.session_id}
-              className={item.session_id === session?.session_id ? 'active' : ''}
-              onClick={() => {
-                if (item.session_id === session?.session_id) {
-                  setPage('chat');
-                  setNavigationOpen(false);
-                  return;
-                }
-                generation.current += 1;
-                setTurns([]);
-                setActiveId(null);
-                setDetail(null);
-                setAttachment(null);
-                setError('');
-                void openSession(item, user).catch((err) => setError(err.message));
-              }}
-              title={item.title ?? '新对话'}
-              aria-label={`打开会话：${item.title || '新对话'}`}
-            >
-              <MessageSquare size={14} />
-              <span>{item.title || '新对话'}</span>
-            </button>
-          ))}
-        </div>
+        <SessionHistory
+          key={user.user_id}
+          sessions={sessions}
+          activeId={session?.session_id}
+          onOpen={(item) => {
+            if (item.session_id === session?.session_id) {
+              setPage('chat');
+              setNavigationOpen(false);
+              return;
+            }
+            generation.current += 1;
+            setTurns([]);
+            setActiveId(null);
+            setDetail(null);
+            setAttachment(null);
+            setError('');
+            void openSession(item, user).catch((err) => setError(err.message));
+          }}
+          onChanged={async (id, action) => {
+            const stamp = generation.current;
+            const list = await api<Session[]>('/sessions');
+            if (stamp !== generation.current) return;
+            setSessions(list);
+            if (id === session?.session_id && (action === 'archive' || action === 'delete')) {
+              generation.current += 1;
+              setTurns([]);
+              setActiveId(null);
+              setDetail(null);
+              setDraft('');
+              if (list.length) await openSession(list[0], user);
+              else await newSession();
+            } else if (id === session?.session_id)
+              setSession((old) => list.find((item) => item.session_id === id) ?? old);
+          }}
+        />
         <footer className="sidebar-footer">
           <span className="environment-dot" />
           <span>本地模拟环境</span>
@@ -642,7 +670,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                     chat: '对话工作台',
                     memory: '记忆管理',
                     knowledge: '知识资料',
-                    runs: '运行记录',
+                    runs: '运行洞察',
                   }[page]
                 }
                 <span>/ INTELLIGENCE, UNDER CONTROL.</span>
@@ -685,6 +713,14 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
               </select>
               <ChevronDown size={13} />
             </label>
+            <button
+              className="icon-button"
+              aria-label="退出登录"
+              title="退出登录"
+              onClick={() => void logout()}
+            >
+              <LogOut size={17} />
+            </button>
           </div>
         </header>
         {error && (
@@ -957,7 +993,11 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                     void send();
                   }}
                 >
+                  {session?.archived_at && (
+                    <p className="notice">此会话已归档。请在“全部会话与归档”中取消归档后继续。</p>
+                  )}
                   <textarea
+                    disabled={!!session?.archived_at}
                     ref={composer}
                     value={draft}
                     onChange={(event) => setDraft(event.target.value)}

@@ -65,7 +65,15 @@ def _batch(conn, auth, batch_id, *, lock=False):
 
 
 def _session(conn, auth, session_id, company):
-    session = owned(conn, "sessions", "session_id", session_id, auth)
+    # Importer validates a binding, never reads conversation bodies/dependencies.
+    # Its restricted DB role deliberately cannot SELECT turns or model inputs.
+    session = conn.execute(
+        "SELECT s.session_id,s.selected_company_id FROM sessions s JOIN users u USING(user_id) "
+        "WHERE s.session_id=%s AND s.user_id=%s AND u.is_active AND s.deleted_at IS NULL AND s.archived_at IS NULL",
+        (session_id, auth.user_id),
+    ).fetchone()
+    if not session:
+        raise AppError("RESOURCE_NOT_FOUND", "会话不存在或不可访问。", 404)
     if session["selected_company_id"] != company:
         raise AppError("IMPORT_ACCESS_DENIED", "请在同一企业的会话中预览和确认。", 403)
 

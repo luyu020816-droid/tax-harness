@@ -134,6 +134,7 @@ class Knowledge:
         effective_from=None,
         effective_to=None,
         maintenance=False,
+        submission_kind="file",
     ):
         if not self.settings.knowledge_enabled:
             raise AppError("DEPENDENCY_UNAVAILABLE", "知识接入尚未启用。", 503)
@@ -161,6 +162,8 @@ class Knowledge:
             "effective_from": str(start),
             "effective_to": str(end) if end else None,
         }
+        if submission_kind != "file":
+            body["submission_kind"] = submission_kind
         with self.db.transaction() as conn:
             conn.execute("SELECT 1 FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,))
             if (
@@ -221,7 +224,7 @@ class Knowledge:
                 (document["document_id"],),
             ).fetchone()["n"]
             conn.execute(
-                "INSERT INTO knowledge_files(file_id,owner_id,company_id,original_name,media_type,file_bytes,byte_size,sha256,request_id,request_hash) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "INSERT INTO knowledge_files(file_id,owner_id,company_id,original_name,media_type,file_bytes,byte_size,sha256,request_id,request_hash,submission_kind) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (
                     file_id,
                     auth.user_id,
@@ -233,6 +236,7 @@ class Knowledge:
                     sha,
                     request_id,
                     sha,
+                    submission_kind,
                 ),
             )
             conn.execute(

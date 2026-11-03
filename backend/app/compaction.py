@@ -82,7 +82,16 @@ async def _complete_candidate(db, model, execution, step, payload, manifest):
     with db.transaction() as conn:
         guard(conn, execution)
         context_id = record_context(conn, execution, step, payload, manifest)
-    response = await model.complete(payload)
+    from app.telemetry import complete
+
+    response = await complete(
+        db,
+        model,
+        execution,
+        context_id,
+        payload,
+        attempt_kind="repair" if manifest.get("repair_of") else "summary",
+    )
     with db.transaction() as conn:
         guard(conn, execution)
         emit(
@@ -145,8 +154,8 @@ async def compact(db, settings, model, execution, groups, step: int) -> bool:
     with db.transaction() as conn:
         guard(conn, execution)
         previous = conn.execute(
-            "SELECT content,covered_sources FROM summaries WHERE user_id=%s AND scope=%s AND memory_epoch=%s AND status='active' ORDER BY generation DESC LIMIT 1",
-            (execution.auth.user_id, scope, execution.expected_epoch),
+            "SELECT content,covered_sources FROM summaries WHERE user_id=%s AND session_id=%s AND scope=%s AND memory_epoch=%s AND status='active' ORDER BY generation DESC LIMIT 1",
+            (execution.auth.user_id, execution.session_id, scope, execution.expected_epoch),
         ).fetchone()
         if previous:
             for ref in previous["covered_sources"]:
@@ -272,19 +281,20 @@ async def compact(db, settings, model, execution, groups, step: int) -> bool:
             if source["revision"] != ref["revision"]:
                 raise AppError("SOURCE_INVALIDATED", "摘要生成期间来源变化，候选已废弃。", 409)
         generation = conn.execute(
-            "SELECT coalesce(max(generation),0)+1 AS n FROM summaries WHERE user_id=%s AND scope=%s",
-            (execution.auth.user_id, scope),
+            "SELECT coalesce(max(generation),0)+1 AS n FROM summaries WHERE user_id=%s AND session_id=%s AND scope=%s",
+            (execution.auth.user_id, execution.session_id, scope),
         ).fetchone()["n"]
         summary_id = uid()
         conn.execute(
-            "UPDATE summaries SET status='superseded' WHERE user_id=%s AND scope=%s AND status='active'",
-            (execution.auth.user_id, scope),
+            "UPDATE summaries SET status='superseded' WHERE user_id=%s AND session_id=%s AND scope=%s AND status='active'",
+            (execution.auth.user_id, execution.session_id, scope),
         )
         conn.execute(
-            "INSERT INTO summaries(summary_id,user_id,scope,covered_sources,memory_epoch,content,status,generation) VALUES(%s,%s,%s,%s,%s,%s,'active',%s)",
+            "INSERT INTO summaries(summary_id,user_id,session_id,scope,covered_sources,memory_epoch,content,status,generation) VALUES(%s,%s,%s,%s,%s,%s,%s,'active',%s)",
             (
                 summary_id,
                 execution.auth.user_id,
+                execution.session_id,
                 scope,
                 jsonb(refs),
                 execution.expected_epoch,

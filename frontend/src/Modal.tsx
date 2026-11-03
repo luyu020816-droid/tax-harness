@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 export function Modal({
@@ -50,7 +51,7 @@ export function Modal({
       previous?.focus();
     };
   }, []);
-  return (
+  return createPortal(
     <div
       className={`overlay ${drawer ? 'overlay-drawer' : ''}`}
       onMouseDown={(event) => {
@@ -72,6 +73,7 @@ export function Modal({
         </header>
         <div className="dialog-body">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -1,96 +1,14 @@
-import { useState } from 'react';
-import { Download, FileText, ShieldCheck } from 'lucide-react';
+import { RunInsightDrawer } from './InsightTrace';
+import { FileText } from 'lucide-react';
 import { companyName, dateTime, statusName, taskName } from './api';
 import { InvoiceImportDialog } from './InvoiceImportDialog';
 import { EvidenceDetails, KnowledgeDocumentDetails } from './KnowledgeDetails';
 import { Modal } from './Modal';
 import { useResource } from './useResource';
-import type { Detail, RunDetail, Source, UploadedInvoice, ImportBatch } from './types';
+import type { Detail, Source, UploadedInvoice, ImportBatch } from './types';
 
 function RunContent({ id }: { id: string }) {
-  const { data, error, loading } = useResource<RunDetail>('/runs/' + id);
-  const [tab, setTab] = useState('overview');
-  if (loading) return <p className="muted">正在读取真实运行记录…</p>;
-  if (error || !data) return <p className="error-note">{error}</p>;
-  return (
-    <>
-      <div className="detail-kicker">
-        <ShieldCheck size={16} />
-        {statusName(data.run.state)}
-        <a className="text-button" href={`/api/v1/runs/${id}/export`} download>
-          <Download size={14} />
-          导出
-        </a>
-      </div>
-      <div className="tabs">
-        {[
-          ['overview', '概览'],
-          ['input', '模型输入'],
-          ['tools', '工具与结果'],
-        ].map(([key, label]) => (
-          <button key={key} className={tab === key ? 'selected' : ''} onClick={() => setTab(key)}>
-            {label}
-          </button>
-        ))}
-      </div>
-      {tab === 'overview' && (
-        <dl className="detail-list">
-          <div>
-            <dt>开始时间</dt>
-            <dd>{dateTime(data.run.started_at)}</dd>
-          </div>
-          <div>
-            <dt>模型调用</dt>
-            <dd>
-              {data.contexts.filter((item) => item.manifest.kind !== 'control_execution').length} 次
-            </dd>
-          </div>
-          <div>
-            <dt>工具记录</dt>
-            <dd>{data.tools.length} 条</dd>
-          </div>
-          <div>
-            <dt>输入计数</dt>
-            <dd>按每轮记录标注估算或实测</dd>
-          </div>
-        </dl>
-      )}
-      {tab === 'input' &&
-        data.contexts.map((item) => (
-          <details className="trace-block" key={item.context_id}>
-            <summary>
-              {item.manifest.kind === 'control_execution'
-                ? '本人确认执行快照（未调用模型）'
-                : `第 ${item.model_step} 轮`}{' '}
-              · {item.token_count.toLocaleString()} 输入估算单位
-            </summary>
-            <p className="muted small">
-              计数方式：{item.count_kind}；用时 {item.duration_ms ?? '未知'} ms
-            </p>
-            <h4>{item.manifest.kind === 'control_execution' ? '宿主执行依据' : '实际请求'}</h4>
-            <pre>{JSON.stringify(item.payload, null, 2)}</pre>
-            <h4>输入与来源清单</h4>
-            <pre>{JSON.stringify(item.manifest, null, 2)}</pre>
-          </details>
-        ))}
-      {tab === 'tools' &&
-        data.tools.map((item) => (
-          <details className="trace-block" key={item.tool_call_id}>
-            <summary>
-              {item.name} · {item.state === 'done' ? '已执行' : item.state}
-            </summary>
-            <h4>请求参数</h4>
-            <pre>{JSON.stringify(item.arguments, null, 2)}</pre>
-            <h4>实际结果</h4>
-            <pre>
-              {item.actual_result
-                ? JSON.stringify(JSON.parse(item.actual_result), null, 2)
-                : '尚无结果'}
-            </pre>
-          </details>
-        ))}
-    </>
-  );
+  return <RunInsightDrawer runId={id} />;
 }
 
 function SourceContent({ id }: { id: string }) {

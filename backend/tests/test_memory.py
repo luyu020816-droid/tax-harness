@@ -218,8 +218,10 @@ def test_M10_M11_search_old_sources_not_recent_window(db, source_factory):
     target = source_factory("甲企业当时要求先列缺项")
     for n in range(30):
         source_factory(f"甲企业无关记录{n}")
-    found = search_history(db, AUTH, company_id="C001", query="先列缺项")
-    assert found["matches"][0]["source_id"] == str(target["source_id"])
+    with pytest.raises(AppError) as error:
+        search_history(db, AUTH, company_id="C001", query="先列缺项")
+    assert error.value.code == "HISTORY_RETRIEVAL_DISABLED"
+    assert target["recall_state"] == "active"  # Records survive; online retrieval is disabled.
 
 
 def test_M05_deleting_one_fact_preserves_other_fact_from_same_source(db, execution_factory):
@@ -258,7 +260,9 @@ def test_M05_deleting_one_fact_preserves_other_fact_from_same_source(db, executi
     assert [(p["stable_key"], p["value"]) for p in core["preferences"]] == [
         ("money_format", second["value"])
     ]
-    assert search_history(db, AUTH, company_id="C001", query="回答简洁")["not_found"]
+    with pytest.raises(AppError) as error:
+        search_history(db, AUTH, company_id="C001", query="回答简洁")
+    assert error.value.code == "HISTORY_RETRIEVAL_DISABLED"
 
 
 def test_F25_stale_zero_missing_cannot_complete_task(db, admin):

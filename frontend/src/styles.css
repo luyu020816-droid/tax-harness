@@ -2065,3 +2065,21 @@ td strong {
     gap: 8px;
   }
 }
+
+/* Conversation organization shares the existing sidebar and modal palette. */
+.session-history-row { display:flex; align-items:center; position:relative; min-width:0; }
+.session-history-row > button { flex:1; min-width:0; display:flex; gap:8px; align-items:center; text-align:left; padding:10px; border-radius:var(--radius-md); }
+.session-history-row > button span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.session-history-row > button > svg { flex-shrink:0; }
+.session-actions { flex-shrink:0; }
+.session-actions > summary { display:flex; cursor:pointer; padding:8px; list-style:none; color:var(--text-secondary); border-radius:var(--radius-md); }
+.session-actions > summary::-webkit-details-marker { display:none; }
+.session-actions > summary:focus-visible { outline:2px solid var(--brand-primary); }
+.session-actions-menu { position:absolute; right:0; top:100%; z-index:40; background:var(--surface-primary); border:1px solid var(--border-primary); border-radius:var(--radius-md); box-shadow:var(--shadow-floating); padding:6px; min-width:132px; }
+.session-actions-menu button { width:100%; display:flex; gap:8px; align-items:center; padding:9px; white-space:nowrap; text-align:left; }
+.history-full-list { min-height:100px; padding-bottom:100px; }
+.history-full-list .session-history-row { border-bottom:1px solid var(--border-primary); }
+.history-all { margin-top:8px; }
+
+.session-history-launcher { display:none; }
+@media (min-width:768px) and (max-width:1023px) { .session-history-launcher { display:flex; justify-content:center; padding:12px; border-radius:var(--radius-md); color:var(--text-secondary); } }

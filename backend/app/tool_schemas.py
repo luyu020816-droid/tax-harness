@@ -83,6 +83,11 @@ class SearchKnowledge(Scope):
     scope_ref: UUID | None = None
 
 
+class PrepareKnowledgeText(Scope):
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=20000)
+
+
 class ReadEvidence(StrictModel):
     citation_id: UUID
 
@@ -165,6 +170,7 @@ class ResultBlock(StrictModel):
         "task",
         "preferences",
         "invoice_import_batch",
+        "knowledge_draft",
     ]
 
 
@@ -195,6 +201,7 @@ class ExplanationBlock(StrictModel):
         "history_partial",
         "history_insufficient",
         "history_unavailable",
+        "conversation_boundary",
         "no_tasks",
         "write_not_authorized",
         "purpose_all",
@@ -268,6 +275,10 @@ class GetInvoiceImport(StrictModel):
 
 
 TOOLS = {
+    "prepare_knowledge_text": (
+        PrepareKnowledgeText,
+        "准备文字入库草稿，由用户点击提交才写入知识库，不得声称草稿已入库。",
+    ),
     "read_summary_source": (
         ReadSummarySource,
         "仅回读本轮摘要protected_excerpts内的source_id和逐字quote，返回核验后的citation_id。不是搜索；原话不授权当前修改，过期摘要不可读。",
@@ -345,4 +356,5 @@ def tool_definitions() -> list[dict]:
             },
         }
         for name, (schema, description) in TOOLS.items()
+        if name not in ("search_history", "read_history")
     ]

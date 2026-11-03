@@ -2,7 +2,6 @@ import importlib.util
 import json
 from concurrent.futures import ThreadPoolExecutor
 
-import psycopg
 import pytest
 from psycopg.conninfo import make_conninfo
 from test_mutations import request
@@ -126,8 +125,9 @@ def test_F20_history_index_failure_does_not_erase_core(db, admin):
         assert (
             load_core(db, AUTH, str(session["session_id"]))["preferences"][0]["value"] == "保留依据"
         )
-        with pytest.raises(psycopg.errors.UndefinedTable):
+        with pytest.raises(AppError) as error:
             search_history(db, AUTH, company_id="C001", query="依据")
+        assert error.value.code == "HISTORY_RETRIEVAL_DISABLED"
     finally:
         admin.execute("ALTER TABLE history_index_unavailable RENAME TO history_index")
 
@@ -164,9 +164,10 @@ def test_F21_rebuild_index_excludes_deleted_memory(
             }
         ),
     )
-    module.main()
-    assert search_history(db, AUTH, company_id="C001", query="独立可召回")["matches"]
-    assert search_history(db, AUTH, company_id="C001", query="简洁回答")["not_found"]
+    with pytest.raises(AppError) as error:
+        module.main()
+    assert error.value.code == "HISTORY_RETRIEVAL_DISABLED"
+    assert admin.execute("SELECT count(*) n FROM history_index").fetchone()["n"] == 0
 
 
 def test_F28_source_progress_keeps_earlier_gap(db, admin, source_factory):

@@ -19,13 +19,13 @@ from app.values import uid
 AUTH = Identity("U001")
 
 
-def test_search_history_omitted_company_reaches_business_layer(db, execution_factory):
+def test_search_history_is_disabled_even_when_company_is_omitted(db, execution_factory):
     execution = execution_factory("我去年提过的用途是什么？", company=None)
     result, _ = ToolExecutor(db).execute(
         execution, tool("search_history", {"query": "去年用途"})["tool_calls"][0]
     )
-    assert result["ok"]
-    assert result["data"]["not_found"]
+    assert not result["ok"]
+    assert result["error"]["code"] == "HISTORY_RETRIEVAL_DISABLED"
 
 
 @pytest.mark.asyncio

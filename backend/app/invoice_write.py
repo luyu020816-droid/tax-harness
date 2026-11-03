@@ -197,6 +197,13 @@ def validate(
 
 
 def commit(db, auth, plan_id, *, execution):
+    from app.telemetry import phase
+
+    with phase(db, execution, "write:" + uid(), "write_verify", "保存提交与回读"):
+        return _commit(db, auth, plan_id, execution=execution)
+
+
+def _commit(db, auth, plan_id, *, execution):
     from app.mutations import update_invoice
 
     with db.transaction(readonly=True) as conn:
@@ -219,7 +226,7 @@ def commit(db, auth, plan_id, *, execution):
     )
 
 
-def confirm(db, auth, plan_id, *, expected_revision, intent_hash, request_id):
+def confirm(db, auth, plan_id, *, expected_revision, intent_hash, request_id, limits=None):
     from app.events import emit
 
     with db.transaction() as conn:
@@ -257,6 +264,9 @@ def confirm(db, auth, plan_id, *, expected_revision, intent_hash, request_id):
         origin = read_source(conn, auth, str(plan["origin_source_id"]))
         if origin["revision"] != plan["origin_source_revision"]:
             raise AppError("SOURCE_INVALIDATED", "原修改来源已变化，请重新核对。", 409)
+        from app.admission import check
+
+        check(conn, auth.user_id, limits)
         turn_id, seq = uid(), next_sequence(conn, auth)
         text = f"确认修改{plan['company_id']}发票{plan['invoice_id']}用途/备注。"
         conn.execute(

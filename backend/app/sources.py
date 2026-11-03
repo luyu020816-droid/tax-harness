@@ -53,24 +53,7 @@ def add_source(
         "VALUES(%s,1,'memory','1','pending')",
         (row["source_id"],),
     )
-    conn.execute(
-        "INSERT INTO history_index(source_id,source_revision,scope,searchable_text) VALUES(%s,1,%s,%s)",
-        (row["source_id"], ",".join(companies) or "@user", text),
-    )
-    conn.execute(
-        "INSERT INTO history_jobs(source_id,source_revision,state) VALUES(%s,%s,%s)",
-        (
-            row["source_id"],
-            row["revision"],
-            "skipped"
-            if role == "tool"
-            and isinstance(content, dict)
-            and isinstance(content.get("data"), dict)
-            and content["data"].get("kind")
-            in ("knowledge_search", "knowledge_evidence", "history_search", "history_evidence")
-            else "queued",
-        ),
-    )
+    # Sources retain conversational/business provenance, never implicit knowledge.
     return row
 
 

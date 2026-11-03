@@ -6,13 +6,24 @@ from uuid import UUID
 
 import psycopg
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from psycopg.conninfo import conninfo_to_dict
 from pydantic import Field
 
-from app import business, identity, invoice_write, preferences, rules, tasks, trace, turns
+from app import (
+    business,
+    identity,
+    invoice_write,
+    preferences,
+    rules,
+    session_management,
+    tasks,
+    trace,
+    turns,
+)
 from app.api_imports import UploadBodyLimit, import_router
+from app.api_insights import insight_router
 from app.api_knowledge import knowledge_router
 from app.config import ROOT, Settings
 from app.db import Database
@@ -34,6 +45,11 @@ class LoginBody(StrictModel):
 
 class SessionBody(StrictModel):
     selected_company_id: str | None = None
+
+
+class SessionOrganization(StrictModel):
+    action: str = Field(pattern="^(pin|unpin|archive|unarchive|delete)$")
+    expected_revision: int = Field(ge=1)
 
 
 class TurnBody(StrictModel):
@@ -82,8 +98,18 @@ def create_app(
     settings=None, db=None, model=None, *, start_workers=True, ingest_db=None
 ) -> FastAPI:
     settings = settings or Settings()
+    if settings.deployment_mode == "production":
+        raise AppError(
+            "PRODUCTION_AUTH_REQUIRED",
+            "当前版本仅支持比赛演示身份，未接入可信认证，禁止以生产模式启动。",
+            503,
+        )
     own_database = db is None
-    db = db or Database(settings.database_url)
+    db = db or Database(
+        settings.database_url,
+        statement_timeout_ms=settings.statement_timeout_ms,
+        lock_timeout_ms=settings.lock_timeout_ms,
+    )
     model = model or HttpModel(settings)
     runtime = Runtime(db, settings, model)
     knowledge = Knowledge(db, settings)
@@ -130,10 +156,15 @@ def create_app(
 
     auth_dependency = Depends(auth)
     app.include_router(import_router(imports, auth_dependency))
+    app.include_router(insight_router(db, auth_dependency))
     app.include_router(
         knowledge_router(knowledge, runtime.tools.retrieval, auth_dependency, runtime.tools.history)
     )
-    app.add_middleware(UploadBodyLimit, knowledge_max_bytes=settings.knowledge_max_file_bytes)
+    app.add_middleware(
+        UploadBodyLimit,
+        knowledge_max_bytes=settings.knowledge_max_file_bytes,
+        json_max_bytes=settings.json_max_bytes,
+    )
     app.state.knowledge, app.state.knowledge_jobs = knowledge, knowledge_jobs
     app.state.history_jobs = history_jobs
     app.state.imports = imports
@@ -144,7 +175,9 @@ def create_app(
 
     @app.post("/api/v1/write-plans/{plan_id}/confirm")
     def confirm_write(plan_id: UUID, body: WriteConfirmationBody, current=auth_dependency):
-        return invoice_write.confirm(db, current, str(plan_id), **body.model_dump())
+        return invoice_write.confirm(
+            db, current, str(plan_id), limits=settings, **body.model_dump()
+        )
 
     @app.post("/api/v1/write-plans/{plan_id}/cancel")
     def cancel_write(plan_id: UUID, body: ControlBody, current=auth_dependency):
@@ -165,17 +198,28 @@ def create_app(
             )
         origin = request.headers.get("origin")
         if request.method in ("POST", "PATCH", "DELETE", "PUT") and origin:
-            if urlparse(origin).netloc != request.headers.get("host"):
+            if (
+                urlparse(origin).netloc != request.headers.get("host")
+                or urlparse(origin).scheme != request.url.scheme
+            ):
                 return JSONResponse(
                     {"code": "ACCESS_DENIED", "message": "拒绝跨站修改请求。"}, status_code=403
                 )
-        return await call_next(request)
+        response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Vary"] = "Cookie"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     @app.exception_handler(AppError)
     async def app_error(request, exc):
         return JSONResponse(
             {**exc.as_dict(), "request_id": request.headers.get("x-request-id")},
             status_code=exc.status,
+            headers={"Retry-After": str(exc.details.get("retry_after_seconds", 5))}
+            if exc.status == 429
+            else None,
         )
 
     @app.exception_handler(psycopg.Error)
@@ -226,17 +270,40 @@ def create_app(
             ).fetchall()
 
     @app.post("/api/v1/demo/login")
-    def login(body: LoginBody):
+    def login(body: LoginBody, request: Request):
         if not settings.demo_mode:
             raise AppError("ACCESS_DENIED", "模拟登录已关闭。", 403)
         response = JSONResponse({"user_id": body.user_id})
         response.set_cookie(
             cookie_name,
-            identity.login(db, body.user_id),
+            identity.login(
+                db,
+                body.user_id,
+                ttl_seconds=settings.login_ttl_seconds,
+                previous_token=request.cookies.get(cookie_name),
+            ),
             httponly=True,
             secure=settings.cookie_secure,
             samesite="strict",
-            max_age=43200,
+            max_age=settings.login_ttl_seconds,
+        )
+        return response
+
+    @app.post("/api/v1/auth/logout", status_code=204)
+    def logout(request: Request):
+        identity.logout(db, request.cookies.get(cookie_name))
+        response = Response(status_code=204)
+        response.delete_cookie(
+            cookie_name, secure=settings.cookie_secure, httponly=True, samesite="strict"
+        )
+        return response
+
+    @app.post("/api/v1/auth/logout-all", status_code=204)
+    def logout_all(current=auth_dependency):
+        identity.logout_all(db, current)
+        response = Response(status_code=204)
+        response.delete_cookie(
+            cookie_name, secure=settings.cookie_secure, httponly=True, samesite="strict"
         )
         return response
 
@@ -256,6 +323,18 @@ def create_app(
     @app.post("/api/v1/sessions", status_code=201)
     def new_session(body: SessionBody, current=auth_dependency):
         return safe_json(identity.create_session(db, current, body.selected_company_id))
+
+    @app.get("/api/v1/sessions/history")
+    def session_history(archived: bool = False, offset: int = 0, current=auth_dependency):
+        if not 0 <= offset <= 100000:
+            raise AppError("INVALID_ARGUMENT", "分页范围无效。", 422)
+        return session_management.history(db, current, archived, offset)
+
+    @app.post("/api/v1/sessions/{session_id}/organization")
+    def organize_session(session_id: UUID, body: SessionOrganization, current=auth_dependency):
+        return session_management.organize(
+            db, current, str(session_id), body.action, body.expected_revision
+        )
 
     @app.patch("/api/v1/sessions/{session_id}")
     def change_session(session_id: UUID, body: SessionBody, current=auth_dependency):
@@ -280,6 +359,7 @@ def create_app(
             body.text,
             upload_ids=[str(x) for x in body.upload_ids],
             knowledge_upload_ids=[str(x) for x in body.knowledge_upload_ids],
+            limits=settings,
         )
         return {**result, "events_url": f"/api/v1/turns/{result['turn_id']}/events"}
 
@@ -294,7 +374,7 @@ def create_app(
     @app.post("/api/v1/turns/{turn_id}/retry", status_code=202)
     def retry_turn(turn_id: UUID, body: RetryTurnBody, current=auth_dependency):
         return turns.retry_turn(
-            db, current, str(turn_id), body.request_id, body.expected_generation
+            db, current, str(turn_id), body.request_id, body.expected_generation, limits=settings
         )
 
     @app.get("/api/v1/pending-clarifications")
@@ -321,6 +401,7 @@ def create_app(
 
                 def read_events(after_cursor=after):
                     with db.transaction(readonly=True) as conn:
+                        identity.assert_login_active(conn, current)
                         identity.owned(conn, "turns", "turn_id", str(turn_id), current)
                         turns._assert_turn_access(conn, current, str(turn_id))
                         rows = conn.execute(
@@ -332,7 +413,11 @@ def create_app(
                         ).fetchone()["status"]
                         return rows, state
 
-                rows, state = await asyncio.to_thread(read_events)
+                try:
+                    rows, state = await asyncio.to_thread(read_events)
+                except AppError:
+                    yield 'event: access_revoked\ndata: {"code":"ACCESS_REVOKED"}\n\n'
+                    return
                 for row in rows:
                     after = row["event_seq"]
                     data = (
@@ -446,11 +531,15 @@ def create_app(
 
     @app.get("/api/v1/runs/{run_id}")
     def run_details(run_id: UUID, current=auth_dependency):
-        return trace.read_run(db, current, str(run_id))
+        from app.insight_access import public_run
+
+        return public_run(db, current, str(run_id))
 
     @app.get("/api/v1/runs/{run_id}/export")
     def export_run(run_id: UUID, current=auth_dependency):
-        result = trace.read_run(db, current, str(run_id))
+        from app.insight_access import public_run
+
+        result = public_run(db, current, str(run_id))
         return JSONResponse(
             result, headers={"Content-Disposition": f'attachment; filename="run-{run_id}.json"'}
         )
@@ -469,7 +558,9 @@ def create_app(
     def frontend(path: str):
         if path.startswith("api/"):
             raise AppError("RESOURCE_NOT_FOUND", "接口不存在。", 404)
-        index = ROOT / "frontend/dist" / ("showcase.html" if path == "showcase.html" else "index.html")
+        index = (
+            ROOT / "frontend/dist" / ("showcase.html" if path == "showcase.html" else "index.html")
+        )
         if index.exists():
             return FileResponse(index)
         return JSONResponse({"message": "前端尚未构建，请运行 npm run build。"}, status_code=503)

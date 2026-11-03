@@ -75,6 +75,8 @@ def _purpose_explanations(conn, refs):
 
 def _result_text(data, view):
     kind = data.get("kind")
+    if kind == "knowledge_draft" and view == "knowledge_draft":
+        return "已准备文字入库草稿，请核对卡片并点击提交；当前尚未入库。", data
     if kind in ("import_preview", "import_receipt") and view == "invoice_import_batch":
         return "导入批次实际状态及回执见卡片。", data
     if kind != view and view not in ("task", "preferences"):
@@ -141,6 +143,21 @@ def _validate_delivery(conn, execution, plan, reply, outputs):
     """
     delivered = {(c["kind"], c.get("company_id"), c.get("period")) for c in reply.cards}
     missing_results = set()
+    # Prepared drafts are real performed work: an acknowledgement cannot hide
+    # the user's only entry point for manually publishing the selected text.
+    delivered_drafts = {
+        c.get("draft_request_id") for c in reply.cards if c["kind"] == "knowledge_draft"
+    }
+    for row in conn.execute(
+        "SELECT s.content FROM tool_executions e JOIN runs r USING(run_id) "
+        "JOIN sources s ON s.source_id=e.result_source_id "
+        "WHERE r.turn_id=%s AND e.name='prepare_knowledge_text' AND e.state='done'",
+        (execution.turn_id,),
+    ).fetchall():
+        output = json.loads(row["content"])
+        draft = output.get("data") or {}
+        if output.get("ok") and draft.get("draft_request_id") not in delivered_drafts:
+            missing_results.add(("knowledge_draft", draft["company_id"], None))
     for row in conn.execute(
         "SELECT e.name,e.arguments FROM tool_executions e JOIN runs r USING(run_id) "
         "WHERE r.turn_id=%s AND e.state='done' AND e.name IN ('query_month','check_purposes')",
@@ -190,7 +207,7 @@ def _validate_delivery(conn, execution, plan, reply, outputs):
                 "operation_ids": missing_operations,
                 "preference_ids": missing_preferences,
                 **({"history_arguments": continuation} if continuation else {}),
-                "instruction": "选择本轮已入模的完整结果及回执；旧结果不在当前输入时先重新读取。不要通过重写措辞或无关说明绕过缺项。",
+                "instruction": "选择本轮已入模的完整结果及回执；knowledge_draft必须用result块和实际result_ref展示草稿，不能仅回复未修改。旧结果不在当前输入时先重新读取。不要通过重写措辞或无关说明绕过缺项。",
             },
         )
 
@@ -443,6 +460,7 @@ def _history_quote(conn, execution, block, outputs):
     text = f"历史{who}原文（{source['created_at'].astimezone(CST).date()}）见来源卡片。这只是当时记录，当前业务状态须重新查询。"
     card = {
         "kind": "history_quote",
+        "session_id": execution.session_id,
         "company_id": evidence["company_id"],
         "citation_id": evidence["citation_id"],
         "source_id": ref,
@@ -509,6 +527,8 @@ def _knowledge_quotes(conn, execution, citation_id, outputs):
 
 
 def _explanation(conn, execution, code, outputs, rules, state):
+    if code == "conversation_boundary" and state.get("conversation_retrieval") == "disabled":
+        return "普通聊天不会自动进入知识库，也不自动检索其他会话。请打开原会话继续，或手动提交相关资料到知识库；明确保存的任务和偏好独立保留。"
     errors = {o.get("error", {}).get("code") for o in outputs.values() if not o.get("ok")}
     knowledge = [
         o.get("data") or {}

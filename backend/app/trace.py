@@ -1,3 +1,5 @@
+from contextlib import nullcontext
+
 from app.errors import AppError
 from app.events import emit
 from app.execution import Execution
@@ -39,8 +41,8 @@ def record_context(conn, execution: Execution, step: int, payload: dict, manifes
     return context_id
 
 
-def read_run(db, auth: Identity, run_id: str) -> dict:
-    with db.transaction(readonly=True) as conn:
+def read_run(db, auth: Identity, run_id: str, *, conn=None) -> dict:
+    with nullcontext(conn) if conn is not None else db.transaction(readonly=True) as conn:
         run = conn.execute(
             "SELECT r.* FROM runs r JOIN turns t USING(turn_id) WHERE run_id=%s AND t.user_id=%s",
             (run_id, auth.user_id),
@@ -67,14 +69,17 @@ def read_run(db, auth: Identity, run_id: str) -> dict:
 
 
 def list_runs(db, auth: Identity, company_id=None) -> list[dict]:
+    from app.insight_access import VISIBLE, content_allowed, redact
+
     with db.transaction(readonly=True) as conn:
         if company_id:
             assert_access(conn, auth, company_id)
-        return safe_json(
-            conn.execute(
-                "SELECT r.*,t.text,t.session_id FROM runs r JOIN turns t USING(turn_id) WHERE t.user_id=%s "
-                "AND (%s::text IS NULL OR EXISTS(SELECT 1 FROM sources s JOIN source_scopes z USING(source_id) WHERE s.turn_id=t.turn_id AND z.company_id=%s)) "
-                "ORDER BY started_at DESC LIMIT 100",
-                (auth.user_id, company_id, company_id),
-            ).fetchall()
-        )
+        rows = conn.execute(
+            'SELECT r.*,t.text,t.session_id FROM runs r JOIN turns t USING(turn_id) WHERE ' + VISIBLE +
+            ' AND (%(company)s::text IS NULL OR EXISTS(SELECT 1 FROM sources s JOIN source_scopes z USING(source_id) WHERE s.turn_id=t.turn_id AND z.company_id=%(company)s)) ORDER BY started_at DESC LIMIT 100',
+            {'user':auth.user_id,'company':company_id},
+        ).fetchall()
+        for row in rows:
+            if not content_allowed(conn,auth,str(row['run_id'])):
+                row['text']='历史内容已失效，仅保留计量'
+        return safe_json(redact(rows))

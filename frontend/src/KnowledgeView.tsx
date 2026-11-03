@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { BookOpen, FilePlus2, LoaderCircle, RefreshCw, Search } from 'lucide-react';
 import { api, body, companyName, requestId } from './api';
 import { KnowledgeCitation } from './KnowledgeCitation';
+import { KnowledgeTextDialog } from './KnowledgeText';
 import { Modal } from './Modal';
 import { useResource } from './useResource';
 import type {
@@ -192,6 +193,7 @@ export function KnowledgeView({
     next_offset: number | null;
   }>(company ? `/knowledge/documents?company_id=${company}` : null);
   const [uploading, setUploading] = useState(false);
+  const [addingText, setAddingText] = useState(false);
   const [target, setTarget] = useState<KnowledgeDocument | null>(null);
   const [query, setQuery] = useState('');
   const [bundle, setBundle] = useState<KnowledgeBundle | null>(null);
@@ -315,6 +317,9 @@ export function KnowledgeView({
           <h1>知识资料</h1>
           <p>查阅{companyName(company)}制度与参考资料，保留原文和来源。</p>
         </div>
+        <button className="secondary" disabled={!canUpload} onClick={() => setAddingText(true)}>
+          添加文字
+        </button>
         <button
           className="primary"
           disabled={!canUpload}
@@ -503,6 +508,16 @@ export function KnowledgeView({
           target={target}
           onClose={() => setUploading(false)}
           onSaved={reload}
+        />
+      )}
+      {addingText && (
+        <KnowledgeTextDialog
+          company={company}
+          onClose={() => setAddingText(false)}
+          onSaved={() => {
+            setAddingText(false);
+            reload();
+          }}
         />
       )}
     </section>

@@ -49,6 +49,9 @@ class HistoryJobs:
         self.task, self.current = None, None
 
     def claim(self):
+        return None  # Chat records are never online knowledge-index jobs.
+
+    def _claim_legacy(self):
         from app.recovery import in_maintenance
 
         if in_maintenance(self.settings.database_url):
@@ -79,6 +82,9 @@ class HistoryJobs:
             )
 
     def run(self, job):
+        raise AppError("HISTORY_RETRIEVAL_DISABLED", "普通会话不建立知识索引。", 403)
+
+    def _run_legacy(self, job):
         try:
             with self.db.transaction(readonly=True) as conn:
                 source = conn.execute(
@@ -168,6 +174,9 @@ class HistoryJobs:
                 )
 
     def backfill(self):
+        raise AppError("HISTORY_RETRIEVAL_DISABLED", "普通会话不回填知识索引。", 403)
+
+    def _backfill_legacy(self):
         profile, _ = self.engine.profile()
         with self.db.transaction() as conn:
             rows = conn.execute(
@@ -180,8 +189,7 @@ class HistoryJobs:
         return {"queued": len(rows), "profile_id": profile}
 
     async def start(self):
-        if self.settings.history_enabled:
-            self.task = asyncio.create_task(self._worker())
+        return  # Legacy flags cannot re-enable conversation indexing.
 
     async def stop(self):
         if self.current:

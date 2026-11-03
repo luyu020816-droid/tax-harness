@@ -7,6 +7,11 @@ from psycopg.rows import dict_row
 
 
 def main(*, semantic=False):
+    from app.errors import AppError
+    raise AppError("HISTORY_RETRIEVAL_DISABLED", "普通会话不建立或回填知识索引。", 403)
+
+
+def _legacy_main(*, semantic=False):
     settings = Settings()
     with psycopg.connect(settings.admin_database_url, row_factory=dict_row) as conn:
         rows = conn.execute("SELECT * FROM sources WHERE recall_state='active'").fetchall()

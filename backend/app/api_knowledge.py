@@ -27,6 +27,13 @@ class KnowledgeControl(StrictModel):
     version_id: UUID | None = None
 
 
+class TextKnowledge(StrictModel):
+    company_id: str = Field(pattern=r"^C\d+$")
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=20000)
+    request_id: str = Field(min_length=1, max_length=200)
+
+
 class RetryControl(StrictModel):
     request_id: str = Field(min_length=1, max_length=200)
 
@@ -93,6 +100,20 @@ def knowledge_router(store, retrieval, auth_dependency, history=None):
     async def upload(request: Request, current=auth_dependency):
         return await receive_upload(request, current)
 
+    @router.post("/knowledge/text", status_code=202)
+    def submit_text(body: TextKnowledge, current=auth_dependency):
+        if not body.content.strip():
+            raise AppError("INVALID_ARGUMENT", "知识正文不能为空。", 422)
+        return store.upload(
+            current,
+            name="manual-text.txt",
+            content=body.content.encode("utf-8"),
+            company_id=body.company_id,
+            title=body.title,
+            request_id=body.request_id,
+            submission_kind="manual_text",
+        )
+
     @router.post("/knowledge/documents/{document_id}/versions", status_code=202)
     async def version(document_id: UUID, request: Request, current=auth_dependency):
         return await receive_upload(request, current, str(document_id))
@@ -156,13 +177,13 @@ def knowledge_router(store, retrieval, auth_dependency, history=None):
         args = body.model_dump(exclude={"corpus"})
         if body.corpus == "history":
             args["session_id"] = str(body.session_id) if body.session_id else None
-            return history.search(current, **args)
+            raise AppError("HISTORY_RETRIEVAL_DISABLED", "普通会话不参与知识检索。", 403)
         args["document_ids"] = [str(i) for i in body.document_ids]
         args["session_id"] = str(body.session_id) if body.session_id else None
         return retrieval.search(current, **args)
 
     @router.get("/evidence/{citation_id}")
-    def evidence(citation_id: UUID, current=auth_dependency):
+    def evidence(citation_id: UUID, session_id: UUID | None = None, current=auth_dependency):
         if history:
             with store.db.transaction(readonly=True) as conn:
                 exists = conn.execute(
@@ -170,7 +191,9 @@ def knowledge_router(store, retrieval, auth_dependency, history=None):
                     (citation_id, current.user_id),
                 ).fetchone()
             if exists:
-                return history.read(current, str(citation_id))
+                return history.read(
+                    current, str(citation_id), session_id=str(session_id) if session_id else None
+                )
         return retrieval.read(current, str(citation_id))
 
     return router

@@ -3,11 +3,47 @@ import json
 import pytest
 from test_runtime import ScriptedModel, model_settings
 
-from app.compaction import compact
+from app.compaction import compact as actual_compact
 from app.context import assemble, validate_tool_pairs
 from app.errors import AppError
 from app.preferences import change_preference
 from app.sources import assess
+
+
+async def compact(db, settings, model, execution, groups, step):
+    """Give old synthetic source fixtures real same-session closed turns.
+
+    Existing source_factory records intentionally have no conversation. The new
+    production contract requires a session; do not relax that production guard.
+    Explicitly foreign-session sources are never rebound by this adapter.
+    """
+    from app.values import uid
+
+    with db.transaction() as conn:
+        for group in groups:
+            for ref in group["sources"]:
+                source = conn.execute(
+                    "SELECT * FROM sources WHERE source_id=%s", (ref["source_id"],)
+                ).fetchone()
+                if source["turn_id"] is not None:
+                    continue
+                turn_id = uid()
+                conn.execute(
+                    "INSERT INTO turns(turn_id,session_id,user_id,client_request_id,request_hash,source_seq,text,status,final_message) VALUES(%s,%s,%s,%s,'summary-fixture',%s,%s,'completed','收到。')",
+                    (
+                        turn_id,
+                        execution.session_id,
+                        source["user_id"],
+                        uid(),
+                        source["source_seq"],
+                        source["content"],
+                    ),
+                )
+                conn.execute(
+                    "UPDATE sources SET turn_id=%s WHERE source_id=%s",
+                    (turn_id, source["source_id"]),
+                )
+    return await actual_compact(db, settings, model, execution, groups, step)
 
 
 def closed_group(db, source):

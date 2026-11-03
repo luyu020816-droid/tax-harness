@@ -1,11 +1,10 @@
 from decimal import Decimal
 
 import pytest
-from test_compaction import closed_group, summary_message
+from test_compaction import closed_group, compact, summary_message
 from test_runtime import ScriptedModel, model_settings
 
 from app import business, rules
-from app.compaction import compact
 from app.errors import AppError
 from app.identity import Identity
 

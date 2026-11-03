@@ -68,6 +68,7 @@ def _grant_runtime(conn, settings: Settings) -> None:
         "run_events",
         "context_snapshots",
         "tool_executions",
+        "trace_spans",
         "tasks",
         "task_slots",
         "task_revisions",
@@ -109,7 +110,7 @@ def _grant_runtime(conn, settings: Settings) -> None:
         conn.execute(sql.SQL("GRANT INSERT,UPDATE ON retrieval_embeddings TO {}").format(role))
     if conn.execute("SELECT to_regclass('public.history_embeddings') AS t").fetchone()["t"]:
         conn.execute(sql.SQL("GRANT INSERT,UPDATE,DELETE ON history_embeddings TO {}").format(role))
-    conn.execute(sql.SQL("GRANT UPDATE(next_source_seq,memory_epoch) ON users TO {}").format(role))
+    conn.execute(sql.SQL("GRANT UPDATE(next_source_seq,memory_epoch,auth_epoch) ON users TO {}").format(role))
     conn.execute(sql.SQL("GRANT UPDATE(data_revision) ON company_heads TO {}").format(role))
     conn.execute(sql.SQL("GRANT UPDATE(purpose,note,revision) ON invoices TO {}").format(role))
 

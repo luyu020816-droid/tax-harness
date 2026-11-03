@@ -4,11 +4,10 @@ import asyncio
 import json
 
 import pytest
-from test_compaction import closed_group
+from test_compaction import closed_group, compact
 from test_runtime import ScriptedModel, model_settings
 
 from app import business, context, invoice_write, rules
-from app.compaction import compact
 from app.errors import AppError
 from app.experiment_metrics import aggregate, usage_cost
 from app.identity import Identity, create_session, switch_company
@@ -346,7 +345,7 @@ def test_context_ablation_cannot_call_disabled_search(db, settings, execution_fa
     output, _ = runtime.tools.execute(
         execution, tool("search_history", {"company_id": "C001", "query": "用途"})["tool_calls"][0]
     )
-    assert not output["ok"] and output["error"]["code"] == "TOOL_DISABLED"
+    assert not output["ok"] and output["error"]["code"] == "HISTORY_RETRIEVAL_DISABLED"
 
 
 @pytest.mark.asyncio

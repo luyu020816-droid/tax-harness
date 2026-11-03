@@ -18,6 +18,10 @@ class HttpModel:
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    @property
+    def dispatch_enabled(self):
+        return self.settings.model_configured
+
     async def complete(self, payload: dict) -> dict:
         if not self.settings.model_configured:
             raise AppError(

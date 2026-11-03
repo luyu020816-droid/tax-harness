@@ -4,7 +4,6 @@ import json
 
 import pytest
 from test_answer_renderer import recorded, rendered
-from test_history_retrieval import complete_fixture_reply, in_same_session
 from test_runtime import model_settings, tool
 from test_trusted_writes import TEXT, candidate
 
@@ -158,32 +157,6 @@ def test_saved_preference_cannot_be_hidden_by_unrelated_explanation(
     assert str(output["data"]["preference_id"]) in str(error.value.details)
 
 
-@pytest.mark.parametrize("message", ["继续下一页", "再下一页，仍保持刚才的范围。"])
-def test_missing_cursor_cannot_restart_published_history_page(
-    db, settings, source_factory, admin, execution_factory, message
-):
-    for i in range(7):
-        source_factory(f"独立原话{i}")
-    admin.execute("UPDATE sources SET created_at='2026-09-03 10:00+08'")
-    first = execution_factory("列出甲企业9月历史第一页")
-    args = {"company_id": "C001", "date_from": "2026-09-01", "date_to": "2026-10-01"}
-    original, payload, manifest = recorded(db, settings, first, "search_history", args)
-    reply = rendered(
-        db,
-        first,
-        payload,
-        manifest,
-        [{"type": "result", "result_ref": original["result_ref"], "view": "history_page"}],
-    )
-    complete_fixture_reply(db, first, reply)
-    following = in_same_session(db, execution_factory(message), first.session_id)
-    call = tool("search_history", args)["tool_calls"][0]
-    actual, _ = ToolExecutor(db).execute(following, call)
-    assert not actual["ok"], "Omitted cursor silently replayed the first page"
-    assert actual["error"]["code"] == "HISTORY_CONTINUATION_REQUIRED"
-    assert actual["error"]["details"]["arguments"]["cursor"] == original["data"]["query_id"]
-
-
 @pytest.mark.asyncio
 async def test_runtime_repairs_omitted_month_without_test_adapter_selecting_results(
     db, settings, execution_factory
@@ -229,54 +202,6 @@ async def test_runtime_repairs_omitted_month_without_test_adapter_selecting_resu
     )
 
 
-@pytest.mark.asyncio
-async def test_runtime_cursor_feedback_repairs_page_and_does_not_repeat_sources(
-    db, settings, source_factory, admin, execution_factory
-):
-    from app.runtime import Runtime
-    from app.turns import read_turn
-
-    for i in range(7):
-        source_factory(f"续页控制原话{i}")
-    admin.execute("UPDATE sources SET created_at='2026-09-03 10:00+08'")
-    args = {"company_id": "C001", "date_from": "2026-09-01", "date_to": "2026-10-01"}
-    first = execution_factory("列出甲企业9月原话")
-    original, payload, manifest = recorded(db, settings, first, "search_history", args)
-    first_reply = rendered(
-        db,
-        first,
-        payload,
-        manifest,
-        [{"type": "result", "result_ref": original["result_ref"], "view": "history_page"}],
-    )
-    complete_fixture_reply(db, first, first_reply)
-    ex = in_same_session(db, execution_factory("继续下一页"), first.session_id)
-
-    def repair(payload):
-        output = json.loads(
-            next(m["content"] for m in reversed(payload["messages"]) if m["role"] == "tool")
-        )
-        assert output["error"]["code"] == "HISTORY_CONTINUATION_REQUIRED"
-        return tool("search_history", output["error"]["details"]["arguments"])
-
-    def finish(payload):
-        output = json.loads(
-            next(m["content"] for m in reversed(payload["messages"]) if m["role"] == "tool")
-        )
-        assert output["ok"]
-        return raw_final(
-            [{"type": "result", "result_ref": output["result_ref"], "view": "history_page"}]
-        )
-
-    model = ExactModel([lambda p: tool("search_history", args), repair, finish])
-    await Runtime(db, model_settings(settings), model).run(ex)
-    result = read_turn(db, ex.auth, ex.turn_id)
-    assert result["status"] == "completed" and len(model.requests) == 3
-    old = {c["source_id"] for c in first_reply.cards if c["kind"] == "history_quote"}
-    new = {c["source_id"] for c in result["final_cards"] if c["kind"] == "history_quote"}
-    assert len(old) == 5 and len(new) == 2 and not old & new
-
-
 def test_complete_results_are_accepted_and_not_arbitrarily_expanded(
     db, settings, execution_factory
 ):
@@ -306,40 +231,6 @@ def test_page_control_does_not_treat_quotes_negation_or_scope_change_as_continua
     ex = execution_factory(text)
     with db.transaction(readonly=True) as conn:
         assert continuation_in(conn, ex) is None
-
-
-def test_expired_navigation_cannot_fall_back_to_first_page(
-    db, settings, source_factory, admin, execution_factory
-):
-    from app.history_retrieval import continuation_in
-    from app.preferences import change_preference
-    from app.values import uid
-
-    source_factory("旧页原话")
-    admin.execute("UPDATE sources SET created_at='2026-09-03 10:00+08'")
-    first = execution_factory("查甲企业九月历史")
-    output, payload, manifest = recorded(
-        db,
-        settings,
-        first,
-        "search_history",
-        {"company_id": "C001", "date_from": "2026-09-01", "date_to": "2026-10-01"},
-    )
-    reply = rendered(
-        db,
-        first,
-        payload,
-        manifest,
-        [{"type": "result", "result_ref": output["result_ref"], "view": "history_page"}],
-    )
-    complete_fixture_reply(db, first, reply)
-    change_preference(
-        db, first.auth, action="remember", key="response_style", value="简洁", request_id=uid()
-    )
-    ex = in_same_session(db, execution_factory("继续下一页"), first.session_id)
-    with db.transaction(readonly=True) as conn, pytest.raises(AppError) as error:
-        continuation_in(conn, ex)
-    assert error.value.code == "SOURCE_INVALIDATED"
 
 
 @pytest.mark.parametrize("action", ["delete", "update"])
@@ -391,9 +282,10 @@ def test_preference_change_preserves_unrelated_same_word_business_history(
         assert old["recall_state"] == "suppressed"
     engine = LocalRetrieval(settings.knowledge_model_directory)
     try:
-        found = HistoryRetrieval(db, settings, engine).search(
-            auth, company_id="C002", date_from="2026-09-03", date_to="2026-09-04"
-        )
-        assert any(e["source_id"] == str(business["source_id"]) for e in found["evidence"])
+        with pytest.raises(AppError) as denied:
+            HistoryRetrieval(db, settings, engine).search(
+                auth, company_id="C002", date_from="2026-09-03", date_to="2026-09-04"
+            )
+        assert denied.value.code == "HISTORY_RETRIEVAL_DISABLED"
     finally:
         engine.close()
