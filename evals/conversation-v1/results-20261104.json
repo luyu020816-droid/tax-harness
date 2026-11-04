@@ -1,0 +1,246 @@
+{
+  "candidate_commit": "91a43e3",
+  "experiment_control_commit": "4bbb665",
+  "backend_fingerprint": "09af5d6ed0c96be05f0e700e292e9e693cd6e4b38cf729dba886b912b704896c",
+  "retrieval_dataset_hash": "1ef57032d069d8f29d9a00267bb396b18006bf32857c382042dabb9e39c0db61",
+  "human_label_status": "agent_authored_pending_human_review",
+  "repeat": {
+    "original_passed": 23,
+    "audited_passed": 24,
+    "total": 24
+  },
+  "ablation": {
+    "kind": "same_candidate_ablation_not_old_binary_replay",
+    "cases": 54,
+    "aggregate": {
+      "fixed12": {
+        "cases": 18,
+        "correct": 9,
+        "answer_correct": 9,
+        "summary_preparation_failures": 0,
+        "accuracy": 0.5,
+        "model_attempts": 55,
+        "missing_usage_calls": 0,
+        "known_cost_usd": "0.032561958",
+        "estimated_cost_usd": "0.032561958",
+        "prompt_tokens_observed": 418301,
+        "completion_tokens_observed": 3383,
+        "tool_calls": 24,
+        "total_ms": 95846,
+        "p50_ms": 3922,
+        "p95_ms": 11687
+      },
+      "budget": {
+        "cases": 18,
+        "correct": 15,
+        "answer_correct": 15,
+        "summary_preparation_failures": 0,
+        "accuracy": 0.8333333333333334,
+        "model_attempts": 65,
+        "missing_usage_calls": 0,
+        "known_cost_usd": "0.044397534",
+        "estimated_cost_usd": "0.044397534",
+        "prompt_tokens_observed": 468009,
+        "completion_tokens_observed": 9112,
+        "tool_calls": 20,
+        "total_ms": 129268,
+        "p50_ms": 6907,
+        "p95_ms": 14875
+      },
+      "budget_search": {
+        "cases": 18,
+        "correct": 18,
+        "answer_correct": 18,
+        "summary_preparation_failures": 0,
+        "accuracy": 1.0,
+        "model_attempts": 58,
+        "missing_usage_calls": 0,
+        "known_cost_usd": "0.044889480",
+        "estimated_cost_usd": "0.044889480",
+        "prompt_tokens_observed": 424148,
+        "completion_tokens_observed": 8606,
+        "tool_calls": 20,
+        "total_ms": 111423,
+        "p50_ms": 6188,
+        "p95_ms": 9469
+      }
+    },
+    "price": {
+      "model": "deepseek-v4-flash",
+      "currency": "USD",
+      "as_of": "2026-11-04",
+      "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+      "kind": "fixed_off_peak_flash_reference_not_invoice",
+      "input_cache_hit_per_million": "0.003",
+      "input_cache_miss_per_million": "0.15",
+      "output_per_million": "0.6"
+    }
+  },
+  "retrieval_direct_only": {
+    "date": {
+      "count": 20,
+      "correct": 20,
+      "recall_at_5": 1.0,
+      "mrr": 1.0,
+      "false_positives": 0
+    },
+    "literal": {
+      "count": 10,
+      "correct": 10,
+      "recall_at_5": 1.0,
+      "mrr": 0.95,
+      "false_positives": 0
+    },
+    "paraphrase": {
+      "count": 10,
+      "correct": 0,
+      "recall_at_5": 0.0,
+      "mrr": 0.0,
+      "false_positives": 0
+    },
+    "no_answer": {
+      "count": 10,
+      "correct": 10,
+      "recall_at_5": null,
+      "mrr": null,
+      "false_positives": 0
+    },
+    "multiple_candidates": {
+      "count": 10,
+      "correct": 10,
+      "recall_at_5": 1.0,
+      "mrr": 1.0,
+      "false_positives": 0
+    }
+  },
+  "safety": [
+    {
+      "threat": "other_user",
+      "channel": "search",
+      "passed": true,
+      "denied_code": "empty"
+    },
+    {
+      "threat": "other_user",
+      "channel": "read_user",
+      "passed": true,
+      "denied_code": "RESOURCE_NOT_FOUND"
+    },
+    {
+      "threat": "other_user",
+      "channel": "read_assistant",
+      "passed": true,
+      "denied_code": "RESOURCE_NOT_FOUND"
+    },
+    {
+      "threat": "other_user",
+      "channel": "evidence",
+      "passed": true,
+      "denied_code": "RESOURCE_NOT_FOUND"
+    },
+    {
+      "threat": "other_user",
+      "channel": "cursor",
+      "passed": true,
+      "denied_code": "INVALID_ARGUMENT"
+    },
+    {
+      "threat": "deleted",
+      "channel": "search",
+      "passed": true,
+      "denied_code": "empty"
+    },
+    {
+      "threat": "deleted",
+      "channel": "read_user",
+      "passed": true,
+      "denied_code": "RESOURCE_NOT_FOUND"
+    },
+    {
+      "threat": "deleted",
+      "channel": "read_assistant",
+      "passed": true,
+      "denied_code": "RESOURCE_NOT_FOUND"
+    },
+    {
+      "threat": "deleted",
+      "channel": "evidence",
+      "passed": true,
+      "denied_code": "RESOURCE_NOT_FOUND"
+    },
+    {
+      "threat": "deleted",
+      "channel": "cursor",
+      "passed": true,
+      "denied_code": "empty"
+    },
+    {
+      "threat": "revoked",
+      "channel": "search",
+      "passed": true,
+      "denied_code": "empty"
+    },
+    {
+      "threat": "revoked",
+      "channel": "read_user",
+      "passed": true,
+      "denied_code": "RESOURCE_NOT_FOUND"
+    },
+    {
+      "threat": "revoked",
+      "channel": "read_assistant",
+      "passed": true,
+      "denied_code": "RESOURCE_NOT_FOUND"
+    },
+    {
+      "threat": "revoked",
+      "channel": "evidence",
+      "passed": true,
+      "denied_code": "RESOURCE_NOT_FOUND"
+    },
+    {
+      "threat": "revoked",
+      "channel": "cursor",
+      "passed": true,
+      "denied_code": "empty"
+    },
+    {
+      "threat": "suppressed",
+      "channel": "search",
+      "passed": true,
+      "denied_code": "empty"
+    },
+    {
+      "threat": "suppressed",
+      "channel": "read_user",
+      "passed": true,
+      "denied_code": "SOURCE_INVALIDATED"
+    },
+    {
+      "threat": "suppressed",
+      "channel": "read_assistant",
+      "passed": true,
+      "denied_code": "SOURCE_INVALIDATED"
+    },
+    {
+      "threat": "suppressed",
+      "channel": "evidence",
+      "passed": true,
+      "denied_code": "SOURCE_INVALIDATED"
+    },
+    {
+      "threat": "suppressed",
+      "channel": "cursor",
+      "passed": true,
+      "denied_code": "empty"
+    }
+  ],
+  "limitations": [
+    "Known development cases, not a generalization score.",
+    "Original phrase-only false negative retained; raw result audit separate.",
+    "First control experiment capacity-confounded and superseded, not deleted.",
+    "60 labels agent-authored, human confirmation pending.",
+    "Paraphrase direct lexical lookup 0/10; no Agent rewrite measured.",
+    "Reference normalized fees, not provider bill."
+  ]
+}
