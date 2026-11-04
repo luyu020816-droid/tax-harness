@@ -86,3 +86,11 @@ def test_fixed_window_explicitly_records_loss_instead_of_capacity_confounded_con
         _, manifest, dropped = context.assemble()
         assert len(dropped) == 2 and "experiment_discarded_groups" not in manifest
     assert context.assemble is assembled
+
+
+def test_legacy_comparison_cannot_publish_false_current_strategy_results(monkeypatch):
+    import runpy
+
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    with pytest.raises(SystemExit, match="evaluate_conversation_strategies.py"):
+        runpy.run_path(str(ROOT / "scripts/evaluate_advanced.py"), run_name="__main__")

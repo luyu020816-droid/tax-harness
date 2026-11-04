@@ -325,6 +325,11 @@ async def main(args):
 
 
 if __name__ == "__main__":
+    raise SystemExit(
+        "Historical evaluator: its legacy context flags no longer vary the current runtime. "
+        "Use scripts/evaluate_conversation_strategies.py for this candidate; "
+        "check out the original report commit to reproduce historical experiments."
+    )
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--runs", type=int, choices=range(1, 4), default=3)
