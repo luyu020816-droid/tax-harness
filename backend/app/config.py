@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     context_history_search: bool = (
         False  # Legacy experiment setting; cannot enable online chat search.
     )
+    conversation_semantic_mode: Literal["off", "shadow", "on"] = "off"
+    conversation_selection_policy: Path = (
+        ROOT / "evals/conversation-semantic-v1/selection-policy.json"
+    )
     knowledge_enabled: bool = True
     knowledge_model_directory: Path = ROOT / ".local/retrieval-models"
     knowledge_selection_policy: Path = ROOT / "evals/retrieval-v2/selection-policy.json"

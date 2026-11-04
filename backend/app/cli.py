@@ -102,6 +102,24 @@ def _grant_runtime(conn, settings: Settings) -> None:
             sql.SQL(",").join(map(sql.Identifier, tables)), role
         )
     )
+    if conn.execute("SELECT to_regclass('public.conversation_passages') t").fetchone()["t"]:
+        conn.execute(
+            sql.SQL(
+                "GRANT INSERT ON conversation_index_profiles,conversation_passages TO {}"
+            ).format(role)
+        )
+        conn.execute(
+            sql.SQL("GRANT UPDATE(enabled) ON conversation_index_profiles TO {}").format(role)
+        )
+        conn.execute(sql.SQL("GRANT INSERT,UPDATE ON conversation_index_jobs TO {}").format(role))
+    if conn.execute("SELECT to_regprocedure('lock_conversation_index_grants(uuid)') t").fetchone()[
+        "t"
+    ]:
+        conn.execute(
+            sql.SQL("GRANT EXECUTE ON FUNCTION lock_conversation_index_grants(uuid) TO {}").format(
+                role
+            )
+        )
     # Immutable message bodies and event logs; operational metadata remains writable.
     conn.execute(sql.SQL("REVOKE UPDATE,DELETE ON conversation_events FROM {}").format(role))
     conn.execute(sql.SQL("GRANT INSERT ON conversation_terms TO {}").format(role))
@@ -209,7 +227,7 @@ def initialize(settings: Settings, *, test=False, extended=False) -> dict:
         )
         for migration in sorted((ROOT / "backend/migrations").glob("[0-9]*.sql")):
             if (
-                migration.name.startswith(("006_", "009_"))
+                migration.name.startswith(("006_", "009_", "015_"))
                 and not conn.execute(
                     "SELECT 1 FROM pg_available_extensions WHERE name='vector'"
                 ).fetchone()
@@ -419,6 +437,10 @@ def main() -> None:
     revoke.add_argument("user_id")
     revoke.add_argument("company_id")
     revoke.add_argument("--request-id", required=True)
+    c = subs.add_parser("conversations-index").add_subparsers(dest="index_action", required=True)
+    for name in ("backfill", "status", "retry"):
+        action = c.add_parser(name)
+        action.add_argument("--drain", action="store_true")
     args = parser.parse_args()
     if args.command == "configure":
         configure()
@@ -426,6 +448,10 @@ def main() -> None:
     try:
         if args.command == "init-extended":
             result = initialize_extended(Settings())
+        elif args.command == "conversations-index":
+            from app.conversation_admin import command
+
+            result = command(args, Settings())
         elif args.command == "knowledge":
             result = knowledge_command(args, Settings())
         else:
