@@ -1,6 +1,6 @@
 # 会话上下文与独立历史检索：实施记录
 
-记录日期：2026-11-04。适用分支：`feature_adjust_1031`；本次改动尚未提交或推送。依据为[已评审设计](superpowers/specs/2026-11-03-conversation-context-design.md)和[DeepSeek Harness原始实现调研](DEEPSEEK_CONTEXT_RESEARCH_20261103.md)。
+记录日期：2026-11-04。适用分支：`feature_adjust_1031`；会话改造已推送为91a43e3；后续专项验收另行记录。依据为[已评审设计](superpowers/specs/2026-11-03-conversation-context-design.md)和[DeepSeek Harness原始实现调研](DEEPSEEK_CONTEXT_RESEARCH_20261103.md)。
 
 ## 结果与边界
 

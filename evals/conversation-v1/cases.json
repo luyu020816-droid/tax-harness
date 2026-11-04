@@ -1,0 +1,940 @@
+{
+  "version": "conversation-v1-review-draft",
+  "label_status": "agent_authored_pending_human_review",
+  "frozen_before_retrieval_run": true,
+  "scope": "Synthetic memory retrieval development/review pack. Not human-labeled holdout or Agent end-to-end score.",
+  "fixtures": [
+    {
+      "id": "D01",
+      "text": "资料整理记录D01：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-01T02:00:00+08:00"
+    },
+    {
+      "id": "D02",
+      "text": "资料整理记录D02：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-02T02:00:00+08:00"
+    },
+    {
+      "id": "D03",
+      "text": "资料整理记录D03：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-03T02:00:00+08:00"
+    },
+    {
+      "id": "D04",
+      "text": "资料整理记录D04：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-04T02:00:00+08:00"
+    },
+    {
+      "id": "D05",
+      "text": "资料整理记录D05：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-05T02:00:00+08:00"
+    },
+    {
+      "id": "D06",
+      "text": "资料整理记录D06：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-06T02:00:00+08:00"
+    },
+    {
+      "id": "D07",
+      "text": "资料整理记录D07：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-07T02:00:00+08:00"
+    },
+    {
+      "id": "D08",
+      "text": "资料整理记录D08：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-08T02:00:00+08:00"
+    },
+    {
+      "id": "D09",
+      "text": "资料整理记录D09：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-09T02:00:00+08:00"
+    },
+    {
+      "id": "D10",
+      "text": "资料整理记录D10：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-10T02:00:00+08:00"
+    },
+    {
+      "id": "D11",
+      "text": "资料整理记录D11：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-11T02:00:00+08:00"
+    },
+    {
+      "id": "D12",
+      "text": "资料整理记录D12：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-12T02:00:00+08:00"
+    },
+    {
+      "id": "D13",
+      "text": "资料整理记录D13：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-13T02:00:00+08:00"
+    },
+    {
+      "id": "D14",
+      "text": "资料整理记录D14：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-14T02:00:00+08:00"
+    },
+    {
+      "id": "D15",
+      "text": "资料整理记录D15：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-15T02:00:00+08:00"
+    },
+    {
+      "id": "D16",
+      "text": "资料整理记录D16：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-16T02:00:00+08:00"
+    },
+    {
+      "id": "D17",
+      "text": "资料整理记录D17：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-17T02:00:00+08:00"
+    },
+    {
+      "id": "D18",
+      "text": "资料整理记录D18：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-18T02:00:00+08:00"
+    },
+    {
+      "id": "D19",
+      "text": "资料整理记录D19：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-19T02:00:00+08:00"
+    },
+    {
+      "id": "D20",
+      "text": "资料整理记录D20：先备份原件，尚未获批，不授权保存。",
+      "when": "2026-09-20T02:00:00+08:00"
+    },
+    {
+      "id": "L01",
+      "text": "纸质档案存放在西侧柜，不得外发。"
+    },
+    {
+      "id": "L02",
+      "text": "数据库迁移必须先备份，保留回退副本。"
+    },
+    {
+      "id": "L03",
+      "text": "合同归档要先核对签章，不能漏附件。"
+    },
+    {
+      "id": "L04",
+      "text": "发票复核仍待经办人确认，不授权保存。"
+    },
+    {
+      "id": "L05",
+      "text": "报销审批先由经理复核，再交财务。"
+    },
+    {
+      "id": "L06",
+      "text": "数据校验要求核对行数与金额。"
+    },
+    {
+      "id": "L07",
+      "text": "交接地点是北门，不在南门。"
+    },
+    {
+      "id": "L08",
+      "text": "访问权限仅对指定成员开放。"
+    },
+    {
+      "id": "L09",
+      "text": "审批顺序为先部门后财务。"
+    },
+    {
+      "id": "L10",
+      "text": "备份副本留在离线硬盘。"
+    },
+    {
+      "id": "L11",
+      "text": "系统升级之前要建立完整备份。"
+    },
+    {
+      "id": "L12",
+      "text": "扫描件复核要检查页数与清晰度。"
+    },
+    {
+      "id": "L13",
+      "text": "历史发票清单不能替代当前查询结果。"
+    },
+    {
+      "id": "L14",
+      "text": "文件校验码使用SHA256，导出后复核。"
+    },
+    {
+      "id": "L15",
+      "text": "本地数据库恢复必须先进入维护状态。"
+    },
+    {
+      "id": "L16",
+      "text": "新制度只作问答依据，需要受控发布才能执行。"
+    },
+    {
+      "id": "L17",
+      "text": "助手建议尚未获得用户确认。"
+    },
+    {
+      "id": "L18",
+      "text": "删除会话后停止召回原始聊天。"
+    },
+    {
+      "id": "L19",
+      "text": "原始消息追加保存，内容不可覆盖。"
+    },
+    {
+      "id": "L20",
+      "text": "保存请求超时后先核对原操作回执。"
+    },
+    {
+      "id": "M01A",
+      "text": "候选计划M01：交接到北柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M01B",
+      "text": "候选计划M01：交接到南柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M02A",
+      "text": "候选计划M02：交接到北柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M02B",
+      "text": "候选计划M02：交接到南柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M03A",
+      "text": "候选计划M03：交接到北柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M03B",
+      "text": "候选计划M03：交接到南柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M04A",
+      "text": "候选计划M04：交接到北柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M04B",
+      "text": "候选计划M04：交接到南柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M05A",
+      "text": "候选计划M05：交接到北柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M05B",
+      "text": "候选计划M05：交接到南柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M06A",
+      "text": "候选计划M06：交接到北柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M06B",
+      "text": "候选计划M06：交接到南柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M07A",
+      "text": "候选计划M07：交接到北柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M07B",
+      "text": "候选计划M07：交接到南柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M08A",
+      "text": "候选计划M08：交接到北柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M08B",
+      "text": "候选计划M08：交接到南柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M09A",
+      "text": "候选计划M09：交接到北柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M09B",
+      "text": "候选计划M09：交接到南柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M10A",
+      "text": "候选计划M10：交接到北柜，尚未决定采用哪个。"
+    },
+    {
+      "id": "M10B",
+      "text": "候选计划M10：交接到南柜，尚未决定采用哪个。"
+    }
+  ],
+  "cases": [
+    {
+      "id": "D01",
+      "category": "date",
+      "question": "找出2026-09-01当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-01T00:00:00+08:00",
+        "date_to": "2026-09-02T00:00:00+08:00"
+      },
+      "gold": [
+        "D01"
+      ]
+    },
+    {
+      "id": "D02",
+      "category": "date",
+      "question": "找出2026-09-02当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-02T00:00:00+08:00",
+        "date_to": "2026-09-03T00:00:00+08:00"
+      },
+      "gold": [
+        "D02"
+      ]
+    },
+    {
+      "id": "D03",
+      "category": "date",
+      "question": "找出2026-09-03当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-03T00:00:00+08:00",
+        "date_to": "2026-09-04T00:00:00+08:00"
+      },
+      "gold": [
+        "D03"
+      ]
+    },
+    {
+      "id": "D04",
+      "category": "date",
+      "question": "找出2026-09-04当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-04T00:00:00+08:00",
+        "date_to": "2026-09-05T00:00:00+08:00"
+      },
+      "gold": [
+        "D04"
+      ]
+    },
+    {
+      "id": "D05",
+      "category": "date",
+      "question": "找出2026-09-05当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-05T00:00:00+08:00",
+        "date_to": "2026-09-06T00:00:00+08:00"
+      },
+      "gold": [
+        "D05"
+      ]
+    },
+    {
+      "id": "D06",
+      "category": "date",
+      "question": "找出2026-09-06当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-06T00:00:00+08:00",
+        "date_to": "2026-09-07T00:00:00+08:00"
+      },
+      "gold": [
+        "D06"
+      ]
+    },
+    {
+      "id": "D07",
+      "category": "date",
+      "question": "找出2026-09-07当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-07T00:00:00+08:00",
+        "date_to": "2026-09-08T00:00:00+08:00"
+      },
+      "gold": [
+        "D07"
+      ]
+    },
+    {
+      "id": "D08",
+      "category": "date",
+      "question": "找出2026-09-08当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-08T00:00:00+08:00",
+        "date_to": "2026-09-09T00:00:00+08:00"
+      },
+      "gold": [
+        "D08"
+      ]
+    },
+    {
+      "id": "D09",
+      "category": "date",
+      "question": "找出2026-09-09当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-09T00:00:00+08:00",
+        "date_to": "2026-09-10T00:00:00+08:00"
+      },
+      "gold": [
+        "D09"
+      ]
+    },
+    {
+      "id": "D10",
+      "category": "date",
+      "question": "找出2026-09-10当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-10T00:00:00+08:00",
+        "date_to": "2026-09-11T00:00:00+08:00"
+      },
+      "gold": [
+        "D10"
+      ]
+    },
+    {
+      "id": "D11",
+      "category": "date",
+      "question": "找出2026-09-11当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-11T00:00:00+08:00",
+        "date_to": "2026-09-12T00:00:00+08:00"
+      },
+      "gold": [
+        "D11"
+      ]
+    },
+    {
+      "id": "D12",
+      "category": "date",
+      "question": "找出2026-09-12当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-12T00:00:00+08:00",
+        "date_to": "2026-09-13T00:00:00+08:00"
+      },
+      "gold": [
+        "D12"
+      ]
+    },
+    {
+      "id": "D13",
+      "category": "date",
+      "question": "找出2026-09-13当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-13T00:00:00+08:00",
+        "date_to": "2026-09-14T00:00:00+08:00"
+      },
+      "gold": [
+        "D13"
+      ]
+    },
+    {
+      "id": "D14",
+      "category": "date",
+      "question": "找出2026-09-14当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-14T00:00:00+08:00",
+        "date_to": "2026-09-15T00:00:00+08:00"
+      },
+      "gold": [
+        "D14"
+      ]
+    },
+    {
+      "id": "D15",
+      "category": "date",
+      "question": "找出2026-09-15当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-15T00:00:00+08:00",
+        "date_to": "2026-09-16T00:00:00+08:00"
+      },
+      "gold": [
+        "D15"
+      ]
+    },
+    {
+      "id": "D16",
+      "category": "date",
+      "question": "找出2026-09-16当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-16T00:00:00+08:00",
+        "date_to": "2026-09-17T00:00:00+08:00"
+      },
+      "gold": [
+        "D16"
+      ]
+    },
+    {
+      "id": "D17",
+      "category": "date",
+      "question": "找出2026-09-17当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-17T00:00:00+08:00",
+        "date_to": "2026-09-18T00:00:00+08:00"
+      },
+      "gold": [
+        "D17"
+      ]
+    },
+    {
+      "id": "D18",
+      "category": "date",
+      "question": "找出2026-09-18当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-18T00:00:00+08:00",
+        "date_to": "2026-09-19T00:00:00+08:00"
+      },
+      "gold": [
+        "D18"
+      ]
+    },
+    {
+      "id": "D19",
+      "category": "date",
+      "question": "找出2026-09-19当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-19T00:00:00+08:00",
+        "date_to": "2026-09-20T00:00:00+08:00"
+      },
+      "gold": [
+        "D19"
+      ]
+    },
+    {
+      "id": "D20",
+      "category": "date",
+      "question": "找出2026-09-20当天的资料整理原话。",
+      "arguments": {
+        "date_from": "2026-09-20T00:00:00+08:00",
+        "date_to": "2026-09-21T00:00:00+08:00"
+      },
+      "gold": [
+        "D20"
+      ]
+    },
+    {
+      "id": "L01",
+      "category": "literal",
+      "question": "纸质档案",
+      "arguments": {
+        "query": "纸质档案"
+      },
+      "gold": [
+        "L01"
+      ]
+    },
+    {
+      "id": "L02",
+      "category": "literal",
+      "question": "数据库迁移",
+      "arguments": {
+        "query": "数据库迁移"
+      },
+      "gold": [
+        "L02"
+      ]
+    },
+    {
+      "id": "L03",
+      "category": "literal",
+      "question": "合同归档",
+      "arguments": {
+        "query": "合同归档"
+      },
+      "gold": [
+        "L03"
+      ]
+    },
+    {
+      "id": "L04",
+      "category": "literal",
+      "question": "发票复核",
+      "arguments": {
+        "query": "发票复核"
+      },
+      "gold": [
+        "L04"
+      ]
+    },
+    {
+      "id": "L05",
+      "category": "literal",
+      "question": "报销审批",
+      "arguments": {
+        "query": "报销审批"
+      },
+      "gold": [
+        "L05"
+      ]
+    },
+    {
+      "id": "L06",
+      "category": "literal",
+      "question": "数据校验",
+      "arguments": {
+        "query": "数据校验"
+      },
+      "gold": [
+        "L06"
+      ]
+    },
+    {
+      "id": "L07",
+      "category": "literal",
+      "question": "交接地点",
+      "arguments": {
+        "query": "交接地点"
+      },
+      "gold": [
+        "L07"
+      ]
+    },
+    {
+      "id": "L08",
+      "category": "literal",
+      "question": "访问权限",
+      "arguments": {
+        "query": "访问权限"
+      },
+      "gold": [
+        "L08"
+      ]
+    },
+    {
+      "id": "L09",
+      "category": "literal",
+      "question": "审批顺序",
+      "arguments": {
+        "query": "审批顺序"
+      },
+      "gold": [
+        "L09"
+      ]
+    },
+    {
+      "id": "L10",
+      "category": "literal",
+      "question": "备份副本",
+      "arguments": {
+        "query": "备份副本"
+      },
+      "gold": [
+        "L10"
+      ]
+    },
+    {
+      "id": "L11",
+      "category": "paraphrase",
+      "question": "改版之前做拷贝",
+      "arguments": {
+        "query": "改版之前做拷贝"
+      },
+      "gold": [
+        "L11"
+      ]
+    },
+    {
+      "id": "L12",
+      "category": "paraphrase",
+      "question": "图片文档如何验收",
+      "arguments": {
+        "query": "图片文档如何验收"
+      },
+      "gold": [
+        "L12"
+      ]
+    },
+    {
+      "id": "L13",
+      "category": "paraphrase",
+      "question": "以前的票据表现在还能用吗",
+      "arguments": {
+        "query": "以前的票据表现在还能用吗"
+      },
+      "gold": [
+        "L13"
+      ]
+    },
+    {
+      "id": "L14",
+      "category": "paraphrase",
+      "question": "下载之后核实指纹",
+      "arguments": {
+        "query": "下载之后核实指纹"
+      },
+      "gold": [
+        "L14"
+      ]
+    },
+    {
+      "id": "L15",
+      "category": "paraphrase",
+      "question": "故障后怎样还原资料库",
+      "arguments": {
+        "query": "故障后怎样还原资料库"
+      },
+      "gold": [
+        "L15"
+      ]
+    },
+    {
+      "id": "L16",
+      "category": "paraphrase",
+      "question": "刚上传的规定能马上生效吗",
+      "arguments": {
+        "query": "刚上传的规定能马上生效吗"
+      },
+      "gold": [
+        "L16"
+      ]
+    },
+    {
+      "id": "L17",
+      "category": "paraphrase",
+      "question": "机器的主张有人批准了吗",
+      "arguments": {
+        "query": "机器的主张有人批准了吗"
+      },
+      "gold": [
+        "L17"
+      ]
+    },
+    {
+      "id": "L18",
+      "category": "paraphrase",
+      "question": "扔掉聊天后还能被翻出来吗",
+      "arguments": {
+        "query": "扔掉聊天后还能被翻出来吗"
+      },
+      "gold": [
+        "L18"
+      ]
+    },
+    {
+      "id": "L19",
+      "category": "paraphrase",
+      "question": "以前说过的话会被改写吗",
+      "arguments": {
+        "query": "以前说过的话会被改写吗"
+      },
+      "gold": [
+        "L19"
+      ]
+    },
+    {
+      "id": "L20",
+      "category": "paraphrase",
+      "question": "写入卡住了应该怎么接着办",
+      "arguments": {
+        "query": "写入卡住了应该怎么接着办"
+      },
+      "gold": [
+        "L20"
+      ]
+    },
+    {
+      "id": "N01",
+      "category": "no_answer",
+      "question": "保险柜密码",
+      "arguments": {
+        "query": "保险柜密码"
+      },
+      "gold": []
+    },
+    {
+      "id": "N02",
+      "category": "no_answer",
+      "question": "出差航班",
+      "arguments": {
+        "query": "出差航班"
+      },
+      "gold": []
+    },
+    {
+      "id": "N03",
+      "category": "no_answer",
+      "question": "员工家庭住址",
+      "arguments": {
+        "query": "员工家庭住址"
+      },
+      "gold": []
+    },
+    {
+      "id": "N04",
+      "category": "no_answer",
+      "question": "银行卡密码",
+      "arguments": {
+        "query": "银行卡密码"
+      },
+      "gold": []
+    },
+    {
+      "id": "N05",
+      "category": "no_answer",
+      "question": "客户手机号码",
+      "arguments": {
+        "query": "客户手机号码"
+      },
+      "gold": []
+    },
+    {
+      "id": "N06",
+      "category": "no_answer",
+      "question": "生产服务器密钥",
+      "arguments": {
+        "query": "生产服务器密钥"
+      },
+      "gold": []
+    },
+    {
+      "id": "N07",
+      "category": "no_answer",
+      "question": "今年净利润预测",
+      "arguments": {
+        "query": "今年净利润预测"
+      },
+      "gold": []
+    },
+    {
+      "id": "N08",
+      "category": "no_answer",
+      "question": "私人病历",
+      "arguments": {
+        "query": "私人病历"
+      },
+      "gold": []
+    },
+    {
+      "id": "N09",
+      "category": "no_answer",
+      "question": "未提交的投标报价",
+      "arguments": {
+        "query": "未提交的投标报价"
+      },
+      "gold": []
+    },
+    {
+      "id": "N10",
+      "category": "no_answer",
+      "question": "不存在的交易流水",
+      "arguments": {
+        "query": "不存在的交易流水"
+      },
+      "gold": []
+    },
+    {
+      "id": "M01",
+      "category": "multiple_candidates",
+      "question": "候选计划M01有哪些？不要替我选。",
+      "arguments": {
+        "query": "候选计划M01"
+      },
+      "gold": [
+        "M01A",
+        "M01B"
+      ]
+    },
+    {
+      "id": "M02",
+      "category": "multiple_candidates",
+      "question": "候选计划M02有哪些？不要替我选。",
+      "arguments": {
+        "query": "候选计划M02"
+      },
+      "gold": [
+        "M02A",
+        "M02B"
+      ]
+    },
+    {
+      "id": "M03",
+      "category": "multiple_candidates",
+      "question": "候选计划M03有哪些？不要替我选。",
+      "arguments": {
+        "query": "候选计划M03"
+      },
+      "gold": [
+        "M03A",
+        "M03B"
+      ]
+    },
+    {
+      "id": "M04",
+      "category": "multiple_candidates",
+      "question": "候选计划M04有哪些？不要替我选。",
+      "arguments": {
+        "query": "候选计划M04"
+      },
+      "gold": [
+        "M04A",
+        "M04B"
+      ]
+    },
+    {
+      "id": "M05",
+      "category": "multiple_candidates",
+      "question": "候选计划M05有哪些？不要替我选。",
+      "arguments": {
+        "query": "候选计划M05"
+      },
+      "gold": [
+        "M05A",
+        "M05B"
+      ]
+    },
+    {
+      "id": "M06",
+      "category": "multiple_candidates",
+      "question": "候选计划M06有哪些？不要替我选。",
+      "arguments": {
+        "query": "候选计划M06"
+      },
+      "gold": [
+        "M06A",
+        "M06B"
+      ]
+    },
+    {
+      "id": "M07",
+      "category": "multiple_candidates",
+      "question": "候选计划M07有哪些？不要替我选。",
+      "arguments": {
+        "query": "候选计划M07"
+      },
+      "gold": [
+        "M07A",
+        "M07B"
+      ]
+    },
+    {
+      "id": "M08",
+      "category": "multiple_candidates",
+      "question": "候选计划M08有哪些？不要替我选。",
+      "arguments": {
+        "query": "候选计划M08"
+      },
+      "gold": [
+        "M08A",
+        "M08B"
+      ]
+    },
+    {
+      "id": "M09",
+      "category": "multiple_candidates",
+      "question": "候选计划M09有哪些？不要替我选。",
+      "arguments": {
+        "query": "候选计划M09"
+      },
+      "gold": [
+        "M09A",
+        "M09B"
+      ]
+    },
+    {
+      "id": "M10",
+      "category": "multiple_candidates",
+      "question": "候选计划M10有哪些？不要替我选。",
+      "arguments": {
+        "query": "候选计划M10"
+      },
+      "gold": [
+        "M10A",
+        "M10B"
+      ]
+    }
+  ]
+}
