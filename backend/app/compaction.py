@@ -25,10 +25,22 @@ def _capture(db, execution, groups):
                 "SELECT state FROM source_assessments WHERE source_id=%s AND revision=%s AND purpose='memory'",
                 (source["source_id"], source["revision"]),
             ).fetchone()
-            if not assessment or assessment["state"] not in (
-                "accepted",
-                "no_change",
-                "invalidated",
+            failed_user = False
+            if assessment and assessment["state"] == "failed" and source["role"] == "user":
+                turn = conn.execute(
+                    "SELECT status FROM turns WHERE turn_id=%s", (source["turn_id"],)
+                ).fetchone()
+                failed_user = bool(
+                    turn and turn["status"] in ("failed", "interrupted", "cancelled")
+                )
+            if not failed_user and (
+                not assessment
+                or assessment["state"]
+                not in (
+                    "accepted",
+                    "no_change",
+                    "invalidated",
+                )
             ):
                 raise AppError(
                     "SOURCE_PROCESSING_PENDING", "来源处理仍有缺口，保留原文并暂停摘要。", 409
@@ -168,7 +180,7 @@ async def compact(db, settings, model, execution, groups, step: int) -> bool:
     refs = list({ref["source_id"]: ref for ref in [*processed, *refs]}.values())
     with db.transaction() as conn:
         guard(conn, execution)
-        protected = collect(conn, execution, refs, settings.summary_evidence_budget)
+        protected = collect(conn, execution, refs, min(settings.summary_evidence_budget, 1024))
     pending = list(groups)
     batches = 0
     requests = 0
@@ -285,6 +297,10 @@ async def compact(db, settings, model, execution, groups, step: int) -> bool:
             (execution.auth.user_id, execution.session_id, scope),
         ).fetchone()["n"]
         summary_id = uid()
+        covered_event_id = conn.execute(
+            "SELECT max(event_id) n FROM conversation_events WHERE session_id=%s AND source_id=ANY(%s::uuid[])",
+            (execution.session_id, [r["source_id"] for r in refs]),
+        ).fetchone()["n"]
         conn.execute(
             "UPDATE summaries SET status='superseded' WHERE user_id=%s AND session_id=%s AND scope=%s AND status='active'",
             (execution.auth.user_id, execution.session_id, scope),
@@ -301,6 +317,10 @@ async def compact(db, settings, model, execution, groups, step: int) -> bool:
                 pack(text, protected),
                 generation,
             ),
+        )
+        conn.execute(
+            "UPDATE summaries SET projection_version='conversation-log-v1',covered_event_id=%s WHERE summary_id=%s",
+            (covered_event_id, summary_id),
         )
         for ref in refs:
             conn.execute(

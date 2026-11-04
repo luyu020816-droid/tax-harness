@@ -184,6 +184,20 @@ class ToolExecutor:
 
     def _dispatch(self, execution, name, args):
         db, auth = self.db, execution.auth
+        if name in ("search_conversations", "read_conversation"):
+            from app import conversation_history
+
+            execution.reference_context = True
+            result = (
+                conversation_history.search
+                if name == "search_conversations"
+                else conversation_history.read_page
+            )(db, execution, **args)
+            # API evidence includes excerpt; avoid sending the same text twice to the model.
+            result.pop("excerpt", None)
+            for match in result.get("matches", []):
+                match.pop("excerpt", None)
+            return result
         if name == "prepare_knowledge_text":
             from app.knowledge import upload_access
 

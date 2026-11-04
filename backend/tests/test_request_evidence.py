@@ -118,7 +118,8 @@ async def test_same_session_confirmed_month_can_be_reused(db, settings):
                 [
                     tool("query_month", {"company_id": "C001", "period": "2026-09"}),
                     final("查询完成。"),
-                ]
+                ],
+                auto_summary=True,
             ),
         )
         await runtime.run(runtime.claim())
@@ -141,7 +142,8 @@ async def test_month_correction_reuses_only_confirmed_year(db, settings):
             db,
             model_settings(settings),
             ScriptedModel(
-                [tool("query_month", {"company_id": "C001", "period": period}), final("查询完成")]
+                [tool("query_month", {"company_id": "C001", "period": period}), final("查询完成")],
+                auto_summary=True,
             ),
         )
         await runtime.run(runtime.claim())

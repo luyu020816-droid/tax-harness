@@ -132,7 +132,10 @@ def test_history_usage_control_snapshots_pagination_and_identity(db, execution_f
     with pytest.raises(AppError):
         insights.detail(db, Identity("U002"), ex.turn_id)
     execution_factory("另一项查询")
-    f = insights.filters(AUTH)
+    # Pin the cohort to persisted DB timestamps. Python/PG wall-clock precision
+    # can otherwise put the freshly committed second row beyond the ceiling.
+    ceiling = admin.execute("SELECT max(created_at) AS at FROM turns").fetchone()["at"]
+    f = insights.filters(AUTH, as_of=ceiling.isoformat())
     first = insights.requests(db, AUTH, f, limit=1)
     second = insights.requests(db, AUTH, f, first["next_cursor"], 1)
     assert first["requests"][0]["turn_id"] != second["requests"][0]["turn_id"]

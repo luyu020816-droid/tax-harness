@@ -102,6 +102,13 @@ def _grant_runtime(conn, settings: Settings) -> None:
             sql.SQL(",").join(map(sql.Identifier, tables)), role
         )
     )
+    # Immutable message bodies and event logs; operational metadata remains writable.
+    conn.execute(sql.SQL("REVOKE UPDATE,DELETE ON conversation_events FROM {}").format(role))
+    conn.execute(sql.SQL("GRANT INSERT ON conversation_terms TO {}").format(role))
+    conn.execute(sql.SQL("REVOKE UPDATE ON sources,run_events FROM {}").format(role))
+    conn.execute(
+        sql.SQL("GRANT UPDATE(turn_id,scope_kind,recall_state) ON sources TO {}").format(role)
+    )
     conn.execute(sql.SQL("GRANT DELETE ON history_index TO {}").format(role))
     conn.execute(sql.SQL("GRANT DELETE ON history_passages TO {}").format(role))
     conn.execute(sql.SQL("GRANT DELETE ON invoice_import_rows TO {}").format(role))
@@ -110,7 +117,9 @@ def _grant_runtime(conn, settings: Settings) -> None:
         conn.execute(sql.SQL("GRANT INSERT,UPDATE ON retrieval_embeddings TO {}").format(role))
     if conn.execute("SELECT to_regclass('public.history_embeddings') AS t").fetchone()["t"]:
         conn.execute(sql.SQL("GRANT INSERT,UPDATE,DELETE ON history_embeddings TO {}").format(role))
-    conn.execute(sql.SQL("GRANT UPDATE(next_source_seq,memory_epoch,auth_epoch) ON users TO {}").format(role))
+    conn.execute(
+        sql.SQL("GRANT UPDATE(next_source_seq,memory_epoch,auth_epoch) ON users TO {}").format(role)
+    )
     conn.execute(sql.SQL("GRANT UPDATE(data_revision) ON company_heads TO {}").format(role))
     conn.execute(sql.SQL("GRANT UPDATE(purpose,note,revision) ON invoices TO {}").format(role))
 
@@ -158,7 +167,7 @@ def _grant_ingest(conn, settings):
     )
     conn.execute(
         sql.SQL(
-            "GRANT INSERT ON invoices,sources,source_scopes,source_assessments,source_progress,history_index,history_jobs,memory_change_ops TO {}"
+            "GRANT INSERT ON conversation_terms,invoices,sources,source_scopes,source_assessments,source_progress,history_index,history_jobs,memory_change_ops TO {}"
         ).format(role)
     )
     conn.execute(

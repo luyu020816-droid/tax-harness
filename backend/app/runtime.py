@@ -316,7 +316,7 @@ class Runtime:
         stale_retry = False
         reply_retries = 0
         budget = None
-        compaction_attempted = False
+        compaction_attempted = 0
         for step in range(1, self.settings.max_model_steps + 1):
             try:
                 payload, manifest, _dropped = await asyncio.to_thread(
@@ -341,26 +341,37 @@ class Runtime:
             if (
                 _dropped
                 and self.settings.context_auto_compact
-                and not compaction_attempted
+                and compaction_attempted < 2
                 and step < self.settings.max_model_steps
             ):
                 from app.compaction import compact
 
-                compaction_attempted = True
+                compaction_attempted += 1
                 try:
                     await compact(self.db, self.settings, budgeted_model, execution, _dropped, step)
                 except AppError as exc:
-                    if exc.code in ("SOURCE_INVALIDATED", "STALE_CONTEXT"):
-                        raise
                     with self.db.transaction() as conn:
                         emit(
                             conn,
                             execution.turn_id,
                             execution.run_id,
-                            "compaction_skipped",
+                            "compaction_failed",
                             exc.as_dict(),
                         )
+                    raise
                 continue
+            if _dropped:
+                if model_calls >= self.settings.max_model_steps:
+                    raise AppError(
+                        "RUN_LIMIT_EXCEEDED",
+                        "本轮模型调用预算已用尽，历史和已保存状态仍保留。",
+                        422,
+                    )
+                raise AppError(
+                    "CONTEXT_CAPACITY_EXCEEDED",
+                    "历史尚未获得完整摘要覆盖，未静默丢弃原文继续回答。",
+                    422,
+                )
             execution.observed_heads = manifest["heads"]
             with self.db.transaction() as conn:
                 context.validate(self.db, execution, payload, manifest, conn=conn)

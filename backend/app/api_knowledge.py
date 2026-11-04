@@ -191,6 +191,15 @@ def knowledge_router(store, retrieval, auth_dependency, history=None):
                     (citation_id, current.user_id),
                 ).fetchone()
             if exists:
+                from app.conversation_history import evidence_in
+
+                with store.db.transaction(readonly=True) as conn:
+                    plan = conn.execute(
+                        "SELECT q.query_plan FROM history_evidence e JOIN history_queries q USING(query_id) WHERE e.citation_id=%s AND q.user_id=%s",
+                        (citation_id, current.user_id),
+                    ).fetchone()
+                    if plan and plan["query_plan"].get("kind") == "conversation":
+                        return evidence_in(conn, current, str(citation_id))
                 return history.read(
                     current, str(citation_id), session_id=str(session_id) if session_id else None
                 )

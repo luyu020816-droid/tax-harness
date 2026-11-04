@@ -93,6 +93,9 @@ def read_evidence_in(conn, auth, citation_id):
     ).fetchone()
     if not row:
         raise AppError("SOURCE_INVALIDATED", "历史引用不存在或不可访问。", 409)
+    if row["query_plan"].get("kind") == "conversation":
+        from app.conversation_history import evidence_in
+        return evidence_in(conn, auth, citation_id)
     if not row["query_plan"].get("summary_id"):
         raise AppError("HISTORY_RETRIEVAL_DISABLED", "普通历史不再参与知识检索。", 403)
     source = read_source(conn, auth, str(row["source_id"]), company_id=row["company_id"])

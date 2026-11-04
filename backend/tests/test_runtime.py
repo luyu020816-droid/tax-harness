@@ -19,13 +19,30 @@ class ScriptedModel:
 
     mode = "test"
 
-    def __init__(self, steps):
+    def __init__(self, steps, *, auto_summary=False):
         self.steps = iter(steps)
+        self.auto_summary = auto_summary
         self.requests = []
         self.pending_write = False
 
     async def complete(self, payload):
         self.requests.append(payload)
+        if self.auto_summary and payload["messages"][0].get("content", "").startswith(
+            "你只生成有来源的历史导航摘要"
+        ):
+            data = json.loads(payload["messages"][-1]["content"])
+            return {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "summary": "程序测试导航，事实请核对原文与正式状态。",
+                            "covered_sources": data["source_ids"],
+                        }
+                    )
+                },
+                "usage": None,
+                "finish_reason": "stop",
+            }
         if self.pending_write:
             from scripted_protocol import actual_outputs
 

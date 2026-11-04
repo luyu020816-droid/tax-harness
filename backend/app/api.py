@@ -155,6 +155,9 @@ def create_app(
         return identity.authenticate(db, request.cookies.get(cookie_name))
 
     auth_dependency = Depends(auth)
+    from app.api_conversations import conversation_router
+
+    app.include_router(conversation_router(db, auth_dependency))
     app.include_router(import_router(imports, auth_dependency))
     app.include_router(insight_router(db, auth_dependency))
     app.include_router(

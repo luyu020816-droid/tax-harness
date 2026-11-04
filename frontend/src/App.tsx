@@ -139,6 +139,9 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
     setSessions(list);
     const previous = localStorage.getItem(`tax-harness:session:${currentUser.user_id}`);
     let chosen = list.find((s) => s.session_id === previous) ?? list[0];
+    const requested = new URLSearchParams(window.location.search).get('session');
+    if (requested)
+      chosen = await api<Session>(`/conversations/sessions/${encodeURIComponent(requested)}`);
     if (!chosen)
       chosen = await api<Session>('/sessions', {
         method: 'POST',

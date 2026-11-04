@@ -53,7 +53,9 @@ def add_source(
         "VALUES(%s,1,'memory','1','pending')",
         (row["source_id"],),
     )
-    # Sources retain conversational/business provenance, never implicit knowledge.
+    # Independent disposable chat index; this never submits knowledge documents.
+    from app.conversation_log import index_source
+    index_source(conn, row)
     return row
 
 
@@ -77,6 +79,13 @@ def read_source(
         assert_access(conn, auth, scope["company_id"])
     if company_id and scopes and {company_id} != {x["company_id"] for x in scopes}:
         raise AppError("SOURCE_INVALIDATED", "来源不属于当前企业。", 409)
+    if row["turn_id"]:
+        session = conn.execute(
+            "SELECT s.deleted_at FROM turns t JOIN sessions s USING(session_id) WHERE t.turn_id=%s",
+            (row["turn_id"],),
+        ).fetchone()
+        if not session or (session["deleted_at"] and not allow_suppressed):
+            raise AppError("SOURCE_INVALIDATED", "来源会话已删除，不再用于上下文或引用。", 409)
     if row["role"] == "tool":
         try:
             data = json.loads(row["content"]).get("data") or {}
@@ -84,7 +93,14 @@ def read_source(
             data = {}
         if not isinstance(data, dict):
             data = {}
-        if data.get("kind") == "knowledge_search":
+        if data.get("kind") in ("conversation_search", "conversation_evidence"):
+            from app.conversation_history import evidence_in
+
+            for match in data.get(
+                "matches", [data] if data.get("kind") == "conversation_evidence" else []
+            ):
+                evidence_in(conn, auth, match["citation_id"])
+        elif data.get("kind") == "knowledge_search":
             from app.knowledge_retrieval import validate_retrievals
 
             validate_retrievals(conn, auth, [data["query_id"]])

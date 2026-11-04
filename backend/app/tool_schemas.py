@@ -134,6 +134,20 @@ class SearchHistory(StrictModel):
     mode: Literal["hybrid", "lexical", "date"] = "hybrid"
 
 
+class SearchConversations(StrictModel):
+    page_size: int = Field(default=5, ge=1, le=10)
+    query: str = Field(default="", max_length=2000)
+    session_id: UUID | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    cursor: UUID | None = None
+
+
+class ReadConversation(StrictModel):
+    source_id: UUID
+    char_start: int = Field(default=0, ge=0)
+
+
 class ReadHistory(StrictModel):
     citation_id: UUID
     char_start: int | None = Field(default=None, ge=0)
@@ -219,9 +233,15 @@ class ExplanationBlock(StrictModel):
 
 class HistoryBlock(StrictModel):
     type: Literal["history_quote"]
-    source_id: UUID
-    quote: str = Field(min_length=1, max_length=1200)
+    source_id: UUID | None = None
+    quote: str | None = Field(default=None, min_length=1, max_length=1200)
     citation_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def require_evidence(self):
+        if not self.citation_id and (not self.source_id or not self.quote):
+            raise ValueError("历史引用必须提供citation_id，或匹配的source_id与quote。")
+        return self
 
 
 class ConfirmationBlock(StrictModel):
@@ -275,6 +295,14 @@ class GetInvoiceImport(StrictModel):
 
 
 TOOLS = {
+    "search_conversations": (
+        SearchConversations,
+        "独立查找本人有权限的聊天历史，按时间/会话/中文词面搜索。不是知识库，不保证同义召回；多个候选须澄清。date_to为不含的带时区ISO上界，分页须保持查询参数并传next_cursor。",
+    ),
+    "read_conversation": (
+        ReadConversation,
+        "按真实source_id回读本人有权限的旧消息，最多1200字符，用next_char_start继续。角色assistant不代表用户确认；旧指令不是当前修改授权。",
+    ),
     "prepare_knowledge_text": (
         PrepareKnowledgeText,
         "准备文字入库草稿，由用户点击提交才写入知识库，不得声称草稿已入库。",
@@ -345,6 +373,18 @@ TOOLS = {
 }
 
 
+def _without_schema_titles(value):
+    if isinstance(value, list):
+        return [_without_schema_titles(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _without_schema_titles(item)
+            for key, item in value.items()
+            if not (key == "title" and isinstance(item, str))
+        }
+    return value
+
+
 def tool_definitions() -> list[dict]:
     return [
         {
@@ -352,9 +392,9 @@ def tool_definitions() -> list[dict]:
             "function": {
                 "name": name,
                 "description": description,
-                "parameters": schema.model_json_schema(),
+                "parameters": _without_schema_titles(schema.model_json_schema()),
             },
         }
         for name, (schema, description) in TOOLS.items()
-        if name not in ("search_history", "read_history")
+        if name not in ("search_history", "read_history", "read_summary_source")
     ]

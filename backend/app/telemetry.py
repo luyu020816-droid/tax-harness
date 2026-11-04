@@ -41,7 +41,7 @@ def snapshot(settings, mode):
         "code_fingerprint": code_fingerprint(),
         "model": settings.model_id,
         "model_mode": mode,
-        "knowledge_policy": "manual_only_session_context_v1",
+        "knowledge_policy": "manual_knowledge_independent_conversation_log_v2",
         "model_parameters": {
             k: settings.model_extra_body[k]
             for k in ("temperature", "top_p", "seed")
@@ -49,16 +49,18 @@ def snapshot(settings, mode):
         },
         "output_reserve": settings.output_reserve,
         "context_policy": {
-            k: getattr(settings, k)
-            for k in (
-                "context_recent_turns",
-                "context_use_summary",
-                "context_auto_compact",
-                "context_history_search",
-                "input_budget",
-                "max_model_steps",
-                "max_tool_calls",
-            )
+            "policy": "conversation-log-v1",
+            "history_search": "independent_lexical",
+            **{
+                k: getattr(settings, k)
+                for k in (
+                    "context_use_summary",
+                    "context_auto_compact",
+                    "input_budget",
+                    "max_model_steps",
+                    "max_tool_calls",
+                )
+            },
         },
     }
 

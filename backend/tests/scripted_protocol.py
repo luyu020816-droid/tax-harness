@@ -11,7 +11,11 @@ MISSING_REF = str(UUID(int=1))
 
 
 def actual_outputs(payload):
-    return [json.loads(m["content"]) for m in payload["messages"] if m.get("role") == "tool"]
+    return [
+        json.loads(m["content"])
+        for m in payload["messages"]
+        if m.get("role") == "tool" and not str(m.get("tool_call_id", "")).startswith("history_")
+    ]
 
 
 def migrate_answer(legacy, payload):

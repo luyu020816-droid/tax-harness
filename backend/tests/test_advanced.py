@@ -69,21 +69,35 @@ async def test_missing_protected_sentence_makes_summary_unusable(
 
 
 @pytest.mark.asyncio
-async def test_protected_evidence_over_budget_is_not_silently_truncated(
+async def test_large_evidence_stays_in_log_and_is_readable_beyond_bounded_summary(
     db, settings, source_factory, execution_factory, admin
 ):
     source = source_factory("不可丢弃的不同原话" * 1000)
-    with pytest.raises(AppError) as error:
-        await compact(
-            db,
-            model_settings(settings),
-            ScriptedModel([]),
-            execution_factory("继续"),
-            [closed_group(db, source)],
-            1,
-        )
-    assert error.value.code == "CONTEXT_CAPACITY_EXCEEDED"
-    assert not admin.execute("SELECT 1 FROM summaries WHERE status='active'").fetchone()
+    execution = execution_factory("继续")
+    await compact(
+        db,
+        model_settings(settings),
+        ScriptedModel([lossy]),
+        execution,
+        [closed_group(db, source)],
+        1,
+    )
+    from app.conversation_history import read_page
+
+    pieces = []
+    start = 0
+    while start is not None:
+        page = read_page(db, execution, source_id=str(source["source_id"]), char_start=start)
+        pieces.append(page["excerpt"])
+        start = page["next_char_start"]
+    assert "".join(pieces) == source["content"]
+    packet = unpack(
+        admin.execute("SELECT content FROM summaries WHERE status='active'").fetchone()["content"]
+    )
+    assert len(json.dumps(packet["protected_excerpts"])) < len(source["content"])
+    assert admin.execute(
+        "SELECT 1 FROM sources WHERE source_id=%s", (source["source_id"],)
+    ).fetchone()
 
 
 def test_edit_preference_switch_company_change_invoice_then_replace_rule(
@@ -339,7 +353,8 @@ def test_context_ablation_cannot_call_disabled_search(db, settings, execution_fa
     runtime = Runtime(db, actual, ScriptedModel([]))
     execution = execution_factory("甲企业过去的用途是什么？")
     payload, manifest, _ = context.assemble(db, actual, execution, [])
-    assert manifest["context_policy"]["history_search"] is False
+    assert manifest["context_policy"]["history_search"] is True
+    assert manifest["context_policy"]["policy"] == "conversation-log-v1"
     names = {d["function"]["name"] for d in payload["tools"]}
     assert "search_history" not in names and "read_summary_source" not in names
     output, _ = runtime.tools.execute(

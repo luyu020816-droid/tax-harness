@@ -191,9 +191,16 @@ def test_F28_source_progress_keeps_earlier_gap(db, admin, source_factory):
 
 def test_F32_changed_source_stops_before_model_input(db, settings, admin, execution_factory):
     execution = execution_factory("原始用户请求")
-    admin.execute(
-        "UPDATE sources SET content='非原始内容' WHERE source_id=%s", (execution.source_id,)
-    )
+    # Isolated corruption injection bypasses the new immutability barrier explicitly.
+    # Ordinary application UPDATE is separately required to fail with 42501.
+    with admin.transaction():
+        admin.execute("ALTER TABLE sources DISABLE TRIGGER conversation_content")
+        try:
+            admin.execute(
+                "UPDATE sources SET content='非原始内容' WHERE source_id=%s", (execution.source_id,)
+            )
+        finally:
+            admin.execute("ALTER TABLE sources ENABLE TRIGGER conversation_content")
     with pytest.raises(AppError) as error:
         assemble(db, model_settings(settings), execution, [])
     assert error.value.code == "STATE_SOURCE_UNAVAILABLE"

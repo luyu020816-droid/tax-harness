@@ -46,7 +46,8 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     insight_price_file: Path = ROOT / ".local/insight-prices.json"
     summary_evidence_budget: int = Field(default=3000, ge=256, le=8000)
-    context_recent_turns: int = Field(default=12, ge=0, le=12)
+    # Deprecated experiment input; log projection does not truncate by turn count.
+    context_recent_turns: int = Field(default=12, ge=0)
     context_use_summary: bool = True
     context_auto_compact: bool = True
     context_history_search: bool = (
