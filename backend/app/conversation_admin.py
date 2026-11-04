@@ -1,5 +1,7 @@
 """Explicit chat index administration; no identity or knowledge policy changes."""
 
+import asyncio
+
 from app.conversation_jobs import ConversationJobs
 from app.db import Database
 from app.retrieval_engine import LocalRetrieval
@@ -32,9 +34,15 @@ def command(args, settings):
                 queued += count
         processed = 0
         if args.drain:
-            while job := jobs.claim():
-                jobs.run(job)
-                processed += 1
+
+            async def drain():
+                count = 0
+                while job := jobs.claim():
+                    await jobs.process(job)
+                    count += 1
+                return count
+
+            processed = asyncio.run(drain())
         return {"profile_id": jobs.profile_id, "queued": queued, "processed": processed}
     finally:
         engine.close()

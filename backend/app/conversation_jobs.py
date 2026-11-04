@@ -229,17 +229,20 @@ class ConversationJobs:
                 if not job:
                     await asyncio.sleep(2)
                     continue
-                self.current = job
-                heartbeat = asyncio.create_task(self._heartbeat(job))
-                try:
-                    await asyncio.to_thread(self.run, job)
-                finally:
-                    heartbeat.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await heartbeat
-                    self.current = None
+                await self.process(job)
                 await asyncio.sleep(0.05)
             except asyncio.CancelledError:
                 raise
             except (AppError, ImportError, OSError, RuntimeError, psycopg.Error):
                 await asyncio.sleep(30)
+
+    async def process(self, job):
+        self.current = job
+        heartbeat = asyncio.create_task(self._heartbeat(job))
+        try:
+            await asyncio.to_thread(self.run, job)
+        finally:
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
+            self.current = None

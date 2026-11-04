@@ -9,7 +9,7 @@ from app import conversation_history
 from app.tool_schemas import ReadConversation, SearchConversations
 
 
-def conversation_router(db, auth_dependency):
+def conversation_router(db, auth_dependency, settings=None, engine=None):
     router = APIRouter(prefix="/api/v1/conversations")
 
     def observation(auth):
@@ -29,7 +29,13 @@ def conversation_router(db, auth_dependency):
 
     @router.post("/search")
     def search(body: SearchConversations, current=auth_dependency):
-        return conversation_history.search(db, observation(current), **body.model_dump(mode="json"))
+        return conversation_history.search(
+            db,
+            observation(current),
+            settings=settings,
+            engine=engine,
+            **body.model_dump(mode="json"),
+        )
 
     @router.post("/read")
     def read(body: ReadConversation, current=auth_dependency):

@@ -135,6 +135,7 @@ class SearchHistory(StrictModel):
 
 
 class SearchConversations(StrictModel):
+    mode: Literal["auto", "lexical", "semantic"] = "auto"
     page_size: int = Field(default=5, ge=1, le=10)
     query: str = Field(default="", max_length=2000)
     session_id: UUID | None = None
@@ -297,7 +298,7 @@ class GetInvoiceImport(StrictModel):
 TOOLS = {
     "search_conversations": (
         SearchConversations,
-        "独立查找本人有权限的聊天历史，按时间/会话/中文词面搜索。不是知识库，不保证同义召回；多个候选须澄清。date_to为不含的带时区ISO上界，分页须保持查询参数并传next_cursor。",
+        "独立查找本人有权限的聊天历史，按时间/会话或可用的词法与语义搜索。不是知识库；partial代表索引或依赖不足，多个候选须澄清。date_to为不含的带时区ISO上界，分页须保持查询参数并传next_cursor。",
     ),
     "read_conversation": (
         ReadConversation,

@@ -251,7 +251,14 @@ def render(conn, execution, plan, payload, manifest):
                     texts.append(text)
                     reply.cards.append(card)
                 texts.append(
-                    "本页还有后续记录，可继续下一页。"
+                    "本轮历史检索覆盖不足，未命中不代表过去没有说过。"
+                    if data["status"] == "partial"
+                    else ""
+                )
+                texts.append(
+                    "本次候选展示完毕，可调整描述继续查找。"
+                    if data.get("retrieval_mode") == "ranked" and not data.get("next_cursor")
+                    else "本页还有后续记录，可继续下一页。"
                     if data.get("has_more", bool(data.get("next_cursor")))
                     else "已到本次历史浏览末页。"
                     if data.get("coverage", {}).get("page_exhausted") or data["matches"]

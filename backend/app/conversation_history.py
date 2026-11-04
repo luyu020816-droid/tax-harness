@@ -56,7 +56,7 @@ def _view(source, citation, excerpt, start, end):
 
 def evidence_in(conn, auth, citation_id):
     row = conn.execute(
-        "SELECT e.*,q.query_plan FROM history_evidence e JOIN history_queries q USING(query_id) WHERE e.citation_id=%s AND q.user_id=%s",
+        "SELECT e.*,q.query_plan,q.scope_snapshot FROM history_evidence e JOIN history_queries q USING(query_id) WHERE e.citation_id=%s AND q.user_id=%s",
         (citation_id, auth.user_id),
     ).fetchone()
     if not row or row["query_plan"].get("kind") != "conversation":
@@ -65,10 +65,56 @@ def evidence_in(conn, auth, citation_id):
     excerpt = source["content"][row["char_start"] : row["char_end"]]
     if source["revision"] != row["source_revision"] or digest(excerpt) != row["excerpt_hash"]:
         raise AppError("SOURCE_INVALIDATED", "历史引用已失效。", 409)
-    return _view(source, str(citation_id), excerpt, row["char_start"], row["char_end"])
+    result = _view(source, str(citation_id), excerpt, row["char_start"], row["char_end"])
+    result["neighbors"] = neighbors_in(
+        conn,
+        auth,
+        source,
+        row["scope_snapshot"].get("before_source_seq", source["source_seq"] + 1),
+        row["query_plan"].get("arguments", {}),
+    )
+    return result
 
 
-def search(
+def scope_in(conn, execution, arguments, before, through):
+    from app.identity import assert_access
+    from app.turns import mentioned_companies
+
+    conditions = [
+        SESSION_VISIBLE,
+        "x.recall_state='active'",
+        "x.role IN ('user','assistant')",
+        "t.source_seq<%(before)s",
+        "e.event_id<=%(through)s",
+    ]
+    params = {"user": execution.auth.user_id, "before": before, "through": through}
+    for field, clause in [
+        ("session_id", "s.session_id=%(session_id)s"),
+        ("date_from", "x.created_at>=%(date_from)s"),
+        ("date_to", "x.created_at<%(date_to)s"),
+    ]:
+        if arguments.get(field):
+            conditions.append(clause)
+            params[field] = (
+                date_bound(arguments[field]) if field.startswith("date_") else arguments[field]
+            )
+    if getattr(execution, "source_id", None):
+        current = conn.execute(
+            "SELECT content FROM sources WHERE source_id=%s AND user_id=%s",
+            (execution.source_id, execution.auth.user_id),
+        ).fetchone()
+        companies = mentioned_companies(conn, current["content"]) if current else []
+        for company in companies:
+            assert_access(conn, execution.auth, company)
+        if companies:
+            conditions.append(
+                "NOT EXISTS(SELECT 1 FROM source_scopes z WHERE z.source_id=x.source_id AND NOT(z.company_id=ANY(%(companies)s::text[])))"
+            )
+            params["companies"] = companies
+    return conditions, params
+
+
+def _lexical_search(
     db,
     execution,
     *,
@@ -106,46 +152,9 @@ def search(
             before = old["scope_snapshot"]["before_source_seq"]
             after = old["pagination"]["after_event_id"]
             through = old["scope_snapshot"]["through_event_id"]
-        conditions = [
-            SESSION_VISIBLE,
-            "x.recall_state='active'",
-            "x.role IN ('user','assistant')",
-            "t.source_seq<%(before)s",
-            "e.event_id>%(after)s",
-            "e.event_id<=%(through)s",
-        ]
-        params = {
-            "user": execution.auth.user_id,
-            "before": before,
-            "after": after,
-            "through": through,
-            "page_limit": page_size + 1,
-        }
-        if session_id:
-            conditions.append("s.session_id=%(session)s")
-            params["session"] = session_id
-        if begin:
-            conditions.append("x.created_at>=%(begin)s")
-            params["begin"] = begin
-        if end:
-            conditions.append("x.created_at<%(end)s")
-            params["end"] = end
-        if getattr(execution, "source_id", None):
-            from app.identity import assert_access
-            from app.turns import mentioned_companies
-
-            current = conn.execute(
-                "SELECT content FROM sources WHERE source_id=%s AND user_id=%s",
-                (execution.source_id, execution.auth.user_id),
-            ).fetchone()
-            companies = mentioned_companies(conn, current["content"]) if current else []
-            for company in companies:
-                assert_access(conn, execution.auth, company)
-            if companies:
-                conditions.append(
-                    "NOT EXISTS(SELECT 1 FROM source_scopes z WHERE z.source_id=x.source_id AND NOT(z.company_id=ANY(%(companies)s::text[])))"
-                )
-                params["companies"] = companies
+        conditions, params = scope_in(conn, execution, normalized, before, through)
+        conditions.append("e.event_id>%(after)s")
+        params.update(after=after, page_limit=page_size + 1)
         tokens = terms(query)[:16]
         if query.strip():
             # Literal phrase OR all segmented terms; no user-supplied regex/SQL syntax.
@@ -221,4 +230,145 @@ def read_page(db, execution, *, source_id, char_start=0):
                 jsonb({"before_source_seq": execution.source_seq}),
             ),
         )
-        return _evidence(conn, execution.auth, query_id, source, char_start)
+        result = _evidence(conn, execution.auth, query_id, source, char_start)
+        result["neighbors"] = neighbors_in(conn, execution.auth, source, execution.source_seq)
+        return result
+
+
+def search(
+    db,
+    execution,
+    *,
+    query="",
+    session_id=None,
+    date_from=None,
+    date_to=None,
+    cursor=None,
+    page_size=5,
+    mode="auto",
+    settings=None,
+    engine=None,
+):
+    import psycopg
+
+    from app import conversation_retrieval
+
+    if mode not in ("auto", "lexical", "semantic"):
+        raise AppError("INVALID_ARGUMENT", "未知聊天检索模式。", 422)
+    begin, end = date_bound(date_from), date_bound(date_to)
+    if begin and end and begin >= end:
+        raise AppError("INVALID_ARGUMENT", "历史开始日期必须早于结束日期。", 422)
+    args = {
+        "query": query.strip(),
+        "session_id": str(session_id) if session_id else None,
+        "date_from": date_from,
+        "date_to": date_to,
+        "page_size": page_size,
+    }
+    semantic_mode = settings.conversation_semantic_mode if settings else "off"
+    if cursor:
+        with db.transaction(readonly=True) as conn:
+            old = conn.execute(
+                "SELECT query_plan FROM history_queries WHERE query_id=%s AND user_id=%s",
+                (cursor, execution.auth.user_id),
+            ).fetchone()
+        if not old:
+            raise AppError("INVALID_ARGUMENT", "聊天游标不存在或不属于当前用户。", 422)
+        if old and old["query_plan"].get("version") == conversation_retrieval.VERSION:
+            return conversation_retrieval.page(
+                db, execution, {**args, "mode": mode}, cursor, settings, engine
+            )
+    shadow_id, degraded = None, None
+    if query.strip() and mode != "lexical" and semantic_mode != "off":
+        try:
+            if engine is None:
+                raise AppError("DEPENDENCY_UNAVAILABLE", "聊天语义模型尚未接入。", 503)
+            shadow_id = conversation_retrieval.search(
+                db, execution, {**args, "mode": mode}, settings, engine
+            )
+            if semantic_mode == "on":
+                return conversation_retrieval.page(
+                    db, execution, {**args, "mode": mode}, shadow_id, settings, engine
+                )
+        except (AppError, ImportError, OSError, RuntimeError, ValueError, psycopg.Error) as exc:
+            if isinstance(exc, AppError) and exc.code not in (
+                "DEPENDENCY_UNAVAILABLE",
+                "SELECTION_POLICY_UNAVAILABLE",
+            ):
+                raise
+            degraded = getattr(exc, "code", "DEPENDENCY_UNAVAILABLE")
+    result = _lexical_search(db, execution, **args, cursor=cursor)
+    if shadow_id or degraded:
+        with db.transaction() as conn:
+            conn.execute(
+                "UPDATE history_queries SET query_plan=query_plan || %s WHERE query_id=%s",
+                (
+                    jsonb({"shadow_query_id": shadow_id, "shadow_error": degraded}),
+                    result["query_id"],
+                ),
+            )
+    if query.strip() and mode != "lexical" and (semantic_mode == "on" or mode == "semantic"):
+        result.update(
+            status="partial",
+            degraded_reason=degraded or "semantic_not_enabled",
+            coverage={"complete": False},
+            semantic_search=False,
+        )
+    return result
+
+
+def neighbors_in(conn, auth, source, before, filters=None):
+    from app.conversation_index import ELIGIBLE
+
+    filters = filters or {}
+    original = conn.execute(
+        "SELECT event_id FROM conversation_events WHERE source_id=%s", (source["source_id"],)
+    ).fetchone()
+    if not original:
+        return []
+    companies = [
+        r["company_id"]
+        for r in conn.execute(
+            "SELECT DISTINCT z.company_id FROM source_scopes z JOIN sources a USING(source_id) WHERE a.turn_id=%s",
+            (source["turn_id"],),
+        ).fetchall()
+    ]
+    result = []
+    for direction, comparison, order in [("previous", "<", "DESC"), ("next", ">", "ASC")]:
+        clauses = [
+            ELIGIBLE,
+            "e.session_id=%s",
+            "e.user_id=%s",
+            "t.source_seq<%s",
+            f"e.event_id{comparison}%s",
+            "NOT EXISTS(SELECT 1 FROM source_scopes z WHERE z.source_id=x.source_id AND NOT(z.company_id=ANY(%s::text[])))",
+        ]
+        params = [source["session_id"], auth.user_id, before, original["event_id"], companies]
+        for key, operation in [("date_from", ">="), ("date_to", "<")]:
+            if filters.get(key):
+                clauses.append(f"x.created_at{operation}%s")
+                params.append(date_bound(filters[key]))
+        rows = conn.execute(
+            "SELECT x.source_id FROM conversation_events e JOIN sources x ON x.source_id=e.source_id "
+            "JOIN turns t ON t.turn_id=e.turn_id JOIN sessions s ON s.session_id=t.session_id WHERE "
+            + " AND ".join(clauses)
+            + f" ORDER BY e.event_id {order} LIMIT 16",
+            params,
+        ).fetchall()
+        for row in rows:
+            try:
+                neighbor = read(conn, auth, str(row["source_id"]))
+            except AppError as exc:
+                if exc.code not in ("SOURCE_INVALIDATED", "RESOURCE_NOT_FOUND", "ACCESS_DENIED"):
+                    raise
+                continue
+            result.append(
+                {
+                    "direction": direction,
+                    "source_id": str(neighbor["source_id"]),
+                    "role": neighbor["role"],
+                    "created_at": safe_json(neighbor["created_at"]),
+                }
+            )
+            break
+    return result

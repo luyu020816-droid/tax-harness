@@ -71,3 +71,30 @@ def register(conn, engine, *, enabled):
         (profile_id, manifest["inference_profile_id"], jsonb(manifest), enabled),
     )
     return profile_id
+
+
+def readiness(db, settings):
+    from app.conversation_retrieval import policy
+
+    with db.transaction(readonly=True) as conn:
+        present = available(conn)
+        active = (
+            conn.execute(
+                "SELECT profile_id FROM conversation_index_profiles WHERE enabled"
+            ).fetchone()
+            if present
+            else None
+        )
+    result = {
+        "mode": settings.conversation_semantic_mode,
+        "schema_available": present,
+        "profile_ready": bool(active),
+        "policy_ready": False,
+    }
+    if active:
+        try:
+            policy(settings, active["profile_id"])
+            result["policy_ready"] = True
+        except AppError:
+            pass
+    return result

@@ -13,6 +13,7 @@ from pydantic import Field
 
 from app import (
     business,
+    conversation_index,
     identity,
     invoice_write,
     preferences,
@@ -26,6 +27,7 @@ from app.api_imports import UploadBodyLimit, import_router
 from app.api_insights import insight_router
 from app.api_knowledge import knowledge_router
 from app.config import ROOT, Settings
+from app.conversation_jobs import ConversationJobs
 from app.db import Database
 from app.errors import AppError
 from app.history_jobs import HistoryJobs
@@ -115,6 +117,7 @@ def create_app(
     knowledge = Knowledge(db, settings)
     knowledge_jobs = KnowledgeJobs(db, settings, runtime.tools.retrieval.engine)
     history_jobs = HistoryJobs(db, settings, runtime.tools.retrieval.engine)
+    conversation_jobs = ConversationJobs(db, settings, runtime.tools.retrieval.engine)
     own_ingest = ingest_db is None and bool(settings.ingest_database_url)
     ingest_db = ingest_db or (Database(settings.ingest_database_url) if own_ingest else None)
     imports = InvoiceImports(db, ingest_db)
@@ -133,10 +136,12 @@ def create_app(
             await runtime.start()
             await knowledge_jobs.start()
             await history_jobs.start()
+            await conversation_jobs.start()
         try:
             yield
         finally:
             if start_workers:
+                await conversation_jobs.stop()
                 await knowledge_jobs.stop()
                 await history_jobs.stop()
                 await runtime.stop()
@@ -157,7 +162,9 @@ def create_app(
     auth_dependency = Depends(auth)
     from app.api_conversations import conversation_router
 
-    app.include_router(conversation_router(db, auth_dependency))
+    app.include_router(
+        conversation_router(db, auth_dependency, settings, runtime.tools.retrieval.engine)
+    )
     app.include_router(import_router(imports, auth_dependency))
     app.include_router(insight_router(db, auth_dependency))
     app.include_router(
@@ -256,6 +263,9 @@ def create_app(
                 "model_mode": model.mode,
                 "maintenance": maintenance,
                 "invoice_import_ready": imports.available(),
+                "conversation_semantics": conversation_index.readiness(db, settings)
+                if database_ready
+                else {"schema_available": False},
                 "knowledge": runtime.tools.retrieval.ready(validate=False)
                 if database_ready
                 else {"ready": False},

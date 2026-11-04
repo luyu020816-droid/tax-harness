@@ -189,10 +189,16 @@ class ToolExecutor:
 
             execution.reference_context = True
             result = (
-                conversation_history.search
+                conversation_history.search(
+                    db,
+                    execution,
+                    settings=self.retrieval.settings,
+                    engine=self.retrieval.engine,
+                    **args,
+                )
                 if name == "search_conversations"
-                else conversation_history.read_page
-            )(db, execution, **args)
+                else conversation_history.read_page(db, execution, **args)
+            )
             # API evidence includes excerpt; avoid sending the same text twice to the model.
             result.pop("excerpt", None)
             for match in result.get("matches", []):

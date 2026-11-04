@@ -2,7 +2,16 @@ import { useEffect, useRef, useState } from 'react';
 import { api, companyName, dateTime } from './api';
 import type { HistoryQuoteCard } from './types';
 
+interface Neighbor {
+  source_id: string;
+  direction: 'previous' | 'next';
+  role: 'user' | 'assistant';
+  created_at: string;
+}
+
 interface HistoryEvidence {
+  citation_id?: string;
+  neighbors?: Neighbor[];
   company_ids?: string[];
   role: 'user' | 'assistant' | 'tool';
   source_id?: string;
@@ -13,17 +22,25 @@ interface HistoryEvidence {
   locator: { char_start: number; char_end: number };
 }
 
-export function HistoryCitation({ card }: { card: HistoryQuoteCard }) {
+export function HistoryCitation({
+  card,
+  allowNeighbors = true,
+}: {
+  card: HistoryQuoteCard;
+  allowNeighbors?: boolean;
+}) {
   const [evidence, setEvidence] = useState<HistoryEvidence | null>(null);
   const [error, setError] = useState('');
   const [continuation, setContinuation] = useState('');
   const [nextStart, setNextStart] = useState<number | null>(null);
   const [reading, setReading] = useState(false);
+  const [neighborCards, setNeighborCards] = useState<HistoryQuoteCard[]>([]);
   const sourceGeneration = useRef(0);
   const hasReadMore = useRef(false);
   useEffect(() => {
     sourceGeneration.current += 1;
     hasReadMore.current = false;
+    setNeighborCards([]);
     setContinuation('');
     setNextStart(null);
     setReading(false);
@@ -44,7 +61,9 @@ export function HistoryCitation({ card }: { card: HistoryQuoteCard }) {
         })
         .catch((err) => {
           if (!controller.signal.aborted && current === revision) {
+            sourceGeneration.current += 1;
             setEvidence(null);
+            setNeighborCards([]);
             setContinuation('');
             setNextStart(null);
             setError(err.message);
@@ -83,6 +102,39 @@ export function HistoryCitation({ card }: { card: HistoryQuoteCard }) {
       if (stamp === sourceGeneration.current) setReading(false);
     }
   }
+  async function readNeighbor(neighbor: Neighbor) {
+    if (reading) return;
+    const stamp = sourceGeneration.current;
+    setReading(true);
+    try {
+      const value = await api<HistoryEvidence>('/conversations/read', {
+        method: 'POST',
+        body: JSON.stringify({ source_id: neighbor.source_id, char_start: 0 }),
+      });
+      if (stamp !== sourceGeneration.current) return;
+      if (!value.citation_id || !value.source_id) throw new Error('原文引用不完整');
+      setNeighborCards((old) => [
+        ...old,
+        {
+          kind: 'history_quote',
+          citation_id: value.citation_id!,
+          source_id: value.source_id!,
+          session_id: value.session_id,
+          company_id: card.company_id,
+          quote_start: value.locator.char_start,
+          quote_end: value.locator.char_end,
+        },
+      ]);
+    } catch (err) {
+      if (stamp !== sourceGeneration.current) return;
+      setError((err as Error).message);
+      setNeighborCards([]);
+      setEvidence(null);
+      setContinuation('');
+    } finally {
+      if (stamp === sourceGeneration.current) setReading(false);
+    }
+  }
   if (error)
     return (
       <p className="error-note" role="status">
@@ -115,6 +167,25 @@ export function HistoryCitation({ card }: { card: HistoryQuoteCard }) {
           {reading ? '正在核对原文…' : '继续读取这条原文'}
         </button>
       )}
+      {allowNeighbors &&
+        evidence.neighbors?.map((neighbor) => (
+          <button
+            key={neighbor.source_id}
+            className="secondary"
+            disabled={reading || neighborCards.some((c) => c.source_id === neighbor.source_id)}
+            onClick={() => void readNeighbor(neighbor)}
+          >
+            查看{neighbor.direction === 'previous' ? '上一条' : '下一条'}
+            {neighbor.role === 'user' ? '用户' : '助手'}原文
+          </button>
+        ))}
+      {neighborCards.map((neighborCard) => (
+        <HistoryCitation
+          key={neighborCard.citation_id}
+          card={neighborCard}
+          allowNeighbors={false}
+        />
+      ))}
       {evidence.session_id && (
         <a
           className="muted small"

@@ -134,3 +134,211 @@ def test_expired_worker_cannot_replace_new_owner_and_retries_are_bounded(db, adm
             ).fetchone()["n"]
             == 1
         )
+
+
+class RankedEngine(IndexEngine):
+    calls = 0
+
+    def embed(self, texts):
+        self.calls += 1
+        return super().embed(texts)
+
+    def rerank(self, query, texts):
+        return [5.0 if "迁移" in text else -5.0 for text in texts]
+
+
+@pytest.fixture
+def ranked(db, settings, tmp_path):
+    import json
+
+    from app.conversation_jobs import ConversationJobs
+
+    engine = RankedEngine()
+    jobs = ConversationJobs(db, settings, engine)
+    profile = jobs.configure()
+    policy = tmp_path / "policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "profile_id": profile,
+                "algorithm": "dense-rerank-v1",
+                "dense_min": 0.5,
+                "rerank_min": 0,
+                "development_hash": "program-test-only",
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = settings.model_copy(
+        update={"conversation_semantic_mode": "on", "conversation_selection_policy": policy}
+    )
+    yield jobs, engine, config
+    with db.transaction() as conn:
+        conn.execute("UPDATE conversation_index_profiles SET enabled=false")
+
+
+def drain(jobs):
+    while job := jobs.claim():
+        jobs.run(job)
+
+
+def observer(user="U001"):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(auth=Identity(user), source_seq=10**9)
+
+
+def test_semantic_only_finds_different_words_and_does_not_guess_no_answer(db, ranked):
+    from app.conversation_history import search
+
+    jobs, engine, config = ranked
+    session = create_session(db, AUTH, "C001")["session_id"]
+    source, _ = settled(db, session, "数据库迁移要先备份，保留回退副本。")
+    drain(jobs)
+    result = search(db, observer(), query="数据库搬家", settings=config, engine=engine)
+    assert result["semantic_search"] and result["matches"][0]["source_id"] == source
+    assert result["status"] == "ok"
+    engine.rerank = lambda query, texts: [-5.0] * len(texts)
+    result = search(db, observer(), query="保险箱密码", settings=config, engine=engine)
+    assert result["status"] == "not_found" and result["matches"] == []
+
+
+def test_semantic_search_has_pre_filtered_ownership_and_current_invalidation(db, ranked):
+    from app.conversation_history import search
+
+    jobs, engine, config = ranked
+    session = create_session(db, AUTH, "C001")["session_id"]
+    settled(db, session, "数据库迁移的私密原文。")
+    drain(jobs)
+    assert (
+        search(db, observer("U002"), query="搬家", settings=config, engine=engine)["matches"] == []
+    )
+    organize(db, AUTH, session, "delete", 1)
+    assert search(db, observer(), query="搬家", settings=config, engine=engine)["matches"] == []
+
+
+def test_ranked_cursor_is_stable_bound_and_does_not_repeat_inference(db, ranked):
+    from app.conversation_history import search
+
+    jobs, engine, config = ranked
+    session = create_session(db, AUTH, "C001")["session_id"]
+    for number in range(4):
+        settled(db, session, f"迁移方案第{number}项，仅讨论。")
+    drain(jobs)
+    first = search(db, observer(), query="搬家", page_size=1, settings=config, engine=engine)
+    count = engine.calls
+    second = search(
+        db,
+        observer(),
+        query="搬家",
+        page_size=1,
+        cursor=first["next_cursor"],
+        settings=config,
+        engine=engine,
+    )
+    assert second["matches"][0]["source_id"] != first["matches"][0]["source_id"]
+    assert count == engine.calls
+    with pytest.raises(AppError):
+        search(
+            db,
+            observer("U002"),
+            query="搬家",
+            page_size=1,
+            cursor=first["next_cursor"],
+            settings=config,
+            engine=engine,
+        )
+    with pytest.raises(AppError):
+        search(
+            db,
+            observer(),
+            query="修改查询",
+            page_size=1,
+            cursor=first["next_cursor"],
+            settings=config,
+            engine=engine,
+        )
+
+
+def test_partial_index_and_unverified_policy_are_not_reported_as_not_found(db, ranked, tmp_path):
+    from app.conversation_history import search
+
+    jobs, engine, config = ranked
+    session = create_session(db, AUTH, "C001")["session_id"]
+    settled(db, session, "迁移原文尚未索引。")
+    result = search(db, observer(), query="搬家", settings=config, engine=engine)
+    assert result["status"] == "partial" and result["coverage"]["pending"] == 2
+    config = config.model_copy(update={"conversation_selection_policy": tmp_path / "missing.json"})
+    result = search(db, observer(), query="搬家", settings=config, engine=engine)
+    assert result["status"] == "partial" and not result["semantic_search"]
+    assert result["degraded_reason"] == "SELECTION_POLICY_UNAVAILABLE"
+
+
+def test_shadow_computes_diagnostics_but_does_not_expose_semantic_matches(db, ranked):
+    from app.conversation_history import search
+
+    jobs, engine, config = ranked
+    session = create_session(db, AUTH, "C001")["session_id"]
+    settled(db, session, "数据库迁移要先备份。")
+    drain(jobs)
+    config = config.model_copy(update={"conversation_semantic_mode": "shadow"})
+    result = search(db, observer(), query="搬家", settings=config, engine=engine)
+    assert not result["semantic_search"] and not result["matches"]
+    with db.transaction(readonly=True) as conn:
+        saved = conn.execute(
+            "SELECT query_plan FROM history_queries WHERE query_id=%s", (result["query_id"],)
+        ).fetchone()
+        assert saved["query_plan"]["shadow_query_id"]
+
+
+def test_exact_invoice_number_is_not_confused_with_similar_identifier(db, ranked):
+    from app.conversation_history import search
+
+    jobs, engine, config = ranked
+    session = create_session(db, AUTH, "C001")["session_id"]
+    settled(db, session, "F0020迁移归档，不是F003。")
+    drain(jobs)
+    result = search(db, observer(), query="F002原来的安排", settings=config, engine=engine)
+    assert result["matches"] == []
+
+
+def test_neighbor_navigation_is_metadata_only_and_revalidates_parent(db):
+    from app.conversation_history import evidence_in, read_page
+
+    session = create_session(db, AUTH, "C001")["session_id"]
+    user, assistant = settled(db, session, "迁移方案原始要求。", "先备份，再迁移。")
+    following, _ = settled(db, session, "我同意第二套方案，但现在不授权保存。")
+    result = read_page(db, observer(), source_id=assistant)
+    assert {n["source_id"] for n in result["neighbors"]} == {user, following}
+    assert all("content" not in n and "excerpt" not in n for n in result["neighbors"])
+    with db.transaction(readonly=True) as conn:
+        assert evidence_in(conn, AUTH, result["citation_id"])["neighbors"] == result["neighbors"]
+    organize(db, AUTH, session, "delete", 1)
+    with pytest.raises(AppError):
+        with db.transaction(readonly=True) as conn:
+            evidence_in(conn, AUTH, result["citation_id"])
+
+
+def test_neighbor_navigation_preserves_explicit_date_window(db, admin):
+    from datetime import UTC, datetime, timedelta
+
+    from app.conversation_history import evidence_in, search
+
+    session = create_session(db, AUTH, "C001")["session_id"]
+    older, _ = settled(db, session, "昨天旧方案。")
+    current, _ = settled(db, session, "今天方案TODAY-653。")
+    begin = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    admin.execute(
+        "UPDATE sources SET created_at=%s WHERE source_id=%s", (begin - timedelta(hours=1), older)
+    )
+    result = search(
+        db,
+        observer(),
+        query="TODAY-653",
+        date_from=begin.isoformat(),
+        date_to=(begin + timedelta(days=1)).isoformat(),
+    )
+    with db.transaction(readonly=True) as conn:
+        evidence = evidence_in(conn, AUTH, result["matches"][0]["citation_id"])
+    assert current == evidence["source_id"]
+    assert older not in {n["source_id"] for n in evidence["neighbors"]}
