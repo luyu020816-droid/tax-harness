@@ -69,3 +69,20 @@ def test_unknown_experiment_profile_is_rejected(monkeypatch):
 
     with pytest.raises(ValueError, match="Unknown strategy"), strategy("unknown"):
         pass
+
+
+def test_fixed_window_explicitly_records_loss_instead_of_capacity_confounded_control(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    from evaluate_conversation_strategies import strategy
+
+    def assembled(*args, **kwargs):
+        return {"messages": []}, {"history_group_count": 10}, [{"old": 1}, {"old": 2}]
+
+    monkeypatch.setattr(context, "assemble", assembled)
+    with strategy("fixed12"):
+        _, manifest, dropped = context.assemble()
+        assert dropped == [] and manifest["experiment_discarded_groups"] == 2
+    with strategy("budget"):
+        _, manifest, dropped = context.assemble()
+        assert len(dropped) == 2 and "experiment_discarded_groups" not in manifest
+    assert context.assemble is assembled

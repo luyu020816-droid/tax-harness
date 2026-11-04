@@ -45,6 +45,8 @@ def strategy(profile):
         context.tool_definitions,
     )
 
+    original_assemble = context.assemble
+
     def projected(*args, **kwargs):
         result = original_groups(*args, **kwargs)
         return result[-12:] if profile == "fixed12" else result
@@ -57,8 +59,19 @@ def strategy(profile):
             or tool["function"]["name"] != "search_conversations"
         ]
 
+    def assembled(*args, **kwargs):
+        payload, manifest, dropped = original_assemble(*args, **kwargs)
+        if profile == "fixed12":
+            # Explicitly lossy control: the former window policy discards older
+            # groups to meet the same hard budget. Only this memory invariant
+            # differs; business permissions/source/write checks remain intact.
+            manifest["experiment_discarded_groups"] = len(dropped)
+            return payload, manifest, []
+        return payload, manifest, dropped
+
     with (
         patch.object(context, "conversation_groups", projected),
+        patch.object(context, "assemble", assembled),
         patch.object(context, "tool_definitions", definitions),
     ):
         yield
@@ -147,6 +160,12 @@ async def run_case(base, case, profile, repetition, directory, price):
             observed.append(
                 {
                     "raw_group_count": count,
+                    "selected_group_count": snapshot["manifest"].get(
+                        "history_group_count"
+                    ),
+                    "discarded_by_budget": snapshot["manifest"].get(
+                        "experiment_discarded_groups", 0
+                    ),
                     "search_enabled": "search_conversations" in names,
                 }
             )
@@ -224,7 +243,7 @@ async def main(args):
         "profiles": list(PROFILES),
         "rows": [],
         "limitations": [
-            "Same-candidate ablation, not a replay of the old binary; business guards remain enabled.",
+            "Same-candidate ablation, not old binary replay. fixed12 intentionally discards budget overflow; all business guards remain enabled.",
             "Known six-case development set; not independent human-labeled holdout or statistical proof.",
             "All strategies retain exact source reading; only budget_search enables history search.",
             "Scoring requires verified source quotes/business cards, not free-text answer quality.",
