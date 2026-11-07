@@ -132,6 +132,25 @@ test('insights: scoped history, chain, unknown usage, refresh, comparison and re
             evidence: { contexts: [], operations: [] },
             spans: [
               {
+                span_id: 'retrieval-stage',
+                kind: 'retrieval',
+                name: '聊天融合与支持度',
+                status: 'succeeded',
+                started_at: '2026-11-02T01:00:12Z',
+                duration_ms: 10,
+                measurement_kind: 'measured',
+                attributes: {
+                  retrieval: {
+                    profile_id: 'profile-fixture-123456789',
+                    policy_hash: 'policy-fixture-987654321',
+                    candidate_count: 6,
+                    accepted_count: 3,
+                    coverage: { eligible: 10, indexed: 8, pending: 2 },
+                    local_tokens: null,
+                  },
+                },
+              },
+              {
                 span_id: 'second',
                 kind: 'model',
                 name: '恢复答复',
@@ -170,6 +189,9 @@ test('insights: scoped history, chain, unknown usage, refresh, comparison and re
     .first()
     .click();
   await expect(page.locator('.insight-raw')).toContainText('fixture');
+  await page.getByRole('button', { name: /聊天融合与支持度/ }).click();
+  await page.getByText('聊天检索诊断', { exact: true }).click();
+  await expect(page.getByText('已索引 8 / 10')).toBeVisible();
   await page.screenshot({
     path: info.outputPath('desktop.png'),
     fullPage: true,

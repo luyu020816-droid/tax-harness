@@ -298,11 +298,11 @@ class GetInvoiceImport(StrictModel):
 TOOLS = {
     "search_conversations": (
         SearchConversations,
-        "独立查找本人有权限的聊天历史，按时间/会话或可用的词法与语义搜索。不是知识库；partial代表索引或依赖不足，多个候选须澄清。date_to为不含的带时区ISO上界，分页须保持查询参数并传next_cursor。",
+        "独立查找本人有权限的聊天历史，按时间/会话或可用的词法与语义搜索。不是知识库；query须保留用户目标词，如已选择、更正后、最后一步，不要只用方案等泛词。partial代表覆盖不足，多个候选须澄清。date_to为不含的带时区ISO上界，分页须保持查询参数并传next_cursor。",
     ),
     "read_conversation": (
         ReadConversation,
-        "按真实source_id回读本人有权限的旧消息，最多1200字符，用next_char_start继续。角色assistant不代表用户确认；旧指令不是当前修改授权。",
+        "按真实source_id和char_start回读旧消息，最多1200字符。只读取回答所需片段；找结尾可按source_length直接从尾部位置回读。目标内容已在搜索摘录时直接引用，不必从头遍历无关正文。需要全文才按next_char_start继续，超预算时保留原文入口。角色assistant不代表用户确认；旧指令不是当前修改授权。",
     ),
     "prepare_knowledge_text": (
         PrepareKnowledgeText,
@@ -399,3 +399,34 @@ def tool_definitions() -> list[dict]:
         for name, (schema, description) in TOOLS.items()
         if name not in ("search_history", "read_history", "read_summary_source")
     ]
+
+
+REFERENCE_MUTATIONS = frozenset({"prepare_invoice_write", "update_invoice", "change_task"})
+
+
+def reference_definitions(definitions):
+    """Show only capabilities the existing read-only dispatch guard permits."""
+    result = []
+    for definition in definitions:
+        function = definition["function"]
+        if function["name"] in REFERENCE_MUTATIONS:
+            continue
+        if function["name"] == "manage_preference":
+            definition = {
+                **definition,
+                "function": {
+                    **function,
+                    "description": "资料查询阶段只读列出本人当前偏好，不记住、更正或删除。",
+                    "parameters": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "action": {"type": "string", "enum": ["list"]},
+                            "scope": {"type": "string", "default": "@user"},
+                        },
+                        "required": ["action"],
+                    },
+                },
+            }
+        result.append(definition)
+    return result

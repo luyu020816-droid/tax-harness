@@ -70,7 +70,7 @@ def search(db, execution, arguments, settings, engine):
         params["profile"] = profile_id
         # Identifier matching is a hard constraint on both lanes, not a similarity hint.
         identifiers = re.findall(
-            r"(?<![A-Za-z0-9])[CFR]\d{3,12}(?![A-Za-z0-9])", arguments["query"], re.I
+            r"(?<![A-Za-z0-9])[FR]\d{3,12}(?![A-Za-z0-9])", arguments["query"], re.I
         )
         identifier_clauses = []
         for n, identifier in enumerate(identifiers):
@@ -100,7 +100,7 @@ def search(db, execution, arguments, settings, engine):
             "through_event_id": through,
             "dependency_validation": "revalidated_before_candidate_delivery",
         }
-        with measured(db, execution, timings, "聊天词法候选"):
+        with measured(db, execution, timings, "聊天词法候选") as attrs:
             params.update(
                 literal=arguments["query"].lower(), terms=" ".join(terms(arguments["query"])[:16])
             )
@@ -113,6 +113,7 @@ def search(db, execution, arguments, settings, engine):
                 "(strpos(lower(x.content),%(literal)s)>0) DESC,ts_rank(i.lexical_index,plainto_tsquery('simple',%(terms)s)) DESC,e.event_id LIMIT 31",
                 params,
             ).fetchall()
+            attrs.update(profile_id=profile_id, candidate_count=min(len(lexical), 30))
     if index.profile(engine)[0] != profile_id:
         raise AppError("DEPENDENCY_UNAVAILABLE", "当前模型与聊天索引profile不一致。", 503)
     selected_policy = None
@@ -127,7 +128,7 @@ def search(db, execution, arguments, settings, engine):
             text_count=1, local_tokens=engine.count(arguments["query"]), provider_cost=None
         )
     with db.transaction(readonly=True) as conn:
-        with measured(db, execution, timings, "聊天授权向量候选"):
+        with measured(db, execution, timings, "聊天授权向量候选") as attrs:
             dense = conn.execute(
                 "WITH authorized AS MATERIALIZED (SELECT x.source_id FROM conversation_events e "
                 "JOIN sources x ON x.source_id=e.source_id JOIN turns t ON t.turn_id=e.turn_id "
@@ -142,6 +143,7 @@ def search(db, execution, arguments, settings, engine):
                 "SELECT * FROM best ORDER BY dense_score DESC,source_id LIMIT 31",
                 params,
             ).fetchall()
+            attrs.update(profile_id=profile_id, candidate_count=min(len(dense), 30))
     candidates = {}
     for rank, row in enumerate(lexical[:30], 1):
         candidates[str(row["source_id"])] = {
@@ -207,12 +209,22 @@ def search(db, execution, arguments, settings, engine):
                 raise AppError("DEPENDENCY_UNAVAILABLE", "聊天重排结果不完整。", 503)
             attrs.update(
                 text_count=len(shortlist),
-                local_tokens=sum(engine.count(c["text"]) for c in shortlist),
+                local_tokens=None,
+                token_measurement="reranker_pair_tokens_not_measured",
                 provider_cost=None,
             )
             for item, score in zip(shortlist, scores, strict=True):
                 item["rerank_score"] = float(score)
-    accepted = select_candidates(valid, selected_policy)
+    with measured(db, execution, timings, "聊天融合与支持度") as attrs:
+        accepted = select_candidates(valid, selected_policy)
+        attrs.update(
+            profile_id=profile_id,
+            policy_hash=digest(selected_policy),
+            candidate_count=len(valid),
+            accepted_count=len(accepted),
+            invalidated_count=invalidated,
+            coverage=coverage,
+        )
     coverage.update(
         invalidated_candidates=invalidated,
         complete=coverage["eligible"] == coverage["indexed"]
@@ -315,15 +327,19 @@ def page(db, execution, arguments, cursor, settings, engine):
                     raise
                 invalidated += 1
                 continue
+            # Ranking uses the full indexed passage; model input receives a
+            # bounded, query-centered original excerpt with exact continuation.
+            begin, end = item["char_start"], item["char_end"]
+            region = source["content"][begin:end].lower()
+            hits = [
+                region.find(token)
+                for token in terms(arguments["query"])
+                if len(token) > 1 and token in region
+            ]
+            if hits:
+                begin += max(0, min(hits) - 60)
             matches.append(
-                _evidence(
-                    conn,
-                    execution.auth,
-                    str(cursor),
-                    source,
-                    item["char_start"],
-                    item["char_end"] - item["char_start"],
-                )
+                _evidence(conn, execution.auth, str(cursor), source, begin, min(240, end - begin))
             )
         next_cursor = None
         if offset < len(accepted):

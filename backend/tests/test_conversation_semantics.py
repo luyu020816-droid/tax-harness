@@ -342,3 +342,128 @@ def test_neighbor_navigation_preserves_explicit_date_window(db, admin):
         evidence = evidence_in(conn, AUTH, result["matches"][0]["citation_id"])
     assert current == evidence["source_id"]
     assert older not in {n["source_id"] for n in evidence["neighbors"]}
+
+
+def test_company_id_filters_metadata_instead_of_requiring_literal_prose(db, ranked):
+    from app.conversation_history import search
+
+    jobs, engine, config = ranked
+    session = create_session(db, AUTH, "C001")["session_id"]
+    source, _ = settled(db, session, "甲企业迁移要先备份。")
+    drain(jobs)
+    result = search(db, observer(), query="C001搬家", settings=config, engine=engine)
+    assert result["matches"][0]["source_id"] == source
+    with pytest.raises(AppError, match="无权"):
+        search(db, observer("U002"), query="乙企业搬家", settings=config, engine=engine)
+
+
+def test_legacy_cursor_stays_chronological_after_semantics_enabled(db, ranked):
+    from app.conversation_history import search
+
+    jobs, engine, config = ranked
+    session = create_session(db, AUTH, "C001")["session_id"]
+    sources = [settled(db, session, f"LEGACY-PAGE-863 迁移第{n}条。")[0] for n in range(3)]
+    first = search(db, observer(), query="LEGACY-PAGE-863", page_size=1, mode="lexical")
+    before = engine.calls
+    second = search(
+        db,
+        observer(),
+        query="LEGACY-PAGE-863",
+        page_size=1,
+        cursor=first["next_cursor"],
+        settings=config,
+        engine=engine,
+    )
+    assert second["matches"][0]["source_id"] == sources[1]
+    assert before == engine.calls and not second["semantic_search"]
+
+
+@pytest.mark.asyncio
+async def test_index_processing_renews_lease_during_slow_model(db, indexer, settings):
+    import time
+
+    indexer.settings = settings.model_copy(update={"knowledge_lease_seconds": 3})
+    session = create_session(db, AUTH, "C001")["session_id"]
+    settled(db, session, "长推理需要续租。")
+    original = indexer.engine.embed
+
+    def slow(texts):
+        time.sleep(4)
+        return original(texts)
+
+    indexer.engine.embed = slow
+    job = indexer.claim()
+    await indexer.process(job)
+    with db.transaction(readonly=True) as conn:
+        assert (
+            conn.execute(
+                "SELECT state FROM conversation_index_jobs WHERE source_id=%s", (job["source_id"],)
+            ).fetchone()["state"]
+            == "ready"
+        )
+
+
+def test_semantic_excerpt_is_query_centered_and_bounded_without_cutting_original(db, ranked):
+    from app.conversation_history import read_page, search
+
+    jobs, engine, config = ranked
+    session = create_session(db, AUTH, "C001")["session_id"]
+    raw = "迁移背景" * 80 + "最后一步：保留离线回退副本。" + "普通背景" * 250
+    source, _ = settled(db, session, raw)
+    drain(jobs)
+    result = search(db, observer(), query="最后一步", settings=config, engine=engine)
+    item = next(m for m in result["matches"] if m["source_id"] == source)
+    assert len(item["content"]) <= 240 and "离线回退副本" in item["content"]
+    assert item["content"] == raw[item["locator"]["char_start"] : item["locator"]["char_end"]]
+    assert (
+        read_page(db, observer(), source_id=source, char_start=item["next_char_start"])["excerpt"]
+        == raw[item["next_char_start"] : item["next_char_start"] + 1200]
+    )
+
+
+def test_reference_input_contains_only_currently_callable_tools(db, settings, execution_factory):
+    from test_compaction import model_settings
+
+    from app.context import assemble
+
+    execution = execution_factory("查历史并引用，不修改。")
+    before, _, _ = assemble(db, model_settings(settings), execution, [])
+    execution.reference_context = True
+    after, _, _ = assemble(db, model_settings(settings), execution, [])
+    available = {tool["function"]["name"]: tool["function"] for tool in after["tools"]}
+    assert not {"prepare_invoice_write", "update_invoice", "change_task"} & available.keys()
+    assert {
+        "get_invoice_operation",
+        "read_conversation",
+        "search_conversations",
+    } <= available.keys()
+    assert available["manage_preference"]["parameters"]["properties"]["action"]["enum"] == ["list"]
+    assert len(str(after["tools"])) < len(str(before["tools"]))
+
+
+def test_retrieval_diagnostics_follow_run_content_visibility(db, admin, execution_factory):
+    from test_insights import context as record_test_context
+
+    from app import insights
+    from app.telemetry import phase
+
+    execution = execution_factory("原文诊断权限。")
+    record_test_context(db, execution)
+    with phase(db, execution, "diagnostic-test", "retrieval", "聊天融合与支持度") as span:
+        span["attributes"].update(
+            profile_id="program-profile",
+            candidate_count=3,
+            coverage={"eligible": 2, "indexed": 2, "pending": 0},
+        )
+    detail = insights.detail(db, AUTH, execution.turn_id)
+    node = next(s for s in detail["runs"][0]["spans"] if s["kind"] == "retrieval")
+    assert node["attributes"]["retrieval"]["candidate_count"] == 3
+    admin.execute("DELETE FROM user_company_grants WHERE user_id='U001' AND company_id='C001'")
+    try:
+        withdrawn = insights.detail(db, AUTH, execution.turn_id)
+    except AppError as error:
+        assert error.code in ("ACCESS_DENIED", "RESOURCE_NOT_FOUND")
+    else:
+        assert all(
+            "retrieval" not in s["attributes"] for run in withdrawn["runs"] for s in run["spans"]
+        )

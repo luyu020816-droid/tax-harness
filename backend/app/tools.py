@@ -11,7 +11,7 @@ from app.execution import Execution, guard
 from app.identity import assert_access
 from app.request_evidence import bind_scope, require_period, validate_scope
 from app.sources import add_source, assess, read_source
-from app.tool_schemas import TOOLS
+from app.tool_schemas import REFERENCE_MUTATIONS, TOOLS
 from app.turns import mentioned_companies
 from app.values import digest, jsonb, safe_json, uid
 
@@ -263,7 +263,7 @@ class ToolExecutor:
             with db.transaction() as conn:
                 guard(conn, execution, shared=True)
                 return bind_scope(conn, execution, args["company_id"], args["period"])
-        if name in ("prepare_invoice_write", "update_invoice", "change_task") or (
+        if name in REFERENCE_MUTATIONS or (
             name == "manage_preference" and args.get("action") != "list"
         ):
             with db.transaction(readonly=True) as conn:

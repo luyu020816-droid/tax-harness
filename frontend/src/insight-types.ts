@@ -67,6 +67,17 @@ export interface InsightSpan {
     model_mode?: string | null;
     price_snapshot?: { as_of: string; currency: string; source: string } | null;
     price_captured?: boolean;
+    retrieval?: {
+      profile_id?: string | null;
+      policy_hash?: string | null;
+      candidate_count?: number | null;
+      accepted_count?: number | null;
+      invalidated_count?: number | null;
+      text_count?: number | null;
+      local_tokens?: number | null;
+      token_measurement?: string | null;
+      coverage?: { eligible?: number; indexed?: number; pending?: number };
+    } | null;
     usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
     input_composition?: { kind: string; parts: Record<string, number>; note: string };
   };

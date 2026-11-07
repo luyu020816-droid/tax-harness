@@ -50,7 +50,10 @@ def snapshot(settings, mode):
         "output_reserve": settings.output_reserve,
         "context_policy": {
             "policy": "conversation-log-v1",
-            "history_search": "independent_lexical",
+            "history_search": "independent_hybrid"
+            if settings.conversation_semantic_mode == "on"
+            else "independent_lexical",
+            "conversation_semantic_mode": settings.conversation_semantic_mode,
             **{
                 k: getattr(settings, k)
                 for k in (

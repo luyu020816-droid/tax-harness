@@ -133,6 +133,43 @@ function SpanNode({
             {span.started_at && ` · ${dateTime(span.started_at)}`}
           </p>
           {span.attributes.model && <p className="small">模型：{span.attributes.model}</p>}
+          {canRead && span.attributes.retrieval && (
+            <details className="insight-evidence">
+              <summary>聊天检索诊断</summary>
+              {span.attributes.retrieval.profile_id && (
+                <p className="small" title={span.attributes.retrieval.profile_id}>
+                  索引版本：{span.attributes.retrieval.profile_id.slice(0, 12)}…
+                </p>
+              )}
+              {span.attributes.retrieval.policy_hash && (
+                <p className="small" title={span.attributes.retrieval.policy_hash}>
+                  策略版本：{span.attributes.retrieval.policy_hash.slice(0, 12)}…
+                </p>
+              )}
+              <div className="insight-inline-metrics">
+                {span.attributes.retrieval.candidate_count != null && (
+                  <span>
+                    候选 <b>{span.attributes.retrieval.candidate_count}</b>
+                  </span>
+                )}
+                {span.attributes.retrieval.accepted_count != null && (
+                  <span>
+                    通过支持度 <b>{span.attributes.retrieval.accepted_count}</b>
+                  </span>
+                )}
+                {span.attributes.retrieval.coverage && (
+                  <span>
+                    已索引 {span.attributes.retrieval.coverage.indexed ?? '未知'} /{' '}
+                    {span.attributes.retrieval.coverage.eligible ?? '未知'}
+                  </span>
+                )}
+              </div>
+              <p className="muted small">
+                本地推理 · Token {span.attributes.retrieval.local_tokens ?? '未测量'} ·
+                不计入远端模型API费用
+              </p>
+            </details>
+          )}
           {span.kind === 'model' && (
             <p className="muted small">
               计价：
@@ -200,7 +237,7 @@ type Evidence = {
   redacted?: boolean;
   reason?: string;
   current_rules?: { rule_version_id: string; status: string; content_revision: number }[];
-  performed_delivery?: {kind:string;company_id:string;period:string;status:string}[];
+  performed_delivery?: { kind: string; company_id: string; period: string; status: string }[];
   contexts?: {
     context_id: string;
     summary_id?: string | null;
@@ -237,7 +274,14 @@ function EvidencePanel({ value }: { value: Record<string, unknown> }) {
       </p>
       <h4>已执行事项的交付</h4>
       <p className="muted small">只核对实际执行记录，用户全部子需求是否被识别仍未核验。</p>
-      {e.performed_delivery?.map((d,i)=><div className="insight-proof" key={i}><strong>{d.company_id} · {d.period} · {d.kind==='monthly_summary' ? '月度查询' : '用途检查'}</strong><span>{d.status==='delivered' ? '已交付结果' : '已执行，尚未交付'}</span></div>)}
+      {e.performed_delivery?.map((d, i) => (
+        <div className="insight-proof" key={i}>
+          <strong>
+            {d.company_id} · {d.period} · {d.kind === 'monthly_summary' ? '月度查询' : '用途检查'}
+          </strong>
+          <span>{d.status === 'delivered' ? '已交付结果' : '已执行，尚未交付'}</span>
+        </div>
+      ))}
       <h4>请求级保存与核验</h4>
       <p className="muted small">
         以下为关联账本，不据此断言当前执行提交了保存；请结合提交时间及实际工具节点核对。

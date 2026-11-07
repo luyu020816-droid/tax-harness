@@ -274,7 +274,7 @@ def summary(db, auth, f):
         )
 
 
-def span_page(conn, run_id, offset=0):
+def span_page(conn, run_id, offset=0, *, material_allowed=False):
     if not 0 <= offset <= 100000:
         raise AppError("INVALID_ARGUMENT", "无效节点偏移。", 422)
     rows = conn.execute(
@@ -285,7 +285,13 @@ def span_page(conn, run_id, offset=0):
           jsonb_build_object('model',s.attributes->'model','usage',s.attributes->'usage',
             'input_composition',s.attributes->'input_composition','attempt_kind',s.attributes->'attempt_kind',
             'operation_count',s.attributes->'operation_count','model_mode',s.attributes->'model_mode',
-            'price_snapshot',s.attributes->'price_snapshot','price_captured',s.attributes ? 'price_snapshot') AS attributes
+            'price_snapshot',s.attributes->'price_snapshot','price_captured',s.attributes ? 'price_snapshot',
+            'retrieval',CASE WHEN s.kind='retrieval' THEN jsonb_build_object(
+                'profile_id',s.attributes->'profile_id','policy_hash',s.attributes->'policy_hash',
+                'candidate_count',s.attributes->'candidate_count','accepted_count',s.attributes->'accepted_count',
+                'invalidated_count',s.attributes->'invalidated_count','coverage',s.attributes->'coverage',
+                'text_count',s.attributes->'text_count','local_tokens',s.attributes->'local_tokens',
+                'token_measurement',s.attributes->'token_measurement') ELSE NULL END) AS attributes
         FROM trace_spans s JOIN runs r USING(run_id) WHERE s.run_id=%s
         UNION ALL
         SELECT a.context_id,NULL::uuid,'model','历史模型调用',a.status,a.started_at,NULL::timestamptz,
@@ -304,6 +310,9 @@ def span_page(conn, run_id, offset=0):
     ) SELECT * FROM nodes ORDER BY started_at NULLS LAST,span_id NULLS LAST LIMIT 101 OFFSET %s""",
         (run_id, run_id, run_id, offset),
     ).fetchall()
+    if not material_allowed:
+        for row in rows:
+            row["attributes"].pop("retrieval", None)
     return {
         "spans": rows[:100],
         "has_more": len(rows) > 100,
@@ -317,7 +326,9 @@ def read_spans(db, auth, run_id, offset=0):
         if not row:
             raise AppError("RESOURCE_NOT_FOUND", "运行记录不存在。", 404)
         assert_turn(conn, auth, str(row["turn_id"]))
-        return safe_json(span_page(conn, run_id, offset))
+        return safe_json(
+            span_page(conn, run_id, offset, material_allowed=content_allowed(conn, auth, run_id))
+        )
 
 
 def detail(db, auth, turn_id):
@@ -334,7 +345,7 @@ def detail(db, auth, turn_id):
         for run in runs:
             rid = str(run["run_id"])
             run["content_available"] = content_allowed(conn, auth, rid)
-            page = span_page(conn, rid)
+            page = span_page(conn, rid, material_allowed=run["content_available"])
             run["spans"] = page["spans"]
             run["has_more_spans"] = page["has_more"]
             run["next_span_offset"] = page["next_offset"]

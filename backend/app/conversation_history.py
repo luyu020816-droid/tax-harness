@@ -1,5 +1,7 @@
 """Independent lexical/date history search and exact, currently-authorized reads."""
 
+import re
+
 from app.conversation_log import read
 from app.errors import AppError
 from app.history_retrieval import date_bound
@@ -48,6 +50,7 @@ def _view(source, citation, excerpt, start, end):
             "excerpt": excerpt,
             "excerpt_hash": digest(excerpt),
             "locator": {"char_start": start, "char_end": end},
+            "source_length": len(source["content"]),
             "next_char_start": end if end < len(source["content"]) else None,
             "historical_only": True,
         }
@@ -98,19 +101,44 @@ def scope_in(conn, execution, arguments, before, through):
             params[field] = (
                 date_bound(arguments[field]) if field.startswith("date_") else arguments[field]
             )
+    companies = mentioned_companies(conn, arguments.get("query", ""))
+    # IDs are metadata, not a requirement that C001 literally occur in prose.
+    companies = list(
+        dict.fromkeys(
+            [
+                *companies,
+                *[
+                    r["company_id"]
+                    for r in conn.execute(
+                        "SELECT company_id FROM companies WHERE company_id=ANY(%s::text[])",
+                        (
+                            re.findall(
+                                r"(?<![A-Za-z0-9])C\d{3,12}(?![A-Za-z0-9])",
+                                arguments.get("query", ""),
+                                re.I,
+                            ),
+                        ),
+                    ).fetchall()
+                ],
+            ]
+        )
+    )
     if getattr(execution, "source_id", None):
         current = conn.execute(
             "SELECT content FROM sources WHERE source_id=%s AND user_id=%s",
             (execution.source_id, execution.auth.user_id),
         ).fetchone()
-        companies = mentioned_companies(conn, current["content"]) if current else []
-        for company in companies:
-            assert_access(conn, execution.auth, company)
-        if companies:
-            conditions.append(
-                "NOT EXISTS(SELECT 1 FROM source_scopes z WHERE z.source_id=x.source_id AND NOT(z.company_id=ANY(%(companies)s::text[])))"
-            )
-            params["companies"] = companies
+        trusted = mentioned_companies(conn, current["content"]) if current else []
+        if trusted and companies and not set(companies).issubset(trusted):
+            raise AppError("SCOPE_MISMATCH", "历史搜索企业与本轮明确范围不一致。", 409)
+        companies = trusted or companies
+    for company in companies:
+        assert_access(conn, execution.auth, company)
+    if companies:
+        conditions.append(
+            "NOT EXISTS(SELECT 1 FROM source_scopes z WHERE z.source_id=x.source_id AND NOT(z.company_id=ANY(%(companies)s::text[])))"
+        )
+        params["companies"] = companies
     return conditions, params
 
 
@@ -278,6 +306,7 @@ def search(
             return conversation_retrieval.page(
                 db, execution, {**args, "mode": mode}, cursor, settings, engine
             )
+        return _lexical_search(db, execution, **args, cursor=cursor)
     shadow_id, degraded = None, None
     if query.strip() and mode != "lexical" and semantic_mode != "off":
         try:

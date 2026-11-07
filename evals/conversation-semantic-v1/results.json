@@ -1,0 +1,163 @@
+{
+  "status": "implemented_off_pending_human_review",
+  "retrieval": {
+    "backend_fingerprint": "b67633b6a4e75f05a3d4024f5853a72e2e2e3bcfa30f1191950d49fed6367f0e",
+    "profile": "9dc30bbd3f14bbb450d050c5737171148e29f586f3bf67c56e6ea0ae1bba4123",
+    "development_hash": "1ef57032d069d8f29d9a00267bb396b18006bf32857c382042dabb9e39c0db61",
+    "review_hash": "ad4d493c86f22946a160e61274f485d21937adea15633f14e23febcecff70d52",
+    "review_label_status": "agent_authored_pending_independent_human_confirmation",
+    "summary": {
+      "lexical": {
+        "date": {
+          "count": 20,
+          "correct": 20,
+          "recall_at_5": 1.0,
+          "mrr": 1.0,
+          "false_positives": 0
+        },
+        "paraphrase": {
+          "count": 20,
+          "correct": 0,
+          "recall_at_5": 0.0,
+          "mrr": 0.0,
+          "false_positives": 0
+        },
+        "no_answer": {
+          "count": 10,
+          "correct": 10,
+          "recall_at_5": null,
+          "mrr": null,
+          "false_positives": 0
+        },
+        "multiple_candidates": {
+          "count": 10,
+          "correct": 10,
+          "recall_at_5": 1.0,
+          "mrr": 1.0,
+          "false_positives": 0
+        }
+      },
+      "semantic": {
+        "date": {
+          "count": 20,
+          "correct": 20,
+          "recall_at_5": 1.0,
+          "mrr": 1.0,
+          "false_positives": 0
+        },
+        "paraphrase": {
+          "count": 20,
+          "correct": 19,
+          "recall_at_5": 0.95,
+          "mrr": 0.925,
+          "false_positives": 0
+        },
+        "no_answer": {
+          "count": 10,
+          "correct": 10,
+          "recall_at_5": null,
+          "mrr": null,
+          "false_positives": 0
+        },
+        "multiple_candidates": {
+          "count": 10,
+          "correct": 10,
+          "recall_at_5": 1.0,
+          "mrr": 1.0,
+          "false_positives": 0
+        }
+      },
+      "auto": {
+        "date": {
+          "count": 20,
+          "correct": 20,
+          "recall_at_5": 1.0,
+          "mrr": 1.0,
+          "false_positives": 0
+        },
+        "paraphrase": {
+          "count": 20,
+          "correct": 19,
+          "recall_at_5": 0.95,
+          "mrr": 0.925,
+          "false_positives": 0
+        },
+        "no_answer": {
+          "count": 10,
+          "correct": 10,
+          "recall_at_5": null,
+          "mrr": null,
+          "false_positives": 0
+        },
+        "multiple_candidates": {
+          "count": 10,
+          "correct": 10,
+          "recall_at_5": 1.0,
+          "mrr": 1.0,
+          "false_positives": 0
+        }
+      }
+    },
+    "cache_counts": {
+      "real_embedding_texts": 201,
+      "cached_embedding_texts": 239,
+      "real_rerank_pairs": 1388,
+      "cached_rerank_pairs": 1012
+    },
+    "timing_scope": "Exact-input real-inference cache; not production latency or human acceptance."
+  },
+  "runtime": {
+    "backend_fingerprint": "844c2028111fd03ba89eaecda518f91249263bea01ccd1bc5e9c1d00f7563837",
+    "model": "deepseek-v4-flash",
+    "human_review": "pending",
+    "local_inference_cache_counts": {
+      "real_embedding_texts": 149,
+      "cached_embedding_texts": 631,
+      "real_rerank_pairs": 382,
+      "cached_rerank_pairs": 299
+    },
+    "timing_scope": "Exact-input real-inference cache; no production latency claim.",
+    "passed": 32,
+    "total": 36,
+    "first_attempt_passed": 11,
+    "unexpected_writes": 0,
+    "safety_passed": 20,
+    "safety_total": 20,
+    "failures": [
+      {
+        "case": "choice",
+        "repetition": 1,
+        "status": "completed",
+        "error": null
+      },
+      {
+        "case": "two_months",
+        "repetition": 2,
+        "status": "completed",
+        "error": null
+      },
+      {
+        "case": "pending",
+        "repetition": 2,
+        "status": "completed",
+        "error": null
+      },
+      {
+        "case": "choice",
+        "repetition": 3,
+        "status": "completed",
+        "error": null
+      }
+    ]
+  },
+  "regression": {
+    "backend_passed": 353,
+    "browser_passed": 3,
+    "frontend_build": "passed"
+  },
+  "migration": {
+    "schema": 15,
+    "restored_tables": 60,
+    "original_fields_unchanged": true
+  }
+}

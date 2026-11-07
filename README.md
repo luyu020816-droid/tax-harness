@@ -8,7 +8,7 @@
 
 ## 当前状态
 
-聊天语义召回的下一批开发边界已形成[独立索引SPEC](docs/superpowers/specs/2026-11-04-conversation-semantic-index-spec.md)，包含异步索引、混合搜索、权限失效、引用与验收；当前仅完成设计，尚未启用。
+独立聊天语义索引已实现。新增异步构建、混合检索、原文跳转和运行诊断。真实 Agent 复验仍有失败，人工验收待完成，演示默认使用日期和词法搜索。见[实施与复现记录](docs/CONVERSATION_SEMANTIC_IMPLEMENTATION.md)。
 
 2026-11-04会话专项已补真实重复、54次三策略和20项权限/失效检查。当前策略开发集18/18；直接词法检索的同义改写0/10仍是明确缺口，60题标签尚待人工确认。见[专项结果与限制](docs/CONVERSATION_ACCEPTANCE_20261104.md)和[人工复核表](docs/CONVERSATION_HUMAN_REVIEW_60.md)。
 

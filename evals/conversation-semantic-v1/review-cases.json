@@ -1,0 +1,939 @@
+{
+  "version": "conversation-semantic-review-v1",
+  "label_status": "agent_authored_pending_independent_human_confirmation",
+  "scope": "Frozen review draft, disjoint from development fixtures. Never used to calibrate thresholds; not a human-labeled holdout claim.",
+  "fixtures": [
+    {
+      "id": "HD01",
+      "text": "当日交接登记HD01：仅核对档案，尚未授权外发。",
+      "when": "2026-08-01T04:00:00+08:00"
+    },
+    {
+      "id": "HD02",
+      "text": "当日交接登记HD02：仅核对档案，尚未授权外发。",
+      "when": "2026-08-02T04:00:00+08:00"
+    },
+    {
+      "id": "HD03",
+      "text": "当日交接登记HD03：仅核对档案，尚未授权外发。",
+      "when": "2026-08-03T04:00:00+08:00"
+    },
+    {
+      "id": "HD04",
+      "text": "当日交接登记HD04：仅核对档案，尚未授权外发。",
+      "when": "2026-08-04T04:00:00+08:00"
+    },
+    {
+      "id": "HD05",
+      "text": "当日交接登记HD05：仅核对档案，尚未授权外发。",
+      "when": "2026-08-05T04:00:00+08:00"
+    },
+    {
+      "id": "HD06",
+      "text": "当日交接登记HD06：仅核对档案，尚未授权外发。",
+      "when": "2026-08-06T04:00:00+08:00"
+    },
+    {
+      "id": "HD07",
+      "text": "当日交接登记HD07：仅核对档案，尚未授权外发。",
+      "when": "2026-08-07T04:00:00+08:00"
+    },
+    {
+      "id": "HD08",
+      "text": "当日交接登记HD08：仅核对档案，尚未授权外发。",
+      "when": "2026-08-08T04:00:00+08:00"
+    },
+    {
+      "id": "HD09",
+      "text": "当日交接登记HD09：仅核对档案，尚未授权外发。",
+      "when": "2026-08-09T04:00:00+08:00"
+    },
+    {
+      "id": "HD10",
+      "text": "当日交接登记HD10：仅核对档案，尚未授权外发。",
+      "when": "2026-08-10T04:00:00+08:00"
+    },
+    {
+      "id": "HD11",
+      "text": "当日交接登记HD11：仅核对档案，尚未授权外发。",
+      "when": "2026-08-11T04:00:00+08:00"
+    },
+    {
+      "id": "HD12",
+      "text": "当日交接登记HD12：仅核对档案，尚未授权外发。",
+      "when": "2026-08-12T04:00:00+08:00"
+    },
+    {
+      "id": "HD13",
+      "text": "当日交接登记HD13：仅核对档案，尚未授权外发。",
+      "when": "2026-08-13T04:00:00+08:00"
+    },
+    {
+      "id": "HD14",
+      "text": "当日交接登记HD14：仅核对档案，尚未授权外发。",
+      "when": "2026-08-14T04:00:00+08:00"
+    },
+    {
+      "id": "HD15",
+      "text": "当日交接登记HD15：仅核对档案，尚未授权外发。",
+      "when": "2026-08-15T04:00:00+08:00"
+    },
+    {
+      "id": "HD16",
+      "text": "当日交接登记HD16：仅核对档案，尚未授权外发。",
+      "when": "2026-08-16T04:00:00+08:00"
+    },
+    {
+      "id": "HD17",
+      "text": "当日交接登记HD17：仅核对档案，尚未授权外发。",
+      "when": "2026-08-17T04:00:00+08:00"
+    },
+    {
+      "id": "HD18",
+      "text": "当日交接登记HD18：仅核对档案，尚未授权外发。",
+      "when": "2026-08-18T04:00:00+08:00"
+    },
+    {
+      "id": "HD19",
+      "text": "当日交接登记HD19：仅核对档案，尚未授权外发。",
+      "when": "2026-08-19T04:00:00+08:00"
+    },
+    {
+      "id": "HD20",
+      "text": "当日交接登记HD20：仅核对档案，尚未授权外发。",
+      "when": "2026-08-20T04:00:00+08:00"
+    },
+    {
+      "id": "HP01",
+      "text": "财务数据库迁移之前要创建完整备份，并保留回退副本。"
+    },
+    {
+      "id": "HP02",
+      "text": "合同归档时必须核验签章，缺少附件不能移交。"
+    },
+    {
+      "id": "HP03",
+      "text": "旧票据清单仅代表当时记录，当前数量必须重新查询。"
+    },
+    {
+      "id": "HP04",
+      "text": "电子账本未经负责人批准不得对外发送。"
+    },
+    {
+      "id": "HP05",
+      "text": "系统故障后恢复数据，应先进入维护状态。"
+    },
+    {
+      "id": "HP06",
+      "text": "助手提出的处理建议尚未得到用户确认。"
+    },
+    {
+      "id": "HP07",
+      "text": "操作请求超时之后必须先核对原始回执，不能重复写入。"
+    },
+    {
+      "id": "HP08",
+      "text": "纸质凭证只存放在东侧柜，不能放到走廊。"
+    },
+    {
+      "id": "HP09",
+      "text": "扫描合同复核要检查缺页和图像清晰度。"
+    },
+    {
+      "id": "HP10",
+      "text": "导出文件需要核对SHA256校验码和记录条数。"
+    },
+    {
+      "id": "HP11",
+      "text": "季度资料只允许指定成员读取，不向所有同事开放。"
+    },
+    {
+      "id": "HP12",
+      "text": "本次讨论只涉及草案，未授权执行任何发票修改。"
+    },
+    {
+      "id": "HP13",
+      "text": "撤销企业访问授权后，历史引用应立即停止展示。"
+    },
+    {
+      "id": "HP14",
+      "text": "新上传制度先作为问答资料，业务执行需经受控发布。"
+    },
+    {
+      "id": "HP15",
+      "text": "档案交接的预约尚待对方确认，不能宣称已经办完。"
+    },
+    {
+      "id": "HP16",
+      "text": "原始消息持续追加保存，索引损坏后可重新构建。"
+    },
+    {
+      "id": "HP17",
+      "text": "本轮要求详细说明，仅用于这次答复，不保存为长期偏好。"
+    },
+    {
+      "id": "HP18",
+      "text": "银行收入和支出分别统计，不能推断每张发票的付款状态。"
+    },
+    {
+      "id": "HP19",
+      "text": "删除会话不会撤销已经核验保存的发票数据。"
+    },
+    {
+      "id": "HP20",
+      "text": "两种交接方案均未确认，不得替用户选择。"
+    },
+    {
+      "id": "HM01A",
+      "text": "同名交接方案HM01：在东门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM01B",
+      "text": "同名交接方案HM01：在西门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM02A",
+      "text": "同名交接方案HM02：在东门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM02B",
+      "text": "同名交接方案HM02：在西门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM03A",
+      "text": "同名交接方案HM03：在东门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM03B",
+      "text": "同名交接方案HM03：在西门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM04A",
+      "text": "同名交接方案HM04：在东门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM04B",
+      "text": "同名交接方案HM04：在西门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM05A",
+      "text": "同名交接方案HM05：在东门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM05B",
+      "text": "同名交接方案HM05：在西门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM06A",
+      "text": "同名交接方案HM06：在东门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM06B",
+      "text": "同名交接方案HM06：在西门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM07A",
+      "text": "同名交接方案HM07：在东门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM07B",
+      "text": "同名交接方案HM07：在西门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM08A",
+      "text": "同名交接方案HM08：在东门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM08B",
+      "text": "同名交接方案HM08：在西门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM09A",
+      "text": "同名交接方案HM09：在东门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM09B",
+      "text": "同名交接方案HM09：在西门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM10A",
+      "text": "同名交接方案HM10：在东门交接，选择尚未确认。"
+    },
+    {
+      "id": "HM10B",
+      "text": "同名交接方案HM10：在西门交接，选择尚未确认。"
+    }
+  ],
+  "cases": [
+    {
+      "id": "HD01",
+      "category": "date",
+      "question": "引用2026-08-01当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-01T00:00:00+08:00",
+        "date_to": "2026-08-02T00:00:00+08:00"
+      },
+      "gold": [
+        "HD01"
+      ]
+    },
+    {
+      "id": "HD02",
+      "category": "date",
+      "question": "引用2026-08-02当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-02T00:00:00+08:00",
+        "date_to": "2026-08-03T00:00:00+08:00"
+      },
+      "gold": [
+        "HD02"
+      ]
+    },
+    {
+      "id": "HD03",
+      "category": "date",
+      "question": "引用2026-08-03当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-03T00:00:00+08:00",
+        "date_to": "2026-08-04T00:00:00+08:00"
+      },
+      "gold": [
+        "HD03"
+      ]
+    },
+    {
+      "id": "HD04",
+      "category": "date",
+      "question": "引用2026-08-04当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-04T00:00:00+08:00",
+        "date_to": "2026-08-05T00:00:00+08:00"
+      },
+      "gold": [
+        "HD04"
+      ]
+    },
+    {
+      "id": "HD05",
+      "category": "date",
+      "question": "引用2026-08-05当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-05T00:00:00+08:00",
+        "date_to": "2026-08-06T00:00:00+08:00"
+      },
+      "gold": [
+        "HD05"
+      ]
+    },
+    {
+      "id": "HD06",
+      "category": "date",
+      "question": "引用2026-08-06当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-06T00:00:00+08:00",
+        "date_to": "2026-08-07T00:00:00+08:00"
+      },
+      "gold": [
+        "HD06"
+      ]
+    },
+    {
+      "id": "HD07",
+      "category": "date",
+      "question": "引用2026-08-07当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-07T00:00:00+08:00",
+        "date_to": "2026-08-08T00:00:00+08:00"
+      },
+      "gold": [
+        "HD07"
+      ]
+    },
+    {
+      "id": "HD08",
+      "category": "date",
+      "question": "引用2026-08-08当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-08T00:00:00+08:00",
+        "date_to": "2026-08-09T00:00:00+08:00"
+      },
+      "gold": [
+        "HD08"
+      ]
+    },
+    {
+      "id": "HD09",
+      "category": "date",
+      "question": "引用2026-08-09当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-09T00:00:00+08:00",
+        "date_to": "2026-08-10T00:00:00+08:00"
+      },
+      "gold": [
+        "HD09"
+      ]
+    },
+    {
+      "id": "HD10",
+      "category": "date",
+      "question": "引用2026-08-10当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-10T00:00:00+08:00",
+        "date_to": "2026-08-11T00:00:00+08:00"
+      },
+      "gold": [
+        "HD10"
+      ]
+    },
+    {
+      "id": "HD11",
+      "category": "date",
+      "question": "引用2026-08-11当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-11T00:00:00+08:00",
+        "date_to": "2026-08-12T00:00:00+08:00"
+      },
+      "gold": [
+        "HD11"
+      ]
+    },
+    {
+      "id": "HD12",
+      "category": "date",
+      "question": "引用2026-08-12当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-12T00:00:00+08:00",
+        "date_to": "2026-08-13T00:00:00+08:00"
+      },
+      "gold": [
+        "HD12"
+      ]
+    },
+    {
+      "id": "HD13",
+      "category": "date",
+      "question": "引用2026-08-13当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-13T00:00:00+08:00",
+        "date_to": "2026-08-14T00:00:00+08:00"
+      },
+      "gold": [
+        "HD13"
+      ]
+    },
+    {
+      "id": "HD14",
+      "category": "date",
+      "question": "引用2026-08-14当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-14T00:00:00+08:00",
+        "date_to": "2026-08-15T00:00:00+08:00"
+      },
+      "gold": [
+        "HD14"
+      ]
+    },
+    {
+      "id": "HD15",
+      "category": "date",
+      "question": "引用2026-08-15当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-15T00:00:00+08:00",
+        "date_to": "2026-08-16T00:00:00+08:00"
+      },
+      "gold": [
+        "HD15"
+      ]
+    },
+    {
+      "id": "HD16",
+      "category": "date",
+      "question": "引用2026-08-16当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-16T00:00:00+08:00",
+        "date_to": "2026-08-17T00:00:00+08:00"
+      },
+      "gold": [
+        "HD16"
+      ]
+    },
+    {
+      "id": "HD17",
+      "category": "date",
+      "question": "引用2026-08-17当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-17T00:00:00+08:00",
+        "date_to": "2026-08-18T00:00:00+08:00"
+      },
+      "gold": [
+        "HD17"
+      ]
+    },
+    {
+      "id": "HD18",
+      "category": "date",
+      "question": "引用2026-08-18当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-18T00:00:00+08:00",
+        "date_to": "2026-08-19T00:00:00+08:00"
+      },
+      "gold": [
+        "HD18"
+      ]
+    },
+    {
+      "id": "HD19",
+      "category": "date",
+      "question": "引用2026-08-19当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-19T00:00:00+08:00",
+        "date_to": "2026-08-20T00:00:00+08:00"
+      },
+      "gold": [
+        "HD19"
+      ]
+    },
+    {
+      "id": "HD20",
+      "category": "date",
+      "question": "引用2026-08-20当天的交接登记。",
+      "arguments": {
+        "date_from": "2026-08-20T00:00:00+08:00",
+        "date_to": "2026-08-21T00:00:00+08:00"
+      },
+      "gold": [
+        "HD20"
+      ]
+    },
+    {
+      "id": "HP01",
+      "category": "paraphrase",
+      "question": "财务资料库搬家前先干什么",
+      "arguments": {
+        "query": "财务资料库搬家前先干什么"
+      },
+      "gold": [
+        "HP01"
+      ]
+    },
+    {
+      "id": "HP02",
+      "category": "paraphrase",
+      "question": "合同没盖好章又少了附页能交出去吗",
+      "arguments": {
+        "query": "合同没盖好章又少了附页能交出去吗"
+      },
+      "gold": [
+        "HP02"
+      ]
+    },
+    {
+      "id": "HP03",
+      "category": "paraphrase",
+      "question": "上回那张票表能当成现在的数据吗",
+      "arguments": {
+        "query": "上回那张票表能当成现在的数据吗"
+      },
+      "gold": [
+        "HP03"
+      ]
+    },
+    {
+      "id": "HP04",
+      "category": "paraphrase",
+      "question": "账本能直接用邮件发到外面吗",
+      "arguments": {
+        "query": "账本能直接用邮件发到外面吗"
+      },
+      "gold": [
+        "HP04"
+      ]
+    },
+    {
+      "id": "HP05",
+      "category": "paraphrase",
+      "question": "出故障想还原资料库之前先做什么",
+      "arguments": {
+        "query": "出故障想还原资料库之前先做什么"
+      },
+      "gold": [
+        "HP05"
+      ]
+    },
+    {
+      "id": "HP06",
+      "category": "paraphrase",
+      "question": "机器提的那个办法已经有人批准了吗",
+      "arguments": {
+        "query": "机器提的那个办法已经有人批准了吗"
+      },
+      "gold": [
+        "HP06"
+      ]
+    },
+    {
+      "id": "HP07",
+      "category": "paraphrase",
+      "question": "提交卡住以后能不能再点一次保存",
+      "arguments": {
+        "query": "提交卡住以后能不能再点一次保存"
+      },
+      "gold": [
+        "HP07"
+      ]
+    },
+    {
+      "id": "HP08",
+      "category": "paraphrase",
+      "question": "那批纸面的票应该搁在哪儿",
+      "arguments": {
+        "query": "那批纸面的票应该搁在哪儿"
+      },
+      "gold": [
+        "HP08"
+      ]
+    },
+    {
+      "id": "HP09",
+      "category": "paraphrase",
+      "question": "拍成图片的合同验收时该看什么",
+      "arguments": {
+        "query": "拍成图片的合同验收时该看什么"
+      },
+      "gold": [
+        "HP09"
+      ]
+    },
+    {
+      "id": "HP10",
+      "category": "paraphrase",
+      "question": "下载出去的数据怎么确认没坏没少",
+      "arguments": {
+        "query": "下载出去的数据怎么确认没坏没少"
+      },
+      "gold": [
+        "HP10"
+      ]
+    },
+    {
+      "id": "HP11",
+      "category": "paraphrase",
+      "question": "季度文件是每个人都能看吗",
+      "arguments": {
+        "query": "季度文件是每个人都能看吗"
+      },
+      "gold": [
+        "HP11"
+      ]
+    },
+    {
+      "id": "HP12",
+      "category": "paraphrase",
+      "question": "咱们刚才聊的东西已经许可动票了吗",
+      "arguments": {
+        "query": "咱们刚才聊的东西已经许可动票了吗"
+      },
+      "gold": [
+        "HP12"
+      ]
+    },
+    {
+      "id": "HP13",
+      "category": "paraphrase",
+      "question": "账号被收回权限后以前的出处还能打开吗",
+      "arguments": {
+        "query": "账号被收回权限后以前的出处还能打开吗"
+      },
+      "gold": [
+        "HP13"
+      ]
+    },
+    {
+      "id": "HP14",
+      "category": "paraphrase",
+      "question": "刚传上来的规定现在就能改变处理方式吗",
+      "arguments": {
+        "query": "刚传上来的规定现在就能改变处理方式吗"
+      },
+      "gold": [
+        "HP14"
+      ]
+    },
+    {
+      "id": "HP15",
+      "category": "paraphrase",
+      "question": "接收资料这事是不是已经敲定结束了",
+      "arguments": {
+        "query": "接收资料这事是不是已经敲定结束了"
+      },
+      "gold": [
+        "HP15"
+      ]
+    },
+    {
+      "id": "HP16",
+      "category": "paraphrase",
+      "question": "查找目录坏了以前说过的话是不是也没了",
+      "arguments": {
+        "query": "查找目录坏了以前说过的话是不是也没了"
+      },
+      "gold": [
+        "HP16"
+      ]
+    },
+    {
+      "id": "HP17",
+      "category": "paraphrase",
+      "question": "这回让我讲细一点就算以后都要啰嗦了吗",
+      "arguments": {
+        "query": "这回让我讲细一点就算以后都要啰嗦了吗"
+      },
+      "gold": [
+        "HP17"
+      ]
+    },
+    {
+      "id": "HP18",
+      "category": "paraphrase",
+      "question": "账户进出的钱能证明具体哪张票结清了吗",
+      "arguments": {
+        "query": "账户进出的钱能证明具体哪张票结清了吗"
+      },
+      "gold": [
+        "HP18"
+      ]
+    },
+    {
+      "id": "HP19",
+      "category": "paraphrase",
+      "question": "把聊天扔掉以后之前落库的票据也会消失吗",
+      "arguments": {
+        "query": "把聊天扔掉以后之前落库的票据也会消失吗"
+      },
+      "gold": [
+        "HP19"
+      ]
+    },
+    {
+      "id": "HP20",
+      "category": "paraphrase",
+      "question": "交资料有两个办法可以直接帮我拍板吗",
+      "arguments": {
+        "query": "交资料有两个办法可以直接帮我拍板吗"
+      },
+      "gold": [
+        "HP20"
+      ]
+    },
+    {
+      "id": "HN01",
+      "category": "no_answer",
+      "question": "董事长私人邮箱地址",
+      "arguments": {
+        "query": "董事长私人邮箱地址"
+      },
+      "gold": []
+    },
+    {
+      "id": "HN02",
+      "category": "no_answer",
+      "question": "明年的机票预订编号",
+      "arguments": {
+        "query": "明年的机票预订编号"
+      },
+      "gold": []
+    },
+    {
+      "id": "HN03",
+      "category": "no_answer",
+      "question": "老板的保险柜开锁码",
+      "arguments": {
+        "query": "老板的保险柜开锁码"
+      },
+      "gold": []
+    },
+    {
+      "id": "HN04",
+      "category": "no_answer",
+      "question": "去年公司中标的报价",
+      "arguments": {
+        "query": "去年公司中标的报价"
+      },
+      "gold": []
+    },
+    {
+      "id": "HN05",
+      "category": "no_answer",
+      "question": "个人身份证号码",
+      "arguments": {
+        "query": "个人身份证号码"
+      },
+      "gold": []
+    },
+    {
+      "id": "HN06",
+      "category": "no_answer",
+      "question": "生产平台管理员密码",
+      "arguments": {
+        "query": "生产平台管理员密码"
+      },
+      "gold": []
+    },
+    {
+      "id": "HN07",
+      "category": "no_answer",
+      "question": "客户住院的诊断结论",
+      "arguments": {
+        "query": "客户住院的诊断结论"
+      },
+      "gold": []
+    },
+    {
+      "id": "HN08",
+      "category": "no_answer",
+      "question": "已经购买的酒店房间号",
+      "arguments": {
+        "query": "已经购买的酒店房间号"
+      },
+      "gold": []
+    },
+    {
+      "id": "HN09",
+      "category": "no_answer",
+      "question": "用户配偶的联系电话",
+      "arguments": {
+        "query": "用户配偶的联系电话"
+      },
+      "gold": []
+    },
+    {
+      "id": "HN10",
+      "category": "no_answer",
+      "question": "未出现过的公章保管人姓名",
+      "arguments": {
+        "query": "未出现过的公章保管人姓名"
+      },
+      "gold": []
+    },
+    {
+      "id": "HM01",
+      "category": "multiple_candidates",
+      "question": "同名交接方案HM01有哪些候选",
+      "arguments": {
+        "query": "同名交接方案HM01"
+      },
+      "gold": [
+        "HM01A",
+        "HM01B"
+      ]
+    },
+    {
+      "id": "HM02",
+      "category": "multiple_candidates",
+      "question": "同名交接方案HM02有哪些候选",
+      "arguments": {
+        "query": "同名交接方案HM02"
+      },
+      "gold": [
+        "HM02A",
+        "HM02B"
+      ]
+    },
+    {
+      "id": "HM03",
+      "category": "multiple_candidates",
+      "question": "同名交接方案HM03有哪些候选",
+      "arguments": {
+        "query": "同名交接方案HM03"
+      },
+      "gold": [
+        "HM03A",
+        "HM03B"
+      ]
+    },
+    {
+      "id": "HM04",
+      "category": "multiple_candidates",
+      "question": "同名交接方案HM04有哪些候选",
+      "arguments": {
+        "query": "同名交接方案HM04"
+      },
+      "gold": [
+        "HM04A",
+        "HM04B"
+      ]
+    },
+    {
+      "id": "HM05",
+      "category": "multiple_candidates",
+      "question": "同名交接方案HM05有哪些候选",
+      "arguments": {
+        "query": "同名交接方案HM05"
+      },
+      "gold": [
+        "HM05A",
+        "HM05B"
+      ]
+    },
+    {
+      "id": "HM06",
+      "category": "multiple_candidates",
+      "question": "同名交接方案HM06有哪些候选",
+      "arguments": {
+        "query": "同名交接方案HM06"
+      },
+      "gold": [
+        "HM06A",
+        "HM06B"
+      ]
+    },
+    {
+      "id": "HM07",
+      "category": "multiple_candidates",
+      "question": "同名交接方案HM07有哪些候选",
+      "arguments": {
+        "query": "同名交接方案HM07"
+      },
+      "gold": [
+        "HM07A",
+        "HM07B"
+      ]
+    },
+    {
+      "id": "HM08",
+      "category": "multiple_candidates",
+      "question": "同名交接方案HM08有哪些候选",
+      "arguments": {
+        "query": "同名交接方案HM08"
+      },
+      "gold": [
+        "HM08A",
+        "HM08B"
+      ]
+    },
+    {
+      "id": "HM09",
+      "category": "multiple_candidates",
+      "question": "同名交接方案HM09有哪些候选",
+      "arguments": {
+        "query": "同名交接方案HM09"
+      },
+      "gold": [
+        "HM09A",
+        "HM09B"
+      ]
+    },
+    {
+      "id": "HM10",
+      "category": "multiple_candidates",
+      "question": "同名交接方案HM10有哪些候选",
+      "arguments": {
+        "query": "同名交接方案HM10"
+      },
+      "gold": [
+        "HM10A",
+        "HM10B"
+      ]
+    }
+  ]
+}
