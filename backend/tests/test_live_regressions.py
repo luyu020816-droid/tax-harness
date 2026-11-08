@@ -55,7 +55,11 @@ async def test_closed_multi_tool_batch_survives_own_memory_update(db, settings):
     await runtime.run(runtime.claim())
     result = read_turn(db, AUTH, turn["turn_id"])
     assert result["status"] == "completed", result
-    assert {c["kind"] for c in result["final_cards"]} == {"monthly_summary", "purpose_check"}
+    assert {c["kind"] for c in result["final_cards"]} == {
+        "monthly_summary",
+        "purpose_check",
+        "request_progress",
+    }
     assert len(model.requests) == 2
 
 

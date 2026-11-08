@@ -96,7 +96,13 @@ def _valid_group(conn, execution, group, epoch):
 
 
 def assemble(
-    db, settings: Settings, execution: Execution, tool_groups: list[dict], *, budget=None
+    db,
+    settings: Settings,
+    execution: Execution,
+    tool_groups: list[dict],
+    *,
+    budget=None,
+    proactive_compact=True,
 ) -> tuple:
     core = load_core(db, execution.auth, execution.session_id)
     if core["memory_epoch"] != execution.expected_epoch:
@@ -188,7 +194,19 @@ def assemble(
     }
     if history_navigation:
         state["history_navigation"] = history_navigation
-    mandatory = [{"role": "system", "content": SYSTEM_PROMPT + "\n正式状态：\n" + canonical(state)}]
+    checklist_prompt = (
+        "\nrequest_frame.request_items仅核对明确事项，不是写授权或完整需求识别。"
+        "逐项交付对应企业月份的真实结果；漏项须补办，范围缺失才追问，失败如实反馈。"
+        "不重复已提交修改，清单外的用户要求也须办理。"
+        if frame.get("request_items")
+        else ""
+    )
+    mandatory = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT + checklist_prompt + "\n正式状态：\n" + canonical(state),
+        }
+    ]
     if summary:
         mandatory.append(
             {
@@ -200,6 +218,16 @@ def assemble(
     current = {"role": "user", "content": source["content"]}
     extras = [message for group in groups for message in group["messages"]]
     definitions = tool_definitions()
+    items = frame.get("request_items", [])
+    if (
+        items
+        and not frame["available_scope_refs"]
+        and all(i["company_id"] is None or i["period"] is None for i in items)
+    ):
+        # Explicit monthly requests with no evidenced scope need clarification,
+        # not a guessed company/month or a fabricated scope_ref.
+        monthly_tools = {"query_month", "get_rules", "check_purposes", "resolve_scope"}
+        definitions = [d for d in definitions if d["function"]["name"] not in monthly_tools]
     if dataset_profile != "extended":
         definitions = [
             d
@@ -235,7 +263,10 @@ def assemble(
             not dropped
             and selected
             and settings.context_auto_compact
-            and (count > limit or (count > int(limit * 0.85) and history_cost > 4096))
+            and (
+                count > limit
+                or (proactive_compact and count > int(limit * 0.85) and history_cost > 4096)
+            )
         ):
             # Do not spend a summary call on a tiny history when fixed tool schemas
             # dominate the budget. Never discard mandatory state or tool receipts.

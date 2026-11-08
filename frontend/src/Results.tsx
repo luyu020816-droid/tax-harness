@@ -35,6 +35,31 @@ export function Results({
   onConfirm: (plan: InvoiceWritePlan) => Promise<void>;
   onPlanChanged: () => Promise<void>;
 }) {
+  if (card.kind === 'request_progress')
+    return (
+      <section className="result-card request-progress" aria-label="本轮事项核对">
+        <h3>本轮事项核对</h3>
+        <p className="muted">仅核对已识别的明确业务事项；保存状态以操作回执为准。</p>
+        <ul>
+          {card.items.map((item, index) => (
+            <li key={`${item.tool}/${item.company_id}/${item.period}/${index}`}>
+              <strong>
+                {item.status === 'verified'
+                  ? '已核对'
+                  : item.status === 'blocked'
+                    ? '无法执行'
+                    : '待补充'}
+              </strong>
+              <span>
+                {item.company_id ? companyName(item.company_id) : '企业待确认'} ·{' '}
+                {item.period ?? '月份待确认'} · {item.label}
+              </span>
+              {item.reason && <p>{item.reason}</p>}
+            </li>
+          ))}
+        </ul>
+      </section>
+    );
   if (card.kind === 'knowledge_draft')
     return (
       <KnowledgeDraftCard

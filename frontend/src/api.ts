@@ -1,3 +1,16 @@
+import type { Turn } from './types';
+
+export function turnStatusName(turn: Turn): string {
+  if (turn.status === 'failed' && turn.final_cards.some((card) => card.kind === 'operation'))
+    return '保存回执已交付，后续未完成';
+  const items = turn.final_cards.flatMap((card) =>
+    card.kind === 'request_progress' ? card.items : []
+  );
+  if (turn.status === 'completed' && items.some((item) => item.status !== 'verified'))
+    return items.some((item) => item.status === 'blocked') ? '已反馈，含未完成事项' : '等待补充';
+  return statusName(turn.status);
+}
+
 export class ApiError extends Error {
   constructor(
     public code: string,
@@ -9,16 +22,26 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch('/api/v1' + path, {
-    credentials: 'same-origin',
-    ...options,
-    headers: {
-      ...(options.body && !(options.body instanceof FormData)
-        ? { 'Content-Type': 'application/json' }
-        : {}),
-      ...options.headers,
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch('/api/v1' + path, {
+      credentials: 'same-origin',
+      ...options,
+      headers: {
+        ...(options.body && !(options.body instanceof FormData)
+          ? { 'Content-Type': 'application/json' }
+          : {}),
+        ...options.headers,
+      },
+    });
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    throw new ApiError(
+      'NETWORK_UNAVAILABLE',
+      '连接中断，暂时无法确认服务端处理状态。请检查网络和本地服务；涉及保存时，先核对办理记录中的实际回执。',
+      0
+    );
+  }
   if (response.status === 204) return undefined as T;
   let data;
   try {
@@ -27,15 +50,28 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     throw new ApiError(
       'SERVICE_UNAVAILABLE',
       response.ok
-        ? '服务返回了无法读取的结果，请重试。'
-        : `无法连接业务服务（HTTP ${response.status}），请检查本地后端是否已启动。`,
+        ? '服务返回了无法读取的结果，处理状态暂时无法确认；涉及保存时，请先核对实际回执。'
+        : `业务服务返回异常（HTTP ${response.status}），暂时无法确认处理状态；涉及保存时，请先核对实际回执。`,
       response.status
     );
   }
-  if (!response.ok)
+  if (!response.ok) {
+    if (!data || typeof data !== 'object' || Array.isArray(data))
+      throw new ApiError(
+        'SERVICE_UNAVAILABLE',
+        '业务服务返回了无效响应，暂时无法确认处理状态；请先核对实际回执。',
+        response.status
+      );
     throw new ApiError(
-      data.code ?? 'REQUEST_FAILED',
-      data.message ?? '请求未能完成，请检查当前状态后重试。',
+      typeof data.code === 'string' ? data.code : 'REQUEST_FAILED',
+      typeof data.message === 'string' ? data.message : '请求未能完成，请检查当前状态后重试。',
+      response.status
+    );
+  }
+  if (data === null || typeof data !== 'object')
+    throw new ApiError(
+      'INVALID_RESPONSE',
+      '服务返回了无效结果，暂时无法确认处理状态；请先核对实际回执。',
       response.status
     );
   return data as T;

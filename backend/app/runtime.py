@@ -282,11 +282,18 @@ class Runtime:
             )
         return groups
 
-    def _assemble_measured(self, execution, groups, *, budget=None):
+    def _assemble_measured(self, execution, groups, *, budget=None, proactive_compact=True):
         from app.telemetry import phase
 
         with phase(self.db, execution, "context:" + uid(), "context", "上下文组装"):
-            return context.assemble(self.db, self.settings, execution, groups, budget=budget)
+            return context.assemble(
+                self.db,
+                self.settings,
+                execution,
+                groups,
+                budget=budget,
+                proactive_compact=proactive_compact,
+            )
 
     async def _loop(self, execution):
         from types import SimpleNamespace
@@ -317,10 +324,15 @@ class Runtime:
         reply_retries = 0
         budget = None
         compaction_attempted = 0
+        proactive_compact = True
         for step in range(1, self.settings.max_model_steps + 1):
             try:
                 payload, manifest, _dropped = await asyncio.to_thread(
-                    self._assemble_measured, execution, groups, budget=budget
+                    self._assemble_measured,
+                    execution,
+                    groups,
+                    budget=budget,
+                    proactive_compact=proactive_compact,
                 )
             except AppError as exc:
                 if exc.code == "STALE_CONTEXT" and not stale_retry:
@@ -334,7 +346,11 @@ class Runtime:
                     groups = []
                     stale_retry = True
                     payload, manifest, _dropped = await asyncio.to_thread(
-                        self._assemble_measured, execution, groups, budget=budget
+                        self._assemble_measured,
+                        execution,
+                        groups,
+                        budget=budget,
+                        proactive_compact=proactive_compact,
                     )
                 else:
                     raise
@@ -358,8 +374,32 @@ class Runtime:
                             "compaction_failed",
                             exc.as_dict(),
                         )
-                    raise
-                continue
+                    if exc.code != "SUMMARY_INVALID":
+                        raise
+                    # Retry assembly with the full original history. This is
+                    # safe only if no history must be dropped at the HARD limit.
+                    proactive_compact = False
+                    payload, manifest, still_dropped = await asyncio.to_thread(
+                        self._assemble_measured,
+                        execution,
+                        groups,
+                        budget=budget,
+                        proactive_compact=False,
+                    )
+                    if still_dropped:
+                        raise exc
+                    with self.db.transaction() as conn:
+                        emit(
+                            conn,
+                            execution.turn_id,
+                            execution.run_id,
+                            "compaction_deferred",
+                            {"reason": exc.code, "original_history_retained": True},
+                        )
+                    execution.observed_heads = manifest["heads"]
+                    _dropped = []
+                else:
+                    continue
             if _dropped:
                 if model_calls >= self.settings.max_model_steps:
                     raise AppError(
@@ -730,6 +770,52 @@ class Runtime:
                 {"message": reply.message, "status": status, "cards": cards},
             )
 
+    def _failure_receipts_in(self, conn, execution, error):
+        """Deliver only durable receipts, not a guessed completion of the request."""
+        if error.code not in ("SUMMARY_INVALID", "CONTEXT_CAPACITY_EXCEEDED"):
+            return None, [], None
+        from app.answer_renderer import operation_receipt
+
+        try:
+            guard(conn, execution)
+            rows = conn.execute(
+                "SELECT * FROM operations WHERE user_id=%s AND source_id=%s "
+                "AND state IN ('committed','no_change') ORDER BY committed_at,operation_id",
+                (execution.auth.user_id, execution.source_id),
+            ).fetchall()
+            receipts = [operation_receipt(conn, execution.auth, row) for row in rows]
+        except AppError:
+            # Cancellation, revoked access and stale memory never gain a new
+            # delivery path just because an earlier operation was committed.
+            return None, [], None
+        if not receipts:
+            return None, [], None
+        message = (
+            "本轮后续处理未能完成：" + error.message + "\n\n"
+            "以下是已提交操作的实际回执；这不表示本轮其他事项已完成。请先核对回执，不要重复保存。\n\n"
+            + "\n\n".join(text for text, _ in receipts)
+        )
+        cards = [card for _, card in receipts]
+        source = add_source(
+            conn,
+            execution.auth,
+            message,
+            role="assistant",
+            kind="assistant_final",
+            turn_id=execution.turn_id,
+            source_seq=execution.source_seq,
+            companies=sorted({c["company_id"] for c in cards}),
+        )
+        assess(conn, str(source["source_id"]), "no_change")
+        emit(
+            conn,
+            execution.turn_id,
+            execution.run_id,
+            "failure_receipts_delivered",
+            {"operation_ids": [c["operation_id"] for c in cards], "request_completed": False},
+        )
+        return message, cards, source["source_id"]
+
     def fail(self, execution, error: AppError):
         with self.db.transaction() as conn:
             conn.execute(
@@ -750,13 +836,21 @@ class Runtime:
             status = (
                 "interrupted" if error.code in ("STALE_CONTEXT", "SOURCE_INVALIDATED") else "failed"
             )
+            message, cards, source_id = self._failure_receipts_in(conn, execution, error)
             conn.execute(
-                "UPDATE turns SET status=%s,error=%s,updated_at=now() WHERE turn_id=%s",
-                (status, jsonb(error.as_dict()), execution.turn_id),
+                "UPDATE turns SET status=%s,error=%s,final_message=%s,final_cards=%s,final_response_ref=%s,updated_at=now() WHERE turn_id=%s",
+                (
+                    status,
+                    jsonb(error.as_dict()),
+                    message,
+                    jsonb(cards),
+                    source_id,
+                    execution.turn_id,
+                ),
             )
             conn.execute(
-                "UPDATE runs SET state=%s,finished_at=now() WHERE run_id=%s",
-                (status, execution.run_id),
+                "UPDATE runs SET state=%s,finished_at=now(),final_source_id=%s WHERE run_id=%s",
+                (status, source_id, execution.run_id),
             )
             conn.execute(
                 "UPDATE work_items SET state='failed',last_error=%s,lease_until=NULL WHERE work_id=%s",

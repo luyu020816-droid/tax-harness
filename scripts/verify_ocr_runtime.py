@@ -69,7 +69,8 @@ async def run(args):
         assert {b["locator"]["page"] for b in blocks} == {1, 2, 3}
         assert any(b["locator"].get("extraction") == "native" for b in blocks)
         assert any(
-            b["locator"].get("extraction") == "ocr" and b["locator"].get("bbox") for b in blocks
+            b["locator"].get("extraction") == "ocr" and b["locator"].get("bbox")
+            for b in blocks
         )
         page_two = [b for b in blocks if b["locator"]["page"] == 2]
         columns = [
@@ -94,7 +95,10 @@ async def run(args):
         for expected in ["不得外发内部资料", "脱敏汇总表", "不允许公开客户手机号"]:
             assert expected in text, expected
         for evidence in answer["evidence"]:
-            assert retrieval.read(auth, evidence["citation_id"])["excerpt"] == evidence["excerpt"]
+            assert (
+                retrieval.read(auth, evidence["citation_id"])["excerpt"]
+                == evidence["excerpt"]
+            )
         records.append({"id": "mixed_ocr_retrieval_citation", "pass": True})
         print("mixed OCR / table / columns / cross-page / citation PASS", flush=True)
         for name, code in [
@@ -102,10 +106,13 @@ async def run(args):
             ("missing.pdf", "DOCUMENT_PARSE_FAILED"),
             ("corrupt.pdf", "DOCUMENT_PARSE_FAILED"),
         ]:
-            row, status = await upload(name, good["document_id"])
+            _row, status = await upload(name, good["document_id"])
             assert status["state"] in ("failed", "blocked"), status
             assert status["error"]["code"] == code, status
-            assert store.get(auth, good["document_id"])["active_version_id"] == good["version_id"]
+            assert (
+                store.get(auth, good["document_id"])["active_version_id"]
+                == good["version_id"]
+            )
             records.append({"id": name, "pass": True, "code": code})
             print(name, "failed safely; old version preserved", flush=True)
         try:
@@ -141,7 +148,11 @@ async def run(args):
                 ),
                 "profile_id": engine.profile()[0],
                 "ocr_model_lock_sha256": digest(
-                    json.loads((ROOT / "backend/ocr-models.lock.json").read_text(encoding="utf-8"))
+                    json.loads(
+                        (ROOT / "backend/ocr-models.lock.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
                 ),
                 "human_ocr_fidelity_review": "pending",
                 "scope": "Implementer-created public synthetic PDF fixtures; not arbitrary scan accuracy.",

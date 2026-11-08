@@ -103,6 +103,19 @@ export interface InvoiceWritePlan extends CardBase {
 }
 export type ResultCard =
   | {
+      kind: 'request_progress';
+      company_id: string;
+      items: {
+        tool: string;
+        label: string;
+        company_id: string | null;
+        period: string | null;
+        source_quote: string;
+        status: 'verified' | 'blocked' | 'waiting_user';
+        reason?: string;
+      }[];
+    }
+  | {
       kind: 'knowledge_draft';
       company_id: string;
       title: string;

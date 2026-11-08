@@ -21,7 +21,16 @@ import {
   Square,
   X,
 } from 'lucide-react';
-import { api, ApiError, body, companyName, requestId, statusName, taskName } from './api';
+import {
+  api,
+  ApiError,
+  body,
+  companyName,
+  requestId,
+  statusName,
+  taskName,
+  turnStatusName,
+} from './api';
 import { BrandMark } from './BrandMark';
 import { Details } from './Details';
 import { MemoryView } from './MemoryView';
@@ -57,6 +66,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
   const [attachment, setAttachment] = useState<UploadedInvoice | null>(null);
   const [knowledgeAttachment, setKnowledgeAttachment] = useState<KnowledgeAttachment | null>(null);
   const [error, setError] = useState('');
+  const [requestUncertain, setRequestUncertain] = useState(false);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [navigationOpen, setNavigationOpen] = useState(false);
   const [currentTask, setCurrentTask] = useState<Task | null>(null);
@@ -411,6 +421,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
             knowledge: knowledgeAttachment?.file_id ?? null,
           };
     retryRequest.current = identity;
+    setRequestUncertain(false);
     setSending(true);
     setError('');
     stickToBottom.current = true;
@@ -425,6 +436,12 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
         }),
       });
       if (stamp !== generation.current) return;
+      if (!accepted || typeof accepted.turn_id !== 'string' || typeof accepted.status !== 'string')
+        throw new ApiError(
+          'INVALID_RESPONSE',
+          '受理响应缺少办理编号或状态，暂时无法确认处理状态；请核对原请求。',
+          200
+        );
       setTurns((previous) =>
         previous.some((t) => t.turn_id === accepted.turn_id)
           ? previous.map((t) => (t.turn_id === accepted.turn_id ? accepted : t))
@@ -439,8 +456,18 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
         setActiveId(accepted.turn_id);
       } else changed();
     } catch (err) {
-      if (stamp === generation.current)
-        setError((err as Error).message || '连接中断，输入已保留；重试将使用同一请求编号。');
+      if (stamp === generation.current) {
+        const uncertain =
+          err instanceof ApiError &&
+          ['NETWORK_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'INVALID_RESPONSE'].includes(err.code);
+        setRequestUncertain(uncertain);
+        setError(
+          ((err as Error).message || '暂时无法确认请求状态。') +
+            (uncertain
+              ? ' 输入已保留；保持内容不变再次发送，将核对原请求，不会创建另一条办理请求。'
+              : ' 输入已保留，请根据提示处理后再办理。')
+        );
+      }
     } finally {
       if (stamp === generation.current) setSending(false);
     }
@@ -730,6 +757,21 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
           <div className="global-note" role="alert">
             <CircleAlert size={16} />
             <span>{error}</span>
+            {requestUncertain &&
+              page === 'chat' &&
+              retryRequest.current &&
+              retryRequest.current.session === session?.session_id &&
+              retryRequest.current.text === draft &&
+              retryRequest.current.upload === (attachment?.upload_id ?? null) &&
+              retryRequest.current.knowledge === (knowledgeAttachment?.file_id ?? null) && (
+                <button
+                  className="recovery-button"
+                  disabled={sending || !!activeId}
+                  onClick={() => void send()}
+                >
+                  核对原请求
+                </button>
+              )}
             <button className="icon-button" aria-label="关闭提示" onClick={() => setError('')}>
               <X size={15} />
             </button>
@@ -884,7 +926,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                                 ))}
                                 <div className="answer-footer">
                                   <CheckCheck size={13} />
-                                  <span>{statusName(turn.status)}</span>
+                                  <span>{turnStatusName(turn)}</span>
                                   {turn.runs?.at(-1) && (
                                     <button
                                       onClick={() =>

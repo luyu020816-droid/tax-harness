@@ -145,7 +145,10 @@ async def test_unshown_query_is_rejected_then_retries_the_actual_displayed_view(
     second = accept_turn(db, AUTH, str(session["session_id"]), uid(), text)
     await runtime.run(runtime.claim())
     result = read_turn(db, AUTH, second["turn_id"])
-    assert result["status"] == "completed", result
+    assert result["status"] == "completed", {
+        "error": result["error"],
+        "message": result["final_message"],
+    }
     with db.transaction(readonly=True) as conn:
         row = conn.execute(
             "SELECT purpose,revision FROM invoices WHERE company_id='C001' AND invoice_id='F002'"

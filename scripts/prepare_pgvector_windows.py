@@ -34,26 +34,35 @@ def prepare(source, target):
         shutil.copytree(source, target)
     with zipfile.ZipFile(io.BytesIO(archive.content)) as package_zip:
         payload = next(
-            n for n in package_zip.namelist() if n.startswith("pkg-") and n.endswith(".tar.zst")
+            n
+            for n in package_zip.namelist()
+            if n.startswith("pkg-") and n.endswith(".tar.zst")
         )
-        with zstandard.ZstdDecompressor().stream_reader(
-            io.BytesIO(package_zip.read(payload))
-        ) as stream:
-            with tarfile.open(fileobj=stream, mode="r|") as tar:
-                for member in tar:
-                    name = member.name.replace("\\", "/")
-                    if not member.isfile() or not name.startswith("Library/"):
-                        continue
-                    relative = Path(name.removeprefix("Library/"))
-                    if ".." in relative.parts or relative.is_absolute():
-                        raise ValueError("Invalid package path")
-                    destination = target / relative
-                    if destination.suffix not in (".dll", ".sql", ".control"):
-                        continue
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    with destination.open("wb") as output:
-                        shutil.copyfileobj(tar.extractfile(member), output)
-    manifest = {"package": package, "sha256": actual, "source": str(source), "target": str(target)}
+        with (
+            zstandard.ZstdDecompressor().stream_reader(
+                io.BytesIO(package_zip.read(payload))
+            ) as stream,
+            tarfile.open(fileobj=stream, mode="r|") as tar,
+        ):
+            for member in tar:
+                name = member.name.replace("\\", "/")
+                if not member.isfile() or not name.startswith("Library/"):
+                    continue
+                relative = Path(name.removeprefix("Library/"))
+                if ".." in relative.parts or relative.is_absolute():
+                    raise ValueError("Invalid package path")
+                destination = target / relative
+                if destination.suffix not in (".dll", ".sql", ".control"):
+                    continue
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with destination.open("wb") as output:
+                    shutil.copyfileobj(tar.extractfile(member), output)
+    manifest = {
+        "package": package,
+        "sha256": actual,
+        "source": str(source),
+        "target": str(target),
+    }
     (target / "pgvector-installation.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8"
     )

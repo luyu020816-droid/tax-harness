@@ -42,7 +42,9 @@ AUTH = Identity("U001")
 
 
 def write(path, value):
-    path.write_text(json.dumps(safe_json(value), ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(
+        json.dumps(safe_json(value), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 class CachedInference:
@@ -84,13 +86,16 @@ class CachedInference:
                 for p, score in zip(passages, self.scores[key], strict=True)
             )
             return self.scores[key]
-        missing = list(dict.fromkeys(p for p in passages if digest([query, p]) not in self.scores))
+        missing = list(
+            dict.fromkeys(p for p in passages if digest([query, p]) not in self.scores)
+        )
         self.counts["cached_rerank_pairs"] += len(passages) - len(missing)
         if missing:
             self.counts["real_rerank_pairs"] += len(missing)
             values = self.engine.rerank(query, missing)
             self.scores.update(
-                (digest([query, p]), score) for p, score in zip(missing, values, strict=True)
+                (digest([query, p]), score)
+                for p, score in zip(missing, values, strict=True)
             )
         return [self.scores[digest([query, p])] for p in passages]
 
@@ -134,12 +139,16 @@ def database(settings, split, output):
     with psycopg.connect(
         make_conninfo(settings.admin_database_url, dbname="postgres"), autocommit=True
     ) as conn:
-        if not conn.execute("SELECT 1 FROM pg_database WHERE datname=%s", (name,)).fetchone():
+        if not conn.execute(
+            "SELECT 1 FROM pg_database WHERE datname=%s", (name,)
+        ).fetchone():
             conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
     settings = settings.model_copy(
         update={
             "database_url": make_conninfo(settings.database_url, dbname=name),
-            "admin_database_url": make_conninfo(settings.admin_database_url, dbname=name),
+            "admin_database_url": make_conninfo(
+                settings.admin_database_url, dbname=name
+            ),
         }
     )
     initialize(settings)
@@ -159,7 +168,10 @@ def ingest(store, jobs, items, dataset_sha, settings):
             title=item["title"],
             request_id="retrieval-v1:" + dataset_sha + ":" + item["id"],
         )
-        if store.get(AUTH, created["document_id"])["active_version_id"] != created["version_id"]:
+        if (
+            store.get(AUTH, created["document_id"])["active_version_id"]
+            != created["version_id"]
+        ):
             claimed = jobs.claim()
             assert claimed and str(claimed["job_id"]) == created["job_id"]
             jobs.run(claimed)
@@ -185,7 +197,9 @@ def known_chunks(db, documents):
             "SELECT c.chunk_id,c.version_id,c.content,c.locator,c.block_ordinals,d.title,v.document_id FROM knowledge_chunks c JOIN knowledge_versions v USING(version_id) JOIN knowledge_documents d USING(document_id) WHERE v.version_id=d.active_version_id AND d.status='active'"
         ).fetchall()
         block_units = {
-            (str(r["version_id"]), r["ordinal"]): re.findall(r"\[([DH]\d{2}[ABCD])\]", r["content"])
+            (str(r["version_id"]), r["ordinal"]): re.findall(
+                r"\[([DH]\d{2}[ABCD])\]", r["content"]
+            )
             for r in conn.execute(
                 "SELECT version_id,ordinal,content FROM knowledge_blocks"
             ).fetchall()
@@ -196,11 +210,11 @@ def known_chunks(db, documents):
             **safe_json(r),
             "fixture_document": by_document.get(str(r["document_id"])),
             "units": list(
-                set(
+                {
                     u
                     for ordinal in r["block_ordinals"]
                     for u in block_units.get((str(r["version_id"]), ordinal), [])
-                )
+                }
             ),
         }
         for r in rows
@@ -223,7 +237,9 @@ def measure(question, bundle, trace, chunks, items):
     units = {key: r["units"] for key, r in chunks.items()}
     grades = (
         {
-            key: max([items[document]["grades"].get(u, 0) for u in r["units"]], default=0)
+            key: max(
+                [items[document]["grades"].get(u, 0) for u in r["units"]], default=0
+            )
             if r["fixture_document"] == document
             else 0
             for key, r in chunks.items()
@@ -263,7 +279,9 @@ def measure(question, bundle, trace, chunks, items):
     qualified = []
     for candidate in trace["candidates"]:
         c = chunks[candidate["chunk_id"]]
-        cost = math.ceil(len((c["content"] + c["title"] + str(c["locator"])).encode()) / 2)
+        cost = math.ceil(
+            len((c["content"] + c["title"] + str(c["locator"])).encode()) / 2
+        )
         sha = text_sha256(c["content"])
         if sha not in seen and cost <= remaining and len(legacy_ids) < 6:
             legacy_ids.append(candidate["chunk_id"])
@@ -275,7 +293,9 @@ def measure(question, bundle, trace, chunks, items):
                 candidate,
                 {
                     "version": bundle["coverage"].get("selection_version"),
-                    "similarity_weight": bundle["coverage"].get("selection_similarity_weight", 0),
+                    "similarity_weight": bundle["coverage"].get(
+                        "selection_similarity_weight", 0
+                    ),
                     "rerank_floor": bundle["coverage"].get("selection_rerank_floor"),
                 },
             )
@@ -296,10 +316,13 @@ def measure(question, bundle, trace, chunks, items):
 
     row["legacy_topk_complete_evidence"] = complete(legacy_ids)
     row["unexpanded_filtered_complete_evidence"] = (
-        complete(qualified) if bundle["coverage"].get("selection_cutoff") is not None else None
+        complete(qualified)
+        if bundle["coverage"].get("selection_cutoff") is not None
+        else None
     )
     row["citation_checks"] = all(
-        e["excerpt_hash"] == text_sha256(e["excerpt"]) and e["locator"] for e in bundle["evidence"]
+        e["excerpt_hash"] == text_sha256(e["excerpt"]) and e["locator"]
+        for e in bundle["evidence"]
     )
     row["retained_unknown_evidence"] = (
         bool(bundle["evidence"]) if not question["answerable"] else None
@@ -330,7 +353,11 @@ def text_sha256(text):
 def summary(rows):
     positives = [r for r in rows if r["answerable"]]
     negatives = [r for r in rows if not r["answerable"]]
-    result = {"questions": len(rows), "answerable": len(positives), "unanswerable": len(negatives)}
+    result = {
+        "questions": len(rows),
+        "answerable": len(positives),
+        "unanswerable": len(negatives),
+    }
     for key in (
         "lexical_recall20",
         "dense_recall20",
@@ -367,18 +394,24 @@ def summary(rows):
 def main(args):
     args.output.mkdir(parents=True, exist_ok=False)
     code_snapshot = {
-        p.name: p.read_text(encoding="utf-8") for p in sorted((ROOT / "backend/app").glob("*.py"))
+        p.name: p.read_text(encoding="utf-8")
+        for p in sorted((ROOT / "backend/app").glob("*.py"))
     }
     evaluator_sha = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     write(args.output / "code-snapshot.json", code_snapshot)
-    suite = json.loads((args.suite_directory / f"{args.split}.json").read_text(encoding="utf-8"))
+    suite = json.loads(
+        (args.suite_directory / f"{args.split}.json").read_text(encoding="utf-8")
+    )
     suite_sha = digest(suite)
     write(args.output / "frozen-suite.json", suite)
     settings, db = database(Settings(), args.split, args.output)
     engine = CachedInference(LocalRetrieval(settings.knowledge_model_directory))
     store, jobs = Knowledge(db, settings), KnowledgeJobs(db, settings, engine)
     profile_id, manifest = engine.profile()
-    write(args.output / "model-profile.json", {"profile_id": profile_id, "manifest": manifest})
+    write(
+        args.output / "model-profile.json",
+        {"profile_id": profile_id, "manifest": manifest},
+    )
     cache_source = None
     if args.inference_cache:
         raw = args.inference_cache.read_bytes()
@@ -406,7 +439,9 @@ def main(args):
         documents = ingest(store, jobs, suite["documents"], suite_sha, settings)
         chunks = known_chunks(db, documents)
         write(args.output / "corpus-chunks.json", chunks)
-        questions = suite["questions"] + [q for q in suite["boundary_questions"] if "query" in q]
+        questions = suite["questions"] + [
+            q for q in suite["boundary_questions"] if "query" in q
+        ]
         prime = time.monotonic()
         engine.embed([q["query"] for q in questions])
         priming_ms = round((time.monotonic() - prime) * 1000)
@@ -415,7 +450,9 @@ def main(args):
         baseline_rows = []
         for question in questions:
             bundle = baseline.search(AUTH, company_id="C001", query=question["query"])
-            row = measure(question, bundle, query_trace(db, bundle["query_id"]), chunks, items)
+            row = measure(
+                question, bundle, query_trace(db, bundle["query_id"]), chunks, items
+            )
             baseline_rows.append(row)
             write(
                 args.output / (question["id"] + "-baseline.json"),
@@ -430,7 +467,11 @@ def main(args):
         if args.split == "development":
             cutoff, fit = calibrate(
                 [r["strongest_gold_seed"] for r in baseline_rows if r["answerable"]],
-                [r["strongest_candidate"] for r in baseline_rows if not r["answerable"]],
+                [
+                    r["strongest_candidate"]
+                    for r in baseline_rows
+                    if not r["answerable"]
+                ],
             )
             raw = {
                 "version": SELECTION_VERSION,
@@ -460,13 +501,16 @@ def main(args):
                                 support_score(c, signal)
                                 for c in record["trace"]["candidates"]
                                 if not q["answerable"]
-                                or set(chunks[c["chunk_id"]]["units"]) & set(q["required_units"])
+                                or set(chunks[c["chunk_id"]]["units"])
+                                & set(q["required_units"])
                             ]
                             (positive if q["answerable"] else negative).append(
                                 max(scored, default=-100.0)
                             )
                         threshold, stats = calibrate(positive, negative)
-                        trials.append({**signal, "cutoff": threshold, "calibration": stats})
+                        trials.append(
+                            {**signal, "cutoff": threshold, "calibration": stats}
+                        )
                 best = min(
                     trials,
                     key=lambda t: (
@@ -487,7 +531,9 @@ def main(args):
             bundle = selected.search(AUTH, company_id="C001", query=question["query"])
             for e in bundle["evidence"]:
                 assert selected.read(AUTH, e["citation_id"])["excerpt"] == e["excerpt"]
-            row = measure(question, bundle, query_trace(db, bundle["query_id"]), chunks, items)
+            row = measure(
+                question, bundle, query_trace(db, bundle["query_id"]), chunks, items
+            )
             final_rows.append(row)
             write(
                 args.output / (question["id"] + "-selected.json"),
@@ -500,7 +546,11 @@ def main(args):
             )
         write(
             args.output / "real-inference-cache.json",
-            {"profile_id": profile_id, "vectors": engine.vectors, "rerank_scores": engine.scores},
+            {
+                "profile_id": profile_id,
+                "vectors": engine.vectors,
+                "rerank_scores": engine.scores,
+            },
         )
         model_result = (
             run_model_checks(settings, db, selected, suite, args.output)
@@ -534,7 +584,9 @@ def main(args):
             "timing_note": "Query vectors and exact rerank pairs reuse actual profile-bound outputs; warm replay is not production request latency. Baseline may also hit imported caches; inference_counts separately records actual model work. Query priming is reported separately.",
             "gold_review": "implementer-authored synthetic unit labels; independent human semantic review pending",
             "historical_30_questions": "out_of_scope_for_this_batch",
-            "code_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT)
+            "code_commit": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=ROOT
+            )
             .decode()
             .strip(),
             "code_fingerprint": digest(code_snapshot),
@@ -563,7 +615,9 @@ if __name__ == "__main__":
     parser.add_argument("--policy", type=Path)
     parser.add_argument("--inference-cache", type=Path)
     parser.add_argument("--live-model", action="store_true")
-    parser.add_argument("--suite-directory", type=Path, default=ROOT / "evals/retrieval-v1")
+    parser.add_argument(
+        "--suite-directory", type=Path, default=ROOT / "evals/retrieval-v1"
+    )
     parser.add_argument("--joint-support", action="store_true")
     args = parser.parse_args()
     if args.split == "holdout" and not args.policy:

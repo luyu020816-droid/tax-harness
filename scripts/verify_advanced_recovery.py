@@ -35,9 +35,13 @@ class ReceiptModel:
     mode = "deterministic-fault-test-not-live-model"
 
     async def complete(self, payload):
-        outputs = [json.loads(m["content"]) for m in payload["messages"] if m["role"] == "tool"]
+        outputs = [
+            json.loads(m["content"]) for m in payload["messages"] if m["role"] == "tool"
+        ]
         receipts = [
-            o["data"] for o in outputs if o.get("ok") and o["data"].get("kind") == "operation"
+            o["data"]
+            for o in outputs
+            if o.get("ok") and o["data"].get("kind") == "operation"
         ]
         assert receipts, "The runtime must read the old result before inference"
         return {
@@ -46,7 +50,10 @@ class ReceiptModel:
                 "content": json.dumps(
                     {
                         "blocks": [
-                            {"type": "operation", "operation_id": receipts[-1]["operation_id"]}
+                            {
+                                "type": "operation",
+                                "operation_id": receipts[-1]["operation_id"],
+                            }
                         ],
                         "status": "completed",
                     }
@@ -99,7 +106,9 @@ async def main(args):
         + "\n",
         encoding="utf-8",
     )
-    runtime = Runtime(db, settings, HttpModel(settings) if args.live_model else ReceiptModel())
+    runtime = Runtime(
+        db, settings, HttpModel(settings) if args.live_model else ReceiptModel()
+    )
     records = []
     try:
         with psycopg.connect(
@@ -113,13 +122,15 @@ async def main(args):
             ]:
                 control = args.output / mode
                 control.mkdir()
-                turn = accept_turn(db, AUTH, session, uid(), f"把甲企业{invoice}用途改为{purpose}")
+                turn = accept_turn(
+                    db, AUTH, session, uid(), f"把甲企业{invoice}用途改为{purpose}"
+                )
                 before = admin.execute(
                     "SELECT purpose,revision FROM invoices WHERE company_id='C001' AND invoice_id=%s",
                     (invoice,),
                 ).fetchone()
                 with (control / "worker.log").open("wb") as logfile:
-                    child = subprocess.Popen(
+                    child = subprocess.Popen(  # noqa: ASYNC220 -- Fault harness owns the process and its commit boundary.
                         [
                             sys.executable,
                             str(ROOT / "scripts/fault_process_worker.py"),
@@ -139,7 +150,11 @@ async def main(args):
                     try:
                         marker = wait_file(
                             control
-                            / ("result.json" if mode == "read-failure" else "boundary.json"),
+                            / (
+                                "result.json"
+                                if mode == "read-failure"
+                                else "boundary.json"
+                            ),
                             child,
                         )
                         if mode == "before":
@@ -161,7 +176,9 @@ async def main(args):
                     finally:
                         if child.poll() is None:
                             stop(child)
-                meta = json.loads((control / "claimed.json").read_text(encoding="utf-8"))
+                meta = json.loads(
+                    (control / "claimed.json").read_text(encoding="utf-8")
+                )
                 admin.execute(
                     "UPDATE work_items SET lease_until=clock_timestamp()-interval '1 second' WHERE work_id=%s",
                     (meta["work_id"],),
@@ -179,10 +196,12 @@ async def main(args):
                 # Check durable result first. If COMMIT rolled back there is none.
                 prior = runtime._recovery_results(takeover)
                 assert bool(prior) == (mode != "before")
-                replay = invoice_write.commit(db, AUTH, meta["plan_id"], execution=takeover)
-                assert replay["verification_state"] == "verified" and replay["replayed"] == (
-                    mode != "before"
+                replay = invoice_write.commit(
+                    db, AUTH, meta["plan_id"], execution=takeover
                 )
+                assert replay["verification_state"] == "verified" and replay[
+                    "replayed"
+                ] == (mode != "before")
                 stale = replace(takeover, fencing_token=meta["fencing_token"])
                 try:
                     with db.transaction() as conn:
@@ -196,10 +215,13 @@ async def main(args):
                 write(control / "turn.json", result)
                 write(control / "trace.json", trace)
                 assert result["status"] == "completed", result.get("error")
-                started_tools = [e for e in trace["events"] if e["kind"] == "tool_started"]
+                started_tools = [
+                    e for e in trace["events"] if e["kind"] == "tool_started"
+                ]
                 assert started_tools[0]["payload"]["name"] == "get_invoice_operation"
                 count = admin.execute(
-                    "SELECT count(*) AS n FROM operations WHERE source_id=%s", (meta["source_id"],)
+                    "SELECT count(*) AS n FROM operations WHERE source_id=%s",
+                    (meta["source_id"],),
                 ).fetchone()["n"]
                 revision = admin.execute(
                     "SELECT revision FROM invoices WHERE company_id='C001' AND invoice_id=%s",

@@ -46,7 +46,9 @@ class MeasuredModel:
 
     async def complete(self, payload):
         if len(self.calls) >= self.limit:
-            raise AppError("RUN_LIMIT_EXCEEDED", "实验总模型预算已用尽，包含摘要准备与重试。", 422)
+            raise AppError(
+                "RUN_LIMIT_EXCEEDED", "实验总模型预算已用尽，包含摘要准备与重试。", 422
+            )
         started = time.monotonic()
         call = {"phase": self.phase, "input_hash": digest(payload), "usage": None}
         try:
@@ -58,7 +60,9 @@ class MeasuredModel:
             raise
         finally:
             call["duration_ms"] = round((time.monotonic() - started) * 1000)
-            call["cost"] = usage_cost(call["usage"], self.price, self.client.settings.model_id)
+            call["cost"] = usage_cost(
+                call["usage"], self.price, self.client.settings.model_id
+            )
             self.calls.append(call)
 
 
@@ -71,7 +75,8 @@ def historical(db, session, text):
         ).fetchone()
         assess(conn, str(source["source_id"]), "no_change")
         conn.execute(
-            "UPDATE work_items SET state='done' WHERE source_id=%s", (source["source_id"],)
+            "UPDATE work_items SET state='done' WHERE source_id=%s",
+            (source["source_id"],),
         )
         conn.execute(
             "UPDATE turns SET status='completed',final_message='已记录背景。' WHERE turn_id=%s",
@@ -92,7 +97,10 @@ def historical(db, session, text):
             {"role": "user", "content": text},
             {"role": "assistant", "content": "已记录背景。"},
         ],
-        "sources": [{"source_id": str(s["source_id"]), "revision": 1} for s in (source, assistant)],
+        "sources": [
+            {"source_id": str(s["source_id"]), "revision": 1}
+            for s in (source, assistant)
+        ],
     }
 
 
@@ -136,7 +144,9 @@ def update_fixture(db, settings, session):
     assert result["verification_state"] == "verified"
     with db.transaction() as conn:
         assess(conn, execution.source_id, "no_change")
-        conn.execute("UPDATE turns SET status='completed' WHERE turn_id=%s", (execution.turn_id,))
+        conn.execute(
+            "UPDATE turns SET status='completed' WHERE turn_id=%s", (execution.turn_id,)
+        )
         conn.execute(
             "UPDATE work_items SET state='done',lease_until=NULL WHERE work_id=%s",
             (execution.work_id,),
@@ -149,30 +159,33 @@ def check(db, case, result, operations_before):
     if result["status"] != "completed":
         failures.append("answer_not_completed")
     cards = result["final_cards"]
-    if expected := case.get("expected_card"):
-        if not any(all(card.get(k) == v for k, v in expected.items()) for card in cards):
-            failures.append("current_business_result_mismatch")
+    if (expected := case.get("expected_card")) and not any(
+        all(card.get(k) == v for k, v in expected.items()) for card in cards
+    ):
+        failures.append("current_business_result_mismatch")
     quotes = []
     with db.transaction(readonly=True) as conn:
         for card in cards:
             if card["kind"] == "history_quote":
                 source = conn.execute(
-                    "SELECT content FROM sources WHERE source_id=%s", (card["source_id"],)
+                    "SELECT content FROM sources WHERE source_id=%s",
+                    (card["source_id"],),
                 ).fetchone()
-                quotes.append(source["content"][card["quote_start"] : card["quote_end"]])
+                quotes.append(
+                    source["content"][card["quote_start"] : card["quote_end"]]
+                )
         count = conn.execute("SELECT count(*) AS n FROM operations").fetchone()["n"]
     if count != operations_before:
         failures.append("unexpected_business_write")
     for expected in case.get("expected_quotes", []):
         if expected not in "\n".join(quotes):
             failures.append("missing_quoted_fact:" + expected)
-    if version := case.get("expected_rule_version"):
-        if not any(
-            r.get("business_version") == version
-            for card in cards
-            for r in card.get("rule_refs", [])
-        ):
-            failures.append("active_rule_version_missing")
+    if (version := case.get("expected_rule_version")) and not any(
+        r.get("business_version") == version
+        for card in cards
+        for r in card.get("rule_refs", [])
+    ):
+        failures.append("active_rule_version_missing")
     return failures
 
 
@@ -197,7 +210,9 @@ async def run_case(base, case, profile, repetition, output, price):
         if case["kind"] == "cross_session":
             session = str(create_session(db, AUTH, "C001")["session_id"])
         for i in range(14):
-            historical(db, session, f"记录一般沟通背景第{i + 1}轮，本轮不修改业务资料。")
+            historical(
+                db, session, f"记录一般沟通背景第{i + 1}轮，本轮不修改业务资料。"
+            )
         if case["kind"] == "data_change":
             update_fixture(db, settings, session)
         if case["kind"] == "company_switch":
@@ -208,7 +223,9 @@ async def run_case(base, case, profile, repetition, output, price):
             ) as admin:
                 replace_rule(admin)
         with db.transaction(readonly=True) as conn:
-            before = conn.execute("SELECT count(*) AS n FROM operations").fetchone()["n"]
+            before = conn.execute("SELECT count(*) AS n FROM operations").fetchone()[
+                "n"
+            ]
         turn = accept_turn(db, AUTH, session, uid(), case["question"])
         execution = runtime.claim()
         started = time.monotonic()
@@ -217,7 +234,7 @@ async def run_case(base, case, profile, repetition, output, price):
             model.phase = "summary_preparation"
             try:
                 await compact(db, settings, model, execution, [group], 1)
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 -- Record arbitrary provider failures in the evaluation.
                 preparation_error = getattr(error, "code", type(error).__name__)
         preparation_ms = round((time.monotonic() - started) * 1000)
         model.phase = "answer"
@@ -248,7 +265,9 @@ async def run_case(base, case, profile, repetition, output, price):
                     json.loads(t["actual_result"]).get("data", {}).get("retrieval_mode")
                     for t in trace["tools"]
                     if t.get("actual_result")
-                    and json.loads(t["actual_result"]).get("data", {}).get("retrieval_mode")
+                    and json.loads(t["actual_result"])
+                    .get("data", {})
+                    .get("retrieval_mode")
                 }
             ),
         }
@@ -272,7 +291,9 @@ async def main(args):
     if not base.model_configured:
         raise SystemExit("Configure a real model first; no database created.")
     catalog = ROOT / "evals/advanced-v1/cases.json"
-    price = json.loads((ROOT / "evals/advanced-v1/price.json").read_text(encoding="utf-8"))
+    price = json.loads(
+        (ROOT / "evals/advanced-v1/price.json").read_text(encoding="utf-8")
+    )
     suite = json.loads(catalog.read_text(encoding="utf-8"))
     cases = [c for c in suite["cases"] if not args.case or c["id"] in args.case]
     profiles = {p: PROFILES[p] for p in dict.fromkeys(args.profile or PROFILES)}
@@ -280,7 +301,7 @@ async def main(args):
         raise SystemExit("Unknown case selection")
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
-    revision = subprocess.run(
+    revision = subprocess.run(  # noqa: ASYNC221 -- One-off CLI records Git metadata before starting cases.
         ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
     ).stdout.strip()
     report = {
@@ -317,7 +338,8 @@ async def main(args):
                     await run_case(base, case, profile, repetition, args.output, price)
                 )
                 report["aggregate"] = {
-                    p: aggregate([r for r in report["rows"] if r["profile"] == p]) for p in profiles
+                    p: aggregate([r for r in report["rows"] if r["profile"] == p])
+                    for p in profiles
                 }
                 write(args.output / "report.json", report)
     report["finished_at"] = datetime.now(UTC).isoformat()

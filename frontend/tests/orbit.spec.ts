@@ -110,7 +110,7 @@ test('orbit chat: draft, retry identity, polling, history, sessions, and mobile'
   await input.dispatchEvent('compositionend');
   await input.fill('查询甲企业2026年9月月度资料');
   await page.getByRole('button', { name: '发送消息' }).click();
-  await expect(page.getByRole('alert')).toContainText('无法连接业务服务');
+  await expect(page.getByRole('alert')).toContainText('业务服务返回异常');
   await expect(input).toHaveValue('查询甲企业2026年9月月度资料');
   await page.getByRole('button', { name: '发送消息' }).click();
   await expect(page.getByRole('button', { name: '停止本轮处理' })).toBeVisible();

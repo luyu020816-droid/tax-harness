@@ -42,7 +42,13 @@ def seed_history(db, session):
             )
             for role, content in [("user", text), ("assistant", answer)]:
                 source = add_source(
-                    conn, AUTH, content, role=role, turn_id=turn, source_seq=seq, companies=["C001"]
+                    conn,
+                    AUTH,
+                    content,
+                    role=role,
+                    turn_id=turn,
+                    source_seq=seq,
+                    companies=["C001"],
                 )
                 assess(conn, str(source["source_id"]), "no_change")
 
@@ -50,7 +56,8 @@ def seed_history(db, session):
 async def run(args):
     args.output.mkdir(parents=True, exist_ok=False)
     snapshot = {
-        p.name: p.read_text(encoding="utf-8") for p in sorted((ROOT / "backend/app").glob("*.py"))
+        p.name: p.read_text(encoding="utf-8")
+        for p in sorted((ROOT / "backend/app").glob("*.py"))
     }
     write(args.output / "code-snapshot.json", snapshot)
     settings, db = database(Settings(), "development", args.output)
@@ -72,7 +79,9 @@ async def run(args):
     try:
         session = create_session(db, AUTH, "C001")
         _, saved, _ = await turn(
-            session, "请把甲企业F002用途改为会议用品采购，备注改为十月核验。", "seed-save"
+            session,
+            "请把甲企业F002用途改为会议用品采购，备注改为十月核验。",
+            "seed-save",
         )
         with db.transaction(readonly=True) as conn:
             invoice = conn.execute(
@@ -80,7 +89,12 @@ async def run(args):
             ).fetchone()
         assert invoice == {"purpose": "会议用品采购", "note": "十月核验"}, saved
         pref = change_preference(
-            db, AUTH, action="remember", key="reply_style", value="简洁", request_id=uid()
+            db,
+            AUTH,
+            action="remember",
+            key="reply_style",
+            value="简洁",
+            request_id=uid(),
         )
         change_preference(
             db,
@@ -93,7 +107,12 @@ async def run(args):
             request_id=uid(),
         )
         deleted = change_preference(
-            db, AUTH, action="remember", key="export_format", value="CSV", request_id=uid()
+            db,
+            AUTH,
+            action="remember",
+            key="export_format",
+            value="CSV",
+            request_id=uid(),
         )
         change_preference(
             db,
@@ -124,18 +143,23 @@ async def run(args):
         seed_history(db, session)
         with db.transaction(readonly=True) as conn:
             before = conn.execute("SELECT count(*) n FROM operations").fetchone()["n"]
-        ex, result, trace = await turn(
+        _ex, result, trace = await turn(
             session,
             "继续甲企业2026年9月的用途检查，查F002现在的用途和备注。此次只查询，不修改任何数据。",
             "long-agent",
         )
-        summaries = [c for c in trace["contexts"] if c["manifest"].get("kind") == "compaction"]
+        summaries = [
+            c for c in trace["contexts"] if c["manifest"].get("kind") == "compaction"
+        ]
         published_ids = [
-            e["payload"]["summary_id"] for e in trace["events"] if e["kind"] == "context_compacted"
+            e["payload"]["summary_id"]
+            for e in trace["events"]
+            if e["kind"] == "context_compacted"
         ]
         with db.transaction(readonly=True) as conn:
             active = conn.execute(
-                "SELECT * FROM summaries WHERE summary_id=ANY(%s::uuid[])", (published_ids,)
+                "SELECT * FROM summaries WHERE summary_id=ANY(%s::uuid[])",
+                (published_ids,),
             ).fetchall()
             after = conn.execute("SELECT count(*) n FROM operations").fetchone()["n"]
         core = load_core(db, AUTH, str(session["session_id"]))
@@ -148,7 +172,9 @@ async def run(args):
         assert any(c["manifest"].get("summary_id") for c in trace["contexts"]), (
             "Summary never reached Agent"
         )
-        assert core["task"]["company_id"] == "C001" and core["task"]["period"] == "2026-09"
+        assert (
+            core["task"]["company_id"] == "C001" and core["task"]["period"] == "2026-09"
+        )
         values = [p["value"] for p in core["preferences"]]
         assert "详细" in values and "简洁" not in values and "CSV" not in values
         assert before == after, "Read-only query wrote invoices"
@@ -170,13 +196,20 @@ async def run(args):
         # A fresh session must use formal state, not replay old modification.
         fresh = create_session(db, AUTH, "C001")
         _, res, tr = await turn(
-            fresh, "继续甲企业2026年9月检查，先只查询未填用途，不执行保存。", "cross-session"
+            fresh,
+            "继续甲企业2026年9月检查，先只查询未填用途，不执行保存。",
+            "cross-session",
         )
         assert res["status"] in ("completed", "waiting_user"), res
         assert any(t["name"] == "check_purposes" for t in tr["tools"])
         with db.transaction(readonly=True) as conn:
-            assert conn.execute("SELECT count(*) n FROM operations").fetchone()["n"] == before
-        rows.append({"id": "cross_session", "pass": True, "human_semantic_review": "pending"})
+            assert (
+                conn.execute("SELECT count(*) n FROM operations").fetchone()["n"]
+                == before
+            )
+        rows.append(
+            {"id": "cross_session", "pass": True, "human_semantic_review": "pending"}
+        )
 
         # Start a real execution for explicit capacity and in-flight guards.
         accepted = accept_turn(
@@ -197,7 +230,12 @@ async def run(args):
             async def complete(self, payload):
                 response = await model.complete(payload)
                 change_preference(
-                    db, AUTH, action="remember", key="layout", value="列表", request_id=uid()
+                    db,
+                    AUTH,
+                    action="remember",
+                    key="layout",
+                    value="列表",
+                    request_id=uid(),
                 )
                 return response
 

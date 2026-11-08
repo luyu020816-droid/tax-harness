@@ -224,11 +224,19 @@ def validate_scope(conn, execution, scope_ref, company_id, period):
     assert_access(conn, execution.auth, company_id)
     basis = row["basis_json"]
     if basis.get("source_id"):
+        # A current user request may explicitly name several authorized
+        # companies. bind_scope already checked this company's user evidence;
+        # read_source still validates ownership and access to EVERY source
+        # scope. Its default exact-single-company filter is for isolated
+        # evidence and must not reject this multi-company request itself.
+        current_request = (
+            basis.get("kind") == "current_source" and basis["source_id"] == execution.source_id
+        )
         source = read_source(
             conn,
             execution.auth,
             basis["source_id"],
-            company_id=company_id,
+            company_id=None if current_request else company_id,
             allow_suppressed=basis.get("allow_suppressed", False),
         )
         if source["revision"] != basis["revision"]:
@@ -295,6 +303,18 @@ def prepare_frame(db, execution, core):
             except AppError as exc:
                 if exc.code != "ACCESS_DENIED":
                     raise
+        from app.request_checklist import compile_items
+
+        catalogue = conn.execute(
+            "SELECT company_id,aliases FROM companies ORDER BY company_id"
+        ).fetchall()
+        checklist = compile_items(
+            source["content"],
+            catalogue,
+            core["selected_company_id"],
+            available,
+            source["created_at"],
+        )
         return {
             "source_id": execution.source_id,
             "source_revision": source["revision"],
@@ -306,4 +326,5 @@ def prepare_frame(db, execution, core):
             .isoformat(),
             "requested_companies": companies,
             "available_scope_refs": available,
+            **({"request_items": checklist} if checklist else {}),
         }

@@ -111,13 +111,18 @@ def _result_text(data, view):
             }
             if data.get("task_id") and "memory_epoch" in data and data.get("status") in labels:
                 return (
-                    f"任务操作回执：{data['company_id']} {data.get('period') or '月份待补充'}，状态{labels[data['status']]}。",
+                    f"任务操作回执：{label} {data.get('period') or '月份待补充'}，状态{labels[data['status']]}。",
                     None,
                 )
             missing("缺少真实任务结果。")
         task = data["task"]
+        status = (
+            {"active": "进行中", "waiting_user": "等待补充"}.get(task["status"], task["status"])
+            if task
+            else ""
+        )
         return (
-            f"当前任务：{task['company_id']} {task.get('period') or '月份待补充'}，状态{task['status']}。"
+            f"当前任务：{ {'C001': '甲企业', 'C002': '乙企业'}.get(task['company_id'], task['company_id']) } {task.get('period') or '月份待补充'}，状态{status}。"
             if task
             else "该企业当前没有未完成任务。"
         ), None
@@ -131,6 +136,40 @@ def _result_text(data, view):
             else "当前没有保存的长期偏好。"
         ), None
     missing("不支持该结果视图。")
+
+
+def operation_receipt(conn, auth, row, *, historical=False):
+    """Render a DB-owned operation using current values, never upgrade pending verification."""
+    assert_access(conn, auth, row["company_id"])
+    current = conn.execute(
+        "SELECT * FROM invoices WHERE company_id=%s AND invoice_id=%s",
+        (row["company_id"], row["invoice_id"]),
+    ).fetchone()
+    verified = bool(current) and all(current[k] == v for k, v in row["patch"].items())
+    committed = row["state"] in ("committed", "no_change")
+    verification = (
+        row["verification_state"] if verified or not committed else "changed_since_commit"
+    )
+    from app.mutations import operation_result
+
+    card = safe_json(operation_result({**row, "verification_state": verification}, current=current))
+    label = (
+        "本项未保存"
+        if row["state"] == "rejected"
+        else "保存状态尚未确定，请按原操作编号核验"
+        if not committed
+        else "当前已是该值，已核验"
+        if row["state"] == "no_change" and verification == "verified"
+        else {
+            "verified": "已保存并核验",
+            "pending": "已提交，核验待完成",
+            "changed_since_commit": "本次曾提交，当前值已有变化",
+        }[verification]
+    )
+    return (
+        f"{'原操作核验：' if historical else ''}{ {'C001': '甲企业', 'C002': '乙企业'}.get(row['company_id'], row['company_id']) }发票{row['invoice_id']}：{label}。",
+        card,
+    )
 
 
 def _validate_delivery(conn, execution, plan, reply, outputs):
@@ -314,39 +353,9 @@ def render(conn, execution, plan, payload, manifest):
                 or (historical and not any(r.get("status_query") for r in receipts))
             ):
                 missing("本轮没有相符的真实操作记录，不能声称保存成功。")
-            assert_access(conn, execution.auth, row["company_id"])
-            current = conn.execute(
-                "SELECT * FROM invoices WHERE company_id=%s AND invoice_id=%s",
-                (row["company_id"], row["invoice_id"]),
-            ).fetchone()
-            verified = bool(current) and all(current[k] == v for k, v in row["patch"].items())
-            # Preserve a failed read-back as pending unless a real tool verified it.
-            committed = row["state"] in ("committed", "no_change")
-            verification = (
-                row["verification_state"] if verified or not committed else "changed_since_commit"
-            )
-            from app.mutations import operation_result
-
-            card = safe_json(
-                operation_result({**row, "verification_state": verification}, current=current)
-            )
+            text, card = operation_receipt(conn, execution.auth, row, historical=historical)
+            texts.append(text)
             reply.cards.append(card)
-            label = (
-                "本项未保存"
-                if row["state"] == "rejected"
-                else "保存状态尚未确定，请按原操作编号核验"
-                if not committed
-                else "当前已是该值，已核验"
-                if row["state"] == "no_change" and verification == "verified"
-                else {
-                    "verified": "已保存并核验",
-                    "pending": "已提交，核验待完成",
-                    "changed_since_commit": "本次曾提交，当前值已有变化",
-                }[verification]
-            )
-            texts.append(
-                f"{'原操作核验：' if historical else ''}{row['company_id']}发票{row['invoice_id']}：{label}。"
-            )
             for output in outputs.values():
                 child = (output.get("data") or {}).get("post_save_check")
                 if (
@@ -426,6 +435,50 @@ def render(conn, execution, plan, payload, manifest):
     )
     reply.displayed_view_ids = [c["view_id"] for c in reply.cards if c.get("view_id")]
     _validate_delivery(conn, execution, plan, reply, outputs)
+    from app.request_checklist import verify_items
+
+    items = state.get("request_frame", {}).get("request_items", [])
+    if items:
+        failures = []
+        for row in conn.execute(
+            "SELECT e.name,e.arguments,e.result_source_id,s.content FROM tool_executions e JOIN runs r USING(run_id) "
+            "JOIN sources s ON s.source_id=e.result_source_id WHERE r.turn_id=%s AND e.state IN ('done','failed')",
+            (execution.turn_id,),
+        ).fetchall():
+            result = json.loads(row["content"])
+            if (
+                str(row["result_source_id"]) in outputs
+                and not result.get("ok")
+                and result.get("error", {}).get("code")
+                in ("ACCESS_DENIED", "PERIOD_UNSUPPORTED", "RULE_UNAVAILABLE", "RULE_CONFLICT")
+            ):
+                failures.append({**row, "error": result["error"]})
+        # A validated host permission refusal does not need a doomed tool call.
+        # Check each scope independently: denial of one company cannot hide an
+        # omitted query for a different, authorized company.
+        if any(b.type == "explanation" and b.code == "access_denied" for b in plan.blocks):
+            for item in items:
+                if not item["company_id"]:
+                    continue
+                try:
+                    assert_access(conn, execution.auth, item["company_id"])
+                except AppError as exc:
+                    if exc.code != "ACCESS_DENIED":
+                        raise
+                    failures.append(
+                        {"name": item["tool"], "arguments": item, "error": exc.as_dict()}
+                    )
+        progress = verify_items(items, reply.cards, reply.clarification, failures)
+        reply.cards.append({"kind": "request_progress", "company_id": "", "items": progress})
+        verified = sum(i["status"] == "verified" for i in progress)
+        blocked = sum(i["status"] == "blocked" for i in progress)
+        waiting = sum(i["status"] == "waiting_user" for i in progress)
+        summary = f"本轮事项：已核对{verified}项"
+        if blocked:
+            summary += f"，无法执行{blocked}项（原因见事项清单）"
+        if waiting:
+            summary += f"，待补充{waiting}项"
+        reply.message += "\n\n" + summary + "。"
     return reply
 
 

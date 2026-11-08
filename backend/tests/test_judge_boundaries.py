@@ -193,7 +193,10 @@ async def test_runtime_repairs_omitted_month_without_test_adapter_selecting_resu
 
     result = read_turn(db, ex.auth, ex.turn_id)
     assert result["status"] == "completed" and len(model.requests) == 3
-    assert {c["period"] for c in result["final_cards"]} == {"2026-08", "2026-09"}
+    assert {c["period"] for c in result["final_cards"] if c["kind"] == "monthly_summary"} == {
+        "2026-08",
+        "2026-09",
+    }
     assert "9046.35" in result["final_message"] and "9622.06" in result["final_message"]
     assert any(
         "REPLY_EVIDENCE_MISSING" in m.get("content", "")
@@ -217,7 +220,9 @@ def test_complete_results_are_accepted_and_not_arbitrarily_expanded(
             for o in outputs
         ],
     )
-    assert len(reply.cards) == 2 and {c["period"] for c in reply.cards} == {"2026-08", "2026-09"}
+    summaries = [c for c in reply.cards if c["kind"] == "monthly_summary"]
+    assert len(summaries) == 2 and {c["period"] for c in summaries} == {"2026-08", "2026-09"}
+    assert [c["kind"] for c in reply.cards].count("request_progress") == 1
 
 
 @pytest.mark.parametrize(
