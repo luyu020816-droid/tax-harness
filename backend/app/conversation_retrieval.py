@@ -9,6 +9,7 @@ from contextlib import contextmanager, nullcontext
 from app import conversation_index as index
 from app.conversation_log import read
 from app.errors import AppError
+from app.resource_access import SESSION_VISIBLE
 from app.retrieval_engine import terms, vector_literal
 from app.values import digest, jsonb, uid
 
@@ -67,6 +68,14 @@ def search(db, execution, arguments, settings, engine):
             (execution.auth.user_id,),
         ).fetchone()["n"]
         clauses, params = scope_in(conn, execution, arguments, execution.source_seq, through)
+        clauses.remove(SESSION_VISIBLE)
+        # Session permissions include every turn's dependencies. Evaluate that
+        # predicate once per session, before joining individual messages.
+        visible = (
+            "WITH visible_sessions AS MATERIALIZED (SELECT s.* FROM sessions s WHERE "
+            + SESSION_VISIBLE
+            + ")"
+        )
         params["profile"] = profile_id
         # Identifier matching is a hard constraint on both lanes, not a similarity hint.
         identifiers = re.findall(
@@ -82,7 +91,7 @@ def search(db, execution, arguments, settings, engine):
             clauses.append("(" + " OR ".join(identifier_clauses) + ")")
         where = " AND ".join(clauses)
         coverage = conn.execute(
-            "SELECT count(*) FILTER(WHERE " + index.ELIGIBLE + ") eligible,"
+            visible + " SELECT count(*) FILTER(WHERE " + index.ELIGIBLE + ") eligible,"
             "count(*) FILTER(WHERE "
             + index.ELIGIBLE
             + " AND j.published_generation_id IS NOT NULL "
@@ -90,7 +99,7 @@ def search(db, execution, arguments, settings, engine):
             "count(*) FILTER(WHERE j.state IN ('failed','cancelled')) failed,"
             "count(*) FILTER(WHERE t.status IN ('queued','running')) unsettled "
             "FROM conversation_events e JOIN sources x ON x.source_id=e.source_id JOIN turns t ON t.turn_id=e.turn_id "
-            "JOIN sessions s ON s.session_id=t.session_id LEFT JOIN conversation_index_jobs j "
+            "JOIN visible_sessions s ON s.session_id=t.session_id LEFT JOIN conversation_index_jobs j "
             "ON j.source_id=x.source_id AND j.profile_id=%(profile)s WHERE " + where,
             params,
         ).fetchone()
@@ -105,8 +114,9 @@ def search(db, execution, arguments, settings, engine):
                 literal=arguments["query"].lower(), terms=" ".join(terms(arguments["query"])[:16])
             )
             lexical = conn.execute(
-                "SELECT x.source_id FROM conversation_events e JOIN sources x ON x.source_id=e.source_id "
-                "JOIN turns t ON t.turn_id=e.turn_id JOIN sessions s ON s.session_id=t.session_id "
+                visible
+                + " SELECT x.source_id FROM conversation_events e JOIN sources x ON x.source_id=e.source_id "
+                "JOIN turns t ON t.turn_id=e.turn_id JOIN visible_sessions s ON s.session_id=t.session_id "
                 "LEFT JOIN conversation_terms i ON i.source_id=x.source_id AND i.source_hash=x.content_hash "
                 "WHERE " + where + " AND (strpos(lower(x.content),%(literal)s)>0 OR "
                 "i.lexical_index @@ plainto_tsquery('simple',%(terms)s)) ORDER BY "
@@ -130,9 +140,12 @@ def search(db, execution, arguments, settings, engine):
     with db.transaction(readonly=True) as conn:
         with measured(db, execution, timings, "聊天授权向量候选") as attrs:
             dense = conn.execute(
-                "WITH authorized AS MATERIALIZED (SELECT x.source_id FROM conversation_events e "
+                visible
+                + ", authorized AS MATERIALIZED (SELECT x.source_id FROM conversation_events e "
                 "JOIN sources x ON x.source_id=e.source_id JOIN turns t ON t.turn_id=e.turn_id "
-                "JOIN sessions s ON s.session_id=t.session_id WHERE " + where + "), best AS ("
+                "JOIN visible_sessions s ON s.session_id=t.session_id WHERE "
+                + where
+                + "), best AS ("
                 "SELECT DISTINCT ON(p.source_id) p.source_id,p.char_start,p.char_end,p.excerpt_hash,"
                 "1-(p.embedding <=> %(vector)s::vector) dense_score FROM authorized a "
                 "JOIN conversation_passages p USING(source_id) JOIN conversation_index_jobs j "
@@ -296,6 +309,10 @@ def page(db, execution, arguments, cursor, settings, engine):
             row["scope_snapshot"]["before_source_seq"],
             row["scope_snapshot"]["through_event_id"],
         )
+        accepted = row["query_plan"]["accepted"]
+        # Only the frozen ranked candidates can appear on any page.
+        clauses.append("x.source_id=ANY(%(accepted)s::uuid[])")
+        params["accepted"] = accepted
         allowed = {
             str(r["source_id"])
             for r in conn.execute(
@@ -305,7 +322,6 @@ def page(db, execution, arguments, cursor, settings, engine):
             ).fetchall()
         }
         candidates = {c["source_id"]: c for c in row["candidates"]}
-        accepted = row["query_plan"]["accepted"]
         offset, matches = row["pagination"]["offset"], []
         invalidated = 0
         while offset < len(accepted) and len(matches) < arguments["page_size"]:
