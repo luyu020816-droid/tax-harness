@@ -10,6 +10,7 @@ import type {
   KnowledgeAttachment,
   KnowledgeBundle,
   KnowledgeDocument,
+  Rule,
   User,
 } from './types';
 
@@ -192,6 +193,9 @@ export function KnowledgeView({
     has_more: boolean;
     next_offset: number | null;
   }>(company ? `/knowledge/documents?company_id=${company}` : null);
+  const rules = useResource<{ rules: Rule[] }>(
+    company ? `/rules/catalog?company_id=${encodeURIComponent(company)}` : null
+  );
   const [uploading, setUploading] = useState(false);
   const [addingText, setAddingText] = useState(false);
   const [target, setTarget] = useState<KnowledgeDocument | null>(null);
@@ -332,6 +336,56 @@ export function KnowledgeView({
           上传资料
         </button>
       </header>
+      <section aria-labelledby="business-rules-heading">
+        <div className="knowledge-list-heading">
+          <h2 id="business-rules-heading">业务规则</h2>
+          <button className="text-button" onClick={rules.reload}>
+            <RefreshCw size={14} />
+            刷新规则
+          </button>
+        </div>
+        <p className="muted small">
+          {companyName(company)}的正式业务依据。点开查看原文，已停用版本仅供查阅。
+        </p>
+        {rules.error ? (
+          <p className="error-note" role="alert">
+            {rules.error}
+          </p>
+        ) : rules.loading ? (
+          <p className="muted">正在读取规则…</p>
+        ) : !rules.data?.rules.length ? (
+          <p className="muted">当前企业暂无可查看的规则。</p>
+        ) : (
+          <div className="memory-list">
+            {rules.data.rules.map((rule) => (
+              <article className="memory-row knowledge-document" key={rule.rule_version_id}>
+                <div className="memory-content">
+                  <button
+                    className="text-button"
+                    onClick={() => onDetail({ kind: 'rule', data: rule })}
+                  >
+                    <strong>
+                      {rule.display_name} {rule.business_version} 版
+                    </strong>
+                  </button>
+                  <p className="muted small">
+                    {rule.rule_code} · 生效日期 {rule.effective_from}
+                    {rule.effective_to && ` · 截止日期 ${rule.effective_to}`}
+                  </p>
+                </div>
+                <span className="muted small">{rule.status === 'active' ? '启用' : '已停用'}</span>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+      <div className="knowledge-list-heading">
+        <h2>上传与共享资料</h2>
+        <button className="text-button" onClick={reload}>
+          <RefreshCw size={14} />
+          刷新
+        </button>
+      </div>
       <form className="knowledge-search" onSubmit={search}>
         <Search size={18} />
         <input
@@ -377,20 +431,13 @@ export function KnowledgeView({
           ))}
         </div>
       )}
-      <div className="knowledge-list-heading">
-        <h2>当前资料</h2>
-        <button className="text-button" onClick={reload}>
-          <RefreshCw size={14} />
-          刷新
-        </button>
-      </div>
       {documents.error && <p className="error-note">{documents.error}</p>}
       {documents.loading && !list.length ? (
         <p className="muted">正在读取资料…</p>
       ) : !list.length ? (
         <div className="empty-panel">
           <BookOpen size={30} />
-          <h3>还没有可见的知识资料</h3>
+          <h3>还没有可见的上传或共享资料</h3>
           <p>上传制度或PDF，完成索引后即可检索、引用。</p>
         </div>
       ) : (

@@ -60,6 +60,18 @@ def get_rules(db, auth: Identity, company_id: str, period: str, topics: list[str
         return {"kind": "rules", "company_id": company_id, "period": period, "rules": rules, **head}
 
 
+def rule_catalog(db, auth: Identity, company_id: str) -> dict:
+    with db.transaction(readonly=True) as conn:
+        assert_access(conn, auth, company_id)
+        rows = conn.execute(
+            "SELECT r.* FROM rule_versions r JOIN rule_scopes s USING(rule_version_id) "
+            "WHERE s.company_id=%s AND r.status IN ('active','disabled') "
+            "ORDER BY r.rule_code, r.effective_from DESC, r.business_version",
+            (company_id,),
+        ).fetchall()
+        return {"company_id": company_id, "rules": [rule_ref(row) for row in rows]}
+
+
 def rule_ref(rule: dict) -> dict:
     result = {
         key: rule[key]

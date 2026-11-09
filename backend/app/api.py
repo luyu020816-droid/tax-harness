@@ -539,6 +539,10 @@ def create_app(
     def applicable_rules(company_id: str, period: str, topic: str, current=auth_dependency):
         return safe_json(rules.get_rules(db, current, company_id, period, topic.split(",")))
 
+    @app.get("/api/v1/rules/catalog")
+    def rule_catalog(company_id: str, current=auth_dependency):
+        return safe_json(rules.rule_catalog(db, current, company_id))
+
     @app.get("/api/v1/sources/{source_id}")
     def source_details(source_id: UUID, current=auth_dependency):
         from app.sources import read_source
