@@ -1,8 +1,13 @@
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from app.errors import AppError
 from app.identity import Identity
 from app.sources import read_source
+
+if TYPE_CHECKING:
+    from app.config import Settings
+    from app.model import ModelAdapter
 
 
 @dataclass
@@ -20,6 +25,7 @@ class Execution:
     observed_heads: dict = field(default_factory=dict)
     import_context: bool = False
     reference_context: bool = False
+    model_configuration: tuple["Settings", "ModelAdapter"] | None = field(default=None, repr=False)
 
 
 def guard(conn, execution: Execution, *, shared=False) -> dict:
@@ -41,7 +47,9 @@ def guard(conn, execution: Execution, *, shared=False) -> dict:
         (execution.work_id,),
     ).fetchone()
     valid = (
-        user and user["is_active"] and turn
+        user
+        and user["is_active"]
+        and turn
         and work
         and turn["status"] == "running"
         and turn["active_run_generation"] == execution.generation

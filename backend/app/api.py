@@ -35,7 +35,7 @@ from app.identity import Identity
 from app.invoice_imports import InvoiceImports
 from app.knowledge import Knowledge
 from app.knowledge_jobs import KnowledgeJobs
-from app.model import HttpModel
+from app.model_connection import ModelConnection, model_connection_router
 from app.runtime import Runtime
 from app.tool_schemas import StrictModel
 from app.values import canonical, safe_json
@@ -112,8 +112,14 @@ def create_app(
         statement_timeout_ms=settings.statement_timeout_ms,
         lock_timeout_ms=settings.lock_timeout_ms,
     )
-    model = model or HttpModel(settings)
-    runtime = Runtime(db, settings, model)
+    model_connection = ModelConnection(settings) if model is None else None
+    if model_connection:
+        _, model = model_connection.current
+    runtime = Runtime(db, settings, model, model_connection=model_connection)
+
+    def model_ready():
+        return (model_connection.current[0] if model_connection else settings).model_configured
+
     knowledge = Knowledge(db, settings)
     knowledge_jobs = KnowledgeJobs(db, settings, runtime.tools.retrieval.engine)
     history_jobs = HistoryJobs(db, settings, runtime.tools.retrieval.engine)
@@ -166,6 +172,8 @@ def create_app(
         conversation_router(db, auth_dependency, settings, runtime.tools.retrieval.engine)
     )
     app.include_router(import_router(imports, auth_dependency))
+    if model_connection:
+        app.include_router(model_connection_router(model_connection))
     app.include_router(insight_router(db, auth_dependency))
     app.include_router(
         knowledge_router(knowledge, runtime.tools.retrieval, auth_dependency, runtime.tools.history)
@@ -259,7 +267,7 @@ def create_app(
         return JSONResponse(
             {
                 "database": database_ready,
-                "model": settings.model_configured,
+                "model": model_ready(),
                 "model_mode": model.mode,
                 "maintenance": maintenance,
                 "invoice_import_ready": imports.available(),
@@ -324,7 +332,7 @@ def create_app(
     def me(current=auth_dependency):
         return {
             **identity.me(db, current),
-            "model_ready": settings.model_configured,
+            "model_ready": model_ready(),
             "model_mode": model.mode,
             "invoice_import_ready": imports.available(),
         }

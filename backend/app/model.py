@@ -58,6 +58,7 @@ class HttpModel:
                     f"模型接口请求失败（HTTP {response.status_code}），请检查配置或稍后重试。",
                     503,
                     response.status_code >= 500 or response.status_code == 429,
+                    details={"http_status": response.status_code},
                 )
             body = response.json()
             message = body["choices"][0]["message"]

@@ -18,6 +18,7 @@ import {
   Plus,
   Paperclip,
   ShieldCheck,
+  SlidersHorizontal,
   Square,
   X,
 } from 'lucide-react';
@@ -34,6 +35,7 @@ import {
 import { BrandMark } from './BrandMark';
 import { Details } from './Details';
 import { MemoryView } from './MemoryView';
+import { ModelConnection } from './ModelConnection';
 import { KnowledgeView } from './KnowledgeView';
 import { Results } from './Results';
 import { RunsView } from './RunsView';
@@ -68,6 +70,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
   const [error, setError] = useState('');
   const [requestUncertain, setRequestUncertain] = useState(false);
   const [detail, setDetail] = useState<Detail | null>(null);
+  const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
   const [navigationOpen, setNavigationOpen] = useState(false);
   const [currentTask, setCurrentTask] = useState<Task | null>(null);
   const [taskError, setTaskError] = useState('');
@@ -402,7 +405,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
     )
       return;
     if (!user?.model_ready) {
-      setError('模型暂未连接，请完成本地配置并重启服务后办理。');
+      setError('模型尚未配置，请打开模型设置测试并启用，或配置本地 .env。');
       return;
     }
     const stamp = generation.current,
@@ -538,6 +541,13 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
   };
   const canUpdate = user?.companies.find((c) => c.company_id === company)?.can_update ?? false;
 
+  const modelSettings = modelSettingsOpen && (
+    <ModelConnection
+      onClose={() => setModelSettingsOpen(false)}
+      onEnabled={() => setUser((current) => current && { ...current, model_ready: true })}
+    />
+  );
+
   if (booting && !user)
     return (
       <div className="boot-screen">
@@ -549,6 +559,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
   if (!user)
     return (
       <div className="login-page">
+        {modelSettings}
         <div className="login-brand">
           <BrandMark />
           <span>财税助手</span>
@@ -576,6 +587,9 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
             </button>
           </div>
           {error && <p className="error-note">{error}</p>}
+          <button className="text-button" onClick={() => setModelSettingsOpen(true)}>
+            模型设置
+          </button>
           <p className="login-footnote">
             <ShieldCheck size={14} />
             全部企业、资料与规则均为比赛模拟内容
@@ -586,6 +600,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
 
   return (
     <div className="app-shell">
+      {modelSettings}
       {navigationOpen && (
         <button
           className="nav-backdrop"
@@ -732,9 +747,17 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
               {user.model_mode === 'test'
                 ? '程序测试模型'
                 : user.model_ready
-                  ? '模型已连接'
-                  : '模型待连接'}
+                  ? '模型已配置'
+                  : '模型未配置'}
             </span>
+            <button
+              className="icon-button"
+              aria-label="模型设置"
+              title="模型设置"
+              onClick={() => setModelSettingsOpen(true)}
+            >
+              <SlidersHorizontal size={17} />
+            </button>
             <label className="user-switch">
               <span className="user-avatar">{user.user_id === 'U001' ? '一' : '二'}</span>
               <span className="sr-only">当前模拟用户</span>
@@ -1111,7 +1134,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                 {!user.model_ready && (
                   <p className="model-notice">
                     <CircleAlert size={14} />
-                    模型暂未连接，完成本地配置并重启服务后即可办理。
+                    模型尚未配置，可在模型设置中测试并启用。
                   </p>
                 )}
                 <p className="composer-footnote">比赛模拟资料 · 保存状态以实际核验结果为准</p>

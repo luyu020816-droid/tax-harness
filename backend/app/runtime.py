@@ -24,8 +24,11 @@ from app.values import canonical, digest, jsonb, uid
 
 
 class Runtime:
-    def __init__(self, db, settings: Settings, model: ModelAdapter, *, retrieval=None):
+    def __init__(
+        self, db, settings: Settings, model: ModelAdapter, *, retrieval=None, model_connection=None
+    ):
         self.db, self.settings, self.model = db, settings, model
+        self.model_connection = model_connection
         if retrieval is None:
             from app.knowledge_retrieval import KnowledgeRetrieval
             from app.retrieval_engine import LocalRetrieval
@@ -36,6 +39,13 @@ class Runtime:
         self.tools = ToolExecutor(db, retrieval)
         self.stopping = asyncio.Event()
         self.workers: list[asyncio.Task] = []
+
+    def _model_for(self, execution=None):
+        if execution is not None and execution.model_configuration is not None:
+            return execution.model_configuration
+        if self.model_connection is not None:
+            return self.model_connection.current
+        return self.settings, self.model
 
     async def start(self):
         self.workers = [
@@ -128,6 +138,7 @@ class Runtime:
             generation = turn["active_run_generation"] + 1
             token = work["fencing_token"] + 1
             run_id = uid()
+            model_settings, model = self._model_for()
             conn.execute(
                 "UPDATE runs SET state='interrupted',finished_at=now() WHERE turn_id=%s AND finished_at IS NULL",
                 (turn["turn_id"],),
@@ -146,12 +157,12 @@ class Runtime:
                     run_id,
                     turn["turn_id"],
                     generation,
-                    digest([self.settings.model_id, self.settings.input_budget]),
+                    digest([model_settings.model_id, model_settings.input_budget]),
                 ),
             )
             from app.telemetry import snapshot
 
-            insight_snapshot = snapshot(self.settings, getattr(self.model, "mode", "unknown"))
+            insight_snapshot = snapshot(model_settings, getattr(model, "mode", "unknown"))
             insight_snapshot["dataset_profile"] = conn.execute(
                 "SELECT profile FROM dataset_metadata WHERE singleton_id=1"
             ).fetchone()["profile"]
@@ -170,6 +181,7 @@ class Runtime:
                 generation,
                 token,
                 user["memory_epoch"],
+                model_configuration=(model_settings, model) if self.model_connection else None,
             )
 
     async def _worker(self):
@@ -285,10 +297,11 @@ class Runtime:
     def _assemble_measured(self, execution, groups, *, budget=None, proactive_compact=True):
         from app.telemetry import phase
 
+        settings, _ = self._model_for(execution)
         with phase(self.db, execution, "context:" + uid(), "context", "上下文组装"):
             return context.assemble(
                 self.db,
-                self.settings,
+                settings,
                 execution,
                 groups,
                 budget=budget,
@@ -298,21 +311,22 @@ class Runtime:
     async def _loop(self, execution):
         from types import SimpleNamespace
 
+        settings, model = self._model_for(execution)
         model_calls = 0
 
         async def complete(payload):
             nonlocal model_calls
-            if model_calls >= self.settings.max_model_steps:
+            if model_calls >= settings.max_model_steps:
                 raise AppError(
                     "RUN_LIMIT_EXCEEDED", "本轮模型调用预算已用尽，已保存状态仍保留。", 422
                 )
             model_calls += 1
-            return await self.model.complete(payload)
+            return await model.complete(payload)
 
         budgeted_model = SimpleNamespace(
             complete=complete,
-            mode=getattr(self.model, "mode", "unknown"),
-            dispatch_enabled=getattr(self.model, "dispatch_enabled", True),
+            mode=getattr(model, "mode", "unknown"),
+            dispatch_enabled=getattr(model, "dispatch_enabled", True),
         )
         groups = []
         tool_count = 0
@@ -325,7 +339,7 @@ class Runtime:
         budget = None
         compaction_attempted = 0
         proactive_compact = True
-        for step in range(1, self.settings.max_model_steps + 1):
+        for step in range(1, settings.max_model_steps + 1):
             try:
                 payload, manifest, _dropped = await asyncio.to_thread(
                     self._assemble_measured,
@@ -356,15 +370,15 @@ class Runtime:
                     raise
             if (
                 _dropped
-                and self.settings.context_auto_compact
+                and settings.context_auto_compact
                 and compaction_attempted < 2
-                and step < self.settings.max_model_steps
+                and step < settings.max_model_steps
             ):
                 from app.compaction import compact
 
                 compaction_attempted += 1
                 try:
-                    await compact(self.db, self.settings, budgeted_model, execution, _dropped, step)
+                    await compact(self.db, settings, budgeted_model, execution, _dropped, step)
                 except AppError as exc:
                     with self.db.transaction() as conn:
                         emit(
@@ -401,7 +415,7 @@ class Runtime:
                 else:
                     continue
             if _dropped:
-                if model_calls >= self.settings.max_model_steps:
+                if model_calls >= settings.max_model_steps:
                     raise AppError(
                         "RUN_LIMIT_EXCEEDED",
                         "本轮模型调用预算已用尽，历史和已保存状态仍保留。",
@@ -425,7 +439,7 @@ class Runtime:
                 )
             except AppError as exc:
                 if exc.code == "CONTEXT_CAPACITY_EXCEEDED" and budget is None:
-                    budget = int(self.settings.context_budget * 0.7)
+                    budget = int(settings.context_budget * 0.7)
                     continue
                 if exc.retryable and not retry_used:
                     retry_used = True
@@ -459,7 +473,7 @@ class Runtime:
                 results, refs, tool_messages = [], [], []
                 for call in calls:
                     tool_count += 1
-                    if tool_count > self.settings.max_tool_calls:
+                    if tool_count > settings.max_tool_calls:
                         raise AppError(
                             "RUN_LIMIT_EXCEEDED",
                             "本轮工具调用已到上限，已完成项可在记录核对。",
@@ -528,6 +542,7 @@ class Runtime:
         )
 
     async def _confirm_loop(self, execution, plan_id):
+        settings, _ = self._model_for(execution)
         call = {
             "id": "confirmed-invoice-write",
             "type": "function",
@@ -552,10 +567,10 @@ class Runtime:
         payload, manifest, _ = await asyncio.to_thread(
             context.assemble,
             self.db,
-            self.settings,
+            settings,
             execution,
             [group],
-            budget=self.settings.input_budget,
+            budget=settings.input_budget,
         )
         manifest["kind"] = "control_execution"
         with self.db.transaction() as conn:
