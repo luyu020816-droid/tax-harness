@@ -459,12 +459,13 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
       if (stamp === generation.current) {
         const uncertain =
           err instanceof ApiError &&
-          ['NETWORK_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'INVALID_RESPONSE'].includes(err.code);
+          (err.status >= 500 ||
+            ['NETWORK_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'INVALID_RESPONSE'].includes(err.code));
         setRequestUncertain(uncertain);
         setError(
           ((err as Error).message || '暂时无法确认请求状态。') +
             (uncertain
-              ? ' 输入已保留；保持内容不变再次发送，将核对原请求，不会创建另一条办理请求。'
+              ? ' 处理状态待核对。输入已保留；保持内容不变再次发送，将核对原请求，不会创建另一条办理请求。'
               : ' 输入已保留，请根据提示处理后再办理。')
         );
       }

@@ -1,6 +1,13 @@
 import { expect, test } from '@playwright/test';
 
-for (const mode of ['network', 'invalid-success', 'invalid-error', 'missing-turn', 'denied']) {
+for (const mode of [
+  'network',
+  'invalid-success',
+  'invalid-error',
+  'missing-turn',
+  'json-503',
+  'denied',
+]) {
   test(`${mode}: distinguish unknown status from explicit rejection`, async ({ page }) => {
     const session = {
       session_id: 'network-session',
@@ -54,6 +61,11 @@ for (const mode of ['network', 'invalid-success', 'invalid-error', 'missing-turn
           if (mode === 'invalid-success') return route.fulfill({ status: 200, json: null });
           if (mode === 'missing-turn') return route.fulfill({ status: 200, json: {} });
           if (mode === 'invalid-error') return route.fulfill({ status: 503, json: null });
+          if (mode === 'json-503')
+            return route.fulfill({
+              status: 503,
+              json: { code: 'DB_UNAVAILABLE', message: '数据库操作未能完成' },
+            });
           if (mode === 'denied')
             return route.fulfill({
               status: 403,
@@ -76,7 +88,7 @@ for (const mode of ['network', 'invalid-success', 'invalid-error', 'missing-turn
       expect(requests).toHaveLength(1);
       return;
     }
-    await expect(page.getByRole('alert')).toContainText(/暂时无法确认.*处理状态/);
+    await expect(page.getByRole('alert')).toContainText('处理状态待核对');
     await expect(page.getByRole('alert')).toContainText('保持内容不变再次发送');
     await expect(input).toHaveValue(turn.text);
     await input.fill(turn.text + '已改变');

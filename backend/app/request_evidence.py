@@ -256,12 +256,40 @@ def validate_scope(conn, execution, scope_ref, company_id, period):
 
 def prepare_frame(db, execution, core):
     from app.execution import guard
+    from app.request_checklist import bind_waiting_items, compile_items, waiting_items
     from app.turns import mentioned_companies
 
     with db.transaction() as conn:
         guard(conn, execution, shared=True)
         source = read_source(conn, execution.auth, execution.source_id, allow_suppressed=True)
         companies = mentioned_companies(conn, source["content"])
+        origin = None
+        inherited = []
+        # A bare full month immediately after a checklist clarification is a
+        # scoped continuation. Other phrasing can use the explicit resume path.
+        if PERIOD.fullmatch(source["content"].strip().rstrip("。.!！").strip()):
+            prior = conn.execute(
+                "SELECT turn_id,status,final_response_ref,final_cards FROM turns "
+                "WHERE user_id=%s AND session_id=%s AND source_seq<%s "
+                "ORDER BY source_seq DESC LIMIT 1",
+                (execution.auth.user_id, execution.session_id, execution.source_seq),
+            ).fetchone()
+            if prior and prior["status"] == "waiting_user" and prior["final_response_ref"]:
+                items = waiting_items(prior)
+                if items and all(
+                    i["company_id"]
+                    and i["period"] is None
+                    and core["selected_company_id"] in (None, i["company_id"])
+                    for i in items
+                ):
+                    try:
+                        read_source(conn, execution.auth, str(prior["final_response_ref"]))
+                    except AppError as exc:
+                        if exc.code not in ("ACCESS_DENIED", "SOURCE_INVALIDATED"):
+                            raise
+                    else:
+                        origin, inherited = str(prior["turn_id"]), items
+                        companies = sorted({i["company_id"] for i in items})
         if not companies and core["selected_company_id"]:
             companies = [core["selected_company_id"]]
         available = []
@@ -303,8 +331,6 @@ def prepare_frame(db, execution, core):
             except AppError as exc:
                 if exc.code != "ACCESS_DENIED":
                     raise
-        from app.request_checklist import compile_items
-
         catalogue = conn.execute(
             "SELECT company_id,aliases FROM companies ORDER BY company_id"
         ).fetchall()
@@ -315,6 +341,12 @@ def prepare_frame(db, execution, core):
             available,
             source["created_at"],
         )
+        if origin:
+            continued = bind_waiting_items(inherited, available)
+            if all(i["company_id"] and i["period"] for i in continued):
+                checklist.extend(continued)
+            else:
+                origin = None
         return {
             "source_id": execution.source_id,
             "source_revision": source["revision"],
@@ -327,4 +359,5 @@ def prepare_frame(db, execution, core):
             "requested_companies": companies,
             "available_scope_refs": available,
             **({"request_items": checklist} if checklist else {}),
+            **({"checklist_origin_turn_id": origin} if origin else {}),
         }

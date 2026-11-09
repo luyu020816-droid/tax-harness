@@ -435,9 +435,39 @@ def render(conn, execution, plan, payload, manifest):
     )
     reply.displayed_view_ids = [c["view_id"] for c in reply.cards if c.get("view_id")]
     _validate_delivery(conn, execution, plan, reply, outputs)
-    from app.request_checklist import verify_items
+    from app.request_checklist import bind_waiting_items, verify_items, waiting_items
 
-    items = state.get("request_frame", {}).get("request_items", [])
+    frame = state["request_frame"]
+    items = list(frame.get("request_items", []))
+    origin_id = frame.get("checklist_origin_turn_id")
+    if origin_id and reply.resume_turn_id and str(reply.resume_turn_id) != origin_id:
+        missing("续办编号与本轮补充范围关联的原请求不一致。")
+    reply.resume_turn_id = origin_id or reply.resume_turn_id
+    inherited = []
+    if reply.resume_turn_id:
+        old = conn.execute(
+            "SELECT source_seq,status,final_response_ref,final_cards FROM turns "
+            "WHERE turn_id=%s AND user_id=%s",
+            (reply.resume_turn_id, execution.auth.user_id),
+        ).fetchone()
+        inherited = waiting_items(old) if old else []
+        if inherited:
+            if (
+                old["source_seq"] >= execution.source_seq
+                or old["status"] != "waiting_user"
+                or not old["final_response_ref"]
+            ):
+                raise AppError("SOURCE_INVALIDATED", "原待补充事项不可在本轮续办。", 409)
+            read_source(conn, execution.auth, str(old["final_response_ref"]))
+            inherited = bind_waiting_items(inherited, frame["available_scope_refs"])
+            if any(i["company_id"] is None or i["period"] is None for i in inherited):
+                missing("原请求仍缺企业或月份。请先澄清并保留原请求。")
+            items = list(
+                {
+                    (item["tool"], item["company_id"], item["period"]): item
+                    for item in [*items, *inherited]
+                }.values()
+            )
     if items:
         failures = []
         for row in conn.execute(

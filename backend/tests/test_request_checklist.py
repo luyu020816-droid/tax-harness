@@ -7,11 +7,11 @@ from test_runtime import model_settings, tool
 
 from app import context
 from app.errors import AppError
-from app.identity import Identity, create_session
+from app.identity import Identity, create_session, switch_company
 from app.request_checklist import compile_items, verify_items
 from app.runtime import Runtime
 from app.sources import read_source
-from app.tool_schemas import Clarification
+from app.tool_schemas import Clarification, FinalReply
 from app.turns import accept_turn, read_turn
 from app.values import uid
 
@@ -19,6 +19,7 @@ COMPANIES = [
     {"company_id": "C001", "aliases": ["甲企业"]},
     {"company_id": "C002", "aliases": ["乙企业"]},
 ]
+AUTH = Identity("U001")
 
 
 @pytest.mark.asyncio
@@ -348,3 +349,126 @@ async def test_runtime_repairs_missing_month_without_repeating_existing_query(
     assert "已核对2项" in turn["final_message"]
     progress = next(c for c in turn["final_cards"] if c["kind"] == "request_progress")
     assert [i["status"] for i in progress["items"]] == ["verified", "verified"]
+
+
+def awaiting_month(runtime, db, session):
+    original = accept_turn(db, AUTH, session, uid(), "查询甲企业发票总额，并解释适用规则")
+    execution = runtime.claim()
+    payload, manifest, _ = context.assemble(db, runtime.settings, execution, [])
+    runtime.finish(
+        execution,
+        FinalReply.model_validate(
+            {
+                "blocks": [],
+                "status": "waiting_user",
+                "clarification": {
+                    "intent": "query_month",
+                    "company_id": "C001",
+                    "missing_fields": ["period"],
+                },
+            }
+        ),
+        payload,
+        manifest,
+    )
+    return original["turn_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("continuation", ["bare_month", "explicit", "other_session"])
+async def test_continuation_must_deliver_all_waiting_items(db, settings, continuation):
+    session = str(create_session(db, AUTH, "C001")["session_id"])
+    runtime = Runtime(db, model_settings(settings), ExactModel([]))
+    original = awaiting_month(runtime, db, session)
+    explicit_resume = continuation != "bare_month"
+    if continuation == "other_session":
+        session = str(create_session(db, AUTH, "C001")["session_id"])
+    text = "月份是2026年9月" if explicit_resume else "2026年9月"
+    new_turn = accept_turn(db, AUTH, session, uid(), text)
+    refs = {}
+
+    def call(name):
+        def step(payload):
+            frame = json.loads(payload["messages"][0]["content"].split("\n正式状态：\n")[1])[
+                "request_frame"
+            ]
+            if name == "get_rules":
+                # The first tool has already completed its single persistent task.
+                # The previous multi-item request must still be open after the rejected reply.
+                assert read_turn(db, AUTH, original)["status"] == "waiting_user"
+                assert any("尚未交付" in (m.get("content") or "") for m in payload["messages"])
+            if not explicit_resume:
+                assert [item["tool"] for item in frame["request_items"]] == [
+                    "query_month",
+                    "get_rules",
+                ]
+            return tool(
+                name,
+                {
+                    "company_id": "C001",
+                    "period": "2026-09",
+                    "scope_ref": frame["available_scope_refs"][0]["scope_ref"],
+                    **({"topics": ["purpose"]} if name == "get_rules" else {}),
+                },
+            )
+
+        return step
+
+    def final(payload):
+        for message in payload["messages"]:
+            if message["role"] == "tool":
+                output = json.loads(message["content"])
+                assert output["ok"], output
+                refs[output["data"]["kind"]] = output["result_ref"]
+        reply = raw_final(
+            [{"type": "result", "result_ref": ref, "view": kind} for kind, ref in refs.items()]
+        )
+        if explicit_resume:
+            content = json.loads(reply["content"])
+            reply["content"] = json.dumps({**content, "resume_turn_id": original})
+        return reply
+
+    runtime.model = ExactModel([call("query_month"), final, call("get_rules"), final])
+    await runtime._loop(runtime.claim())
+    assert read_turn(db, AUTH, original)["status"] == "resolved"
+    completed = read_turn(db, AUTH, new_turn["turn_id"])
+    assert completed["continuation_of_turn_id"] == original
+    progress = next(c for c in completed["final_cards"] if c["kind"] == "request_progress")
+    assert [item["status"] for item in progress["items"]] == ["verified", "verified"]
+
+
+@pytest.mark.parametrize("same_user", [False, True])
+def test_unrelated_scope_cannot_close_checklist_by_turn_id(db, settings, same_user):
+    original_session = str(create_session(db, AUTH, "C001")["session_id"])
+    runtime = Runtime(db, model_settings(settings), ExactModel([]))
+    original = awaiting_month(runtime, db, original_session)
+    auth = AUTH if same_user else Identity("U002")
+    session = original_session if same_user else str(create_session(db, auth, "C001")["session_id"])
+    text = "查询乙企业2026年9月发票总额" if same_user else "2026年9月"
+    accept_turn(db, auth, session, uid(), text)
+    execution = runtime.claim()
+    payload, manifest, _ = context.assemble(db, runtime.settings, execution, [])
+    reply = FinalReply.model_validate(
+        {
+            "blocks": [{"type": "explanation", "code": "acknowledged"}],
+            "status": "completed",
+            "resume_turn_id": original,
+        }
+    )
+    with pytest.raises(AppError) as error:
+        runtime.finish(execution, reply, payload, manifest)
+    assert error.value.code == ("REPLY_EVIDENCE_MISSING" if same_user else "RESOURCE_NOT_FOUND")
+    assert read_turn(db, AUTH, original)["status"] == "waiting_user"
+
+
+def test_bare_month_does_not_reopen_previous_company_after_switch(db, settings):
+    session = str(create_session(db, AUTH, "C001")["session_id"])
+    runtime = Runtime(db, model_settings(settings), ExactModel([]))
+    original = awaiting_month(runtime, db, session)
+    switch_company(db, AUTH, session, "C002")
+    accept_turn(db, AUTH, session, uid(), "2026年9月")
+    _, manifest, _ = context.assemble(db, runtime.settings, runtime.claim(), [])
+    frame = manifest["request_frame"]
+    assert "checklist_origin_turn_id" not in frame
+    assert [scope["company_id"] for scope in frame["available_scope_refs"]] == ["C002"]
+    assert read_turn(db, AUTH, original)["status"] == "waiting_user"

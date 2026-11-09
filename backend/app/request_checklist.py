@@ -21,6 +21,32 @@ SKIP = re.compile(
 )
 
 
+def waiting_items(turn):
+    return [
+        item
+        for card in turn["final_cards"] or []
+        if card["kind"] == "request_progress"
+        for item in card["items"]
+        if item["status"] == "waiting_user"
+    ]
+
+
+def bind_waiting_items(items, available):
+    """Fill missing fields only from a unique, evidenced scope."""
+    bound = []
+    for item in items:
+        scopes = {
+            (scope["company_id"], scope["period"])
+            for scope in available
+            if all(item[k] is None or item[k] == scope[k] for k in ("company_id", "period"))
+        }
+        if len(scopes) == 1:
+            company, period = next(iter(scopes))
+            item = {**item, "company_id": company, "period": period}
+        bound.append(item)
+    return bound
+
+
 def compile_items(text, companies, selected_company, available, created_at=None):
     """Recognize only explicit read/check requests with unambiguous scopes.
 

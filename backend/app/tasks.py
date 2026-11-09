@@ -48,11 +48,22 @@ def _revision(conn, task, change_type, refs, sequence):
 
 
 def _close_pending(conn, task, status):
+    # A task result covers one intent. The reply verifies the full checklist.
+    guarded = jsonb([{"kind": "request_progress", "items": [{"status": "waiting_user"}]}])
     conn.execute(
         "UPDATE turns SET status=%s,pending_clarification=jsonb_set(pending_clarification,'{state}',to_jsonb(%s::text)),updated_at=now() "
         "WHERE user_id=%s AND status='waiting_user' AND pending_clarification->>'task_id'=%s "
-        "AND pending_clarification->>'task_generation'=%s",
-        (status, status, task["user_id"], str(task["task_id"]), str(task["generation"])),
+        "AND pending_clarification->>'task_generation'=%s "
+        "AND (%s<>'resolved' OR NOT final_cards @> %s)",
+        (
+            status,
+            status,
+            task["user_id"],
+            str(task["task_id"]),
+            str(task["generation"]),
+            status,
+            guarded,
+        ),
     )
     conn.execute(
         "UPDATE result_views SET status='invalidated' WHERE user_id=%s AND company_id=%s",
