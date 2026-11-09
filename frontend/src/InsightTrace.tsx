@@ -20,6 +20,16 @@ const spanState: Record<string, string> = {
   interrupted: '中断 / 结束未知',
   not_dispatched: '未发出',
 };
+const toolBlocks: Record<string, { label: string; message: string }> = {
+  NEEDS_SCOPE_CLARIFICATION: {
+    label: '需确认范围',
+    message: '工具已拦截，请确认企业或年月后再查询。',
+  },
+  ACCESS_DENIED: {
+    label: '无权限',
+    message: '当前身份无权执行此操作，工具已拦截。',
+  },
+};
 const attemptName: Record<string, string> = {
   normal: '模型请求',
   summary: '生成历史摘要',
@@ -98,11 +108,15 @@ function SpanNode({
 }) {
   const [open, setOpen] = useState(span.status === 'failed');
   const [raw, setRaw] = useState(false);
+  const blocked =
+    span.kind === 'tool' && span.status === 'failed' && span.error_code
+      ? toolBlocks[span.error_code]
+      : undefined;
   const usage = span.attributes.usage;
   const parts = span.attributes.input_composition;
   return (
     <article
-      className={`insight-span ${nested ? 'is-child' : ''} ${span.status === 'failed' ? 'is-error' : ''}`}
+      className={`insight-span ${nested ? 'is-child' : ''} ${span.status === 'failed' && !blocked ? 'is-error' : ''}`}
     >
       <button className="insight-span-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
         {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -111,7 +125,9 @@ function SpanNode({
           <small>{spanName[span.kind] ?? span.kind}</small>
           <strong>{attemptName[span.name] ?? span.name}</strong>
         </span>
-        <span className="insight-node-status">{spanState[span.status] ?? span.status}</span>
+        <span className="insight-node-status">
+          {blocked?.label ?? spanState[span.status] ?? span.status}
+        </span>
         <span className="insight-duration">{duration(span.duration_ms)}</span>
       </button>
       <div className="insight-time-track" aria-hidden="true">
@@ -198,7 +214,13 @@ function SpanNode({
               <span>Token 以供应商 usage 为准</span>
             </div>
           )}
-          {span.error_code && <p className="error-note">{span.error_code}</p>}
+          {blocked ? (
+            <p className="notice" title={span.error_code ?? undefined}>
+              {blocked.message}
+            </p>
+          ) : (
+            span.error_code && <p className="error-note">{span.error_code}</p>
+          )}
           {parts && (
             <details className="insight-evidence">
               <summary>输入构成 · UTF-8 预算估算</summary>

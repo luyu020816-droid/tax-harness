@@ -206,6 +206,8 @@ class ExplanationBlock(StrictModel):
         "acknowledged",
         "no_changes",
         "independent_totals",
+        "amount_materials",
+        "amount_material_unsupported",
         "read_only",
         "access_denied",
         "unsupported_fields",
@@ -335,7 +337,7 @@ TOOLS = {
     ),
     "query_month": (
         QueryMonth,
-        "查询当前保存数据的月度发票总额、银行收入和支出；三项独立计算，并返回规则依据。",
+        "查询指定企业、月份的实际发票总额、银行收入和支出；仅询问可查哪些资料时无需调用。",
     ),
     "find_invoices": (
         FindInvoices,

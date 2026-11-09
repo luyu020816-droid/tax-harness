@@ -626,6 +626,12 @@ def _knowledge_quotes(conn, execution, citation_id, outputs):
 
 
 def _explanation(conn, execution, code, outputs, rules, state):
+    if code == "amount_materials":
+        return "可按企业和月份查询三类金额资料：发票总额、银行收入和银行支出。"
+    if code == "amount_material_unsupported":
+        return (
+            "当前系统未提供你问的这类金额资料。支持按企业和月份查询发票总额、银行收入和银行支出。"
+        )
     if code == "conversation_boundary" and state.get("conversation_retrieval") == "disabled":
         return "普通聊天不会自动进入知识库，也不自动检索其他会话。请打开原会话继续，或手动提交相关资料到知识库；明确保存的任务和偏好独立保留。"
     errors = {o.get("error", {}).get("code") for o in outputs.values() if not o.get("ok")}

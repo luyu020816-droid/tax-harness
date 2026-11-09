@@ -118,6 +118,20 @@ test('insights: scoped history, chain, unknown usage, refresh, comparison and re
                 error_code: 'MODEL_UNAVAILABLE',
                 attributes: { model: 'test-model', usage: null },
               },
+              ...[
+                ['scope-block', 'NEEDS_SCOPE_CLARIFICATION'],
+                ['access-block', 'ACCESS_DENIED'],
+              ].map(([span_id, error_code]) => ({
+                span_id,
+                kind: 'tool',
+                name: 'query_month',
+                status: 'failed',
+                started_at: '2026-11-02T01:00:02Z',
+                duration_ms: 27.5,
+                measurement_kind: 'measured',
+                error_code,
+                attributes: {},
+              })),
             ],
           },
           {
@@ -183,6 +197,11 @@ test('insights: scoped history, chain, unknown usage, refresh, comparison and re
   await expect(page.locator('.insight-kpis')).toContainText('1,200');
   await page.getByRole('button', { name: /查询甲企业月度资料（观测夹具）/ }).click();
   await expect(page.getByRole('region', { name: '请求执行轨迹' })).toContainText('恢复 / 重试');
+  const scope = page.getByRole('button', { name: /query_month.*需确认范围/ });
+  await expect(scope).toBeVisible();
+  await expect(scope.locator('..')).toContainText('请确认企业或年月');
+  await expect(page.getByRole('button', { name: /query_month.*无权限/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /生成答复.*失败/ })).toBeVisible();
   await expect(page.locator('.insight-inline-metrics').first()).toContainText('未知');
   await page
     .getByRole('button', { name: /查看实际输入/ })
