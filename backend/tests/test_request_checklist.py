@@ -472,3 +472,46 @@ def test_bare_month_does_not_reopen_previous_company_after_switch(db, settings):
     assert "checklist_origin_turn_id" not in frame
     assert [scope["company_id"] for scope in frame["available_scope_refs"]] == ["C002"]
     assert read_turn(db, AUTH, original)["status"] == "waiting_user"
+
+
+@pytest.mark.asyncio
+async def test_monthly_query_and_full_rules_fit_one_bounded_tool_round(db, settings):
+    session = str(create_session(db, AUTH, "C001")["session_id"])
+    turn = accept_turn(db, AUTH, session, uid(), "查询甲企业2026年9月发票总额，并解释适用规则")
+
+    def query_and_rules(payload):
+        state = json.loads(payload["messages"][0]["content"].split("\n正式状态：\n")[1])
+        scope = state["request_frame"]["available_scope_refs"][0]
+        args = {k: scope[k] for k in ("company_id", "period", "scope_ref")}
+        return {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                *tool("query_month", {**args, "metrics": ["invoice_total"]})["tool_calls"],
+                *tool("get_rules", {**args, "topics": ["amounts", "purpose", "bank"]})[
+                    "tool_calls"
+                ],
+            ],
+        }
+
+    def final(payload):
+        outputs = [json.loads(m["content"]) for m in payload["messages"] if m["role"] == "tool"]
+        assert [o["data"]["kind"] for o in outputs] == ["monthly_summary", "rules"]
+        assert all("full_text" not in ref for ref in outputs[0]["data"]["rule_refs"])
+        assert all(rule["full_text"] for rule in outputs[1]["data"]["rules"])
+        return raw_final(
+            [
+                {"type": "result", "result_ref": o["result_ref"], "view": o["data"]["kind"]}
+                for o in outputs
+            ]
+        )
+
+    limited = model_settings(settings).model_copy(update={"input_budget": 15100})
+    runtime = Runtime(db, limited, ExactModel([query_and_rules, final]))
+    await runtime.run(runtime.claim())
+    result = read_turn(db, AUTH, turn["turn_id"])
+    assert result["status"] == "completed", result["error"]
+    summary = next(c for c in result["final_cards"] if c["kind"] == "monthly_summary")
+    assert summary["invoice_total"] == "9622.06"
+    assert all(ref["full_text"] for ref in summary["rule_refs"])
+    assert any(c["kind"] == "rules" for c in result["final_cards"])

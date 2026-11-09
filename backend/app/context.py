@@ -9,6 +9,7 @@ from app.memory import load_core
 from app.model_requests import build_request
 from app.request_evidence import prepare_frame
 from app.sources import read_source
+from app.tool_projection import project_rule_repeats
 from app.tool_schemas import reference_definitions, tool_definitions
 from app.values import canonical, digest, safe_json
 
@@ -217,6 +218,10 @@ def assemble(
         )
     current = {"role": "user", "content": source["content"]}
     extras = [message for group in groups for message in group["messages"]]
+    tool_positions = [i for i, message in enumerate(extras) if message["role"] == "tool"]
+    tool_outputs = [json.loads(extras[i]["content"]) for i in tool_positions]
+    for i, output in zip(tool_positions, project_rule_repeats(tool_outputs), strict=True):
+        extras[i] = {**extras[i], "content": canonical(output)}
     definitions = tool_definitions()
     items = frame.get("request_items", [])
     if (

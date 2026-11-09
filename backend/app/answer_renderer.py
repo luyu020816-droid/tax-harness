@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from app.errors import AppError
 from app.identity import assert_access
 from app.sources import read_source
+from app.tool_projection import project_rule_repeats
 from app.values import safe_json
 
 
@@ -27,6 +28,7 @@ class RenderedReply:
 
 def _results(conn, execution, payload):
     results = {}
+    observed = []
     for message in payload["messages"]:
         if message.get("role") != "tool":
             continue
@@ -41,9 +43,14 @@ def _results(conn, execution, payload):
             source = read_source(conn, execution.auth, ref)
             if str(source["turn_id"]) != execution.turn_id:
                 continue  # Historical tool evidence cannot authorize this turn's answer.
-            if source["role"] != "tool" or json.loads(source["content"]) != item:
+            if source["role"] != "tool":
                 missing("工具结果与真实来源不一致。")
-            results[ref] = item
+            results[ref] = json.loads(source["content"])
+            observed.append((ref, item))
+    projected = dict(zip(results, project_rule_repeats(list(results.values())), strict=True))
+    for ref, item in observed:
+        if item != results[ref] and item != projected[ref]:
+            missing("工具结果与真实来源不一致。")
     return results
 
 
