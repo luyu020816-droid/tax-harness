@@ -11,6 +11,37 @@ from app.memory_changes import begin_change, finish_change
 from app.values import safe_json, uid
 
 
+def recent_knowledge_documents(conn, execution, company_id):
+    """Find the newest delivered document group in the five preceding turns."""
+    if not company_id:
+        return []
+    assert_access(conn, execution.auth, company_id)
+    rows = conn.execute(
+        "WITH recent AS (SELECT source_seq,final_cards,final_response_ref FROM turns "
+        "WHERE session_id=%s AND user_id=%s AND source_seq<%s AND status IN ('completed','resolved') "
+        "ORDER BY source_seq DESC LIMIT 5), hits AS ("
+        "SELECT r.source_seq,d.document_id,d.title,d.status,d.active_version_id "
+        "FROM recent r JOIN sources s ON s.source_id=r.final_response_ref AND s.recall_state='active' "
+        "CROSS JOIN LATERAL jsonb_array_elements(r.final_cards) AS card "
+        "JOIN retrieval_evidence e ON e.citation_id::text=card->>'citation_id' "
+        "JOIN retrieval_queries q USING(query_id) JOIN knowledge_documents d USING(document_id) "
+        "WHERE card->>'kind'='knowledge_quote' AND q.user_id=%s AND q.session_id=%s AND d.company_id=%s "
+        "AND (d.scope='company' OR d.owner_id=%s)) "
+        "SELECT DISTINCT document_id,title,status,active_version_id FROM hits "
+        "WHERE source_seq=(SELECT max(source_seq) FROM hits) ORDER BY title,document_id",
+        (
+            execution.session_id,
+            execution.auth.user_id,
+            execution.source_seq,
+            execution.auth.user_id,
+            execution.session_id,
+            company_id,
+            execution.auth.user_id,
+        ),
+    ).fetchall()
+    return safe_json(rows)
+
+
 def document_in(conn, auth, document_id, *, manage=False, lock=False):
     row = conn.execute(
         "SELECT * FROM knowledge_documents WHERE document_id=%s" + (" FOR UPDATE" if lock else ""),

@@ -7,7 +7,7 @@ from app.identity import owned
 from app.sources import read_source
 
 
-def groups(db, execution, covered=(), *, excluded=None):
+def groups(db, execution, covered=(), *, excluded=None, preserve_recent=0):
     covered = {str(r["source_id"]) for r in covered}
     result = []
     excluded = [] if excluded is None else excluded
@@ -78,15 +78,23 @@ def groups(db, execution, covered=(), *, excluded=None):
                         raise
                     excluded.append({"turn_id": str(row["turn_id"]), "reason": exc.code})
                     continue
-                if user_text is None or not refs or all(r["source_id"] in covered for r in refs):
+                if user_text is None or not refs:
+                    continue
+                is_covered = all(r["source_id"] in covered for r in refs)
+                if is_covered and not preserve_recent:
                     continue
                 messages = [{"role": "user", "content": user_text}]
+                dialogue_refs = list(refs)
                 # Historical tools are historical evidence, never replayed side effects.
-                events = conn.execute(
-                    "SELECT e.payload,e.run_id FROM run_events e JOIN runs r USING(run_id) "
-                    "WHERE e.turn_id=%s AND e.kind='model_finished' AND r.final_source_id IS NOT NULL ORDER BY e.event_seq",
-                    (row["turn_id"],),
-                ).fetchall()
+                events = (
+                    []
+                    if is_covered
+                    else conn.execute(
+                        "SELECT e.payload,e.run_id FROM run_events e JOIN runs r USING(run_id) "
+                        "WHERE e.turn_id=%s AND e.kind='model_finished' AND r.final_source_id IS NOT NULL ORDER BY e.event_seq",
+                        (row["turn_id"],),
+                    ).fetchall()
+                )
                 for event in events:
                     message = deepcopy(event["payload"].get("message") or {})
                     calls = message.get("tool_calls") or []
@@ -167,7 +175,10 @@ def groups(db, execution, covered=(), *, excluded=None):
                         "turn_id": str(row["turn_id"]),
                         "source_seq": row["source_seq"],
                         "sources": refs,
+                        "dialogue_sources": dialogue_refs,
+                        "covered": is_covered,
                         "messages": messages,
                     }
                 )
-    return result
+    protected_from = max(0, len(result) - preserve_recent)
+    return [g for index, g in enumerate(result) if not g["covered"] or index >= protected_from]

@@ -61,6 +61,10 @@ class ToolExecutor:
                 raise AppError("INVALID_ARGUMENT", "工具未在允许列表中。")
             parsed = TOOLS[name][0].model_validate(arguments)
             arguments = parsed.model_dump(mode="json", exclude_unset=True)
+            if name == "lookup_knowledge":
+                arguments = arguments["request"]
+                source_type = arguments.pop("source_type")
+                name = "get_rules" if source_type == "rules" else "search_knowledge"
         except (ValueError, TypeError, ValidationError, AppError) as exc:
             error = (
                 exc
@@ -298,8 +302,34 @@ class ToolExecutor:
         if name == "read_evidence":
             return self.retrieval.read(auth, args["citation_id"])
         if name == "search_knowledge":
+            from app.knowledge import recent_knowledge_documents, upload_metadata
+
+            follow_up = args.pop("follow_up", False)
             with db.transaction(readonly=True) as conn:
                 source = read_source(conn, auth, execution.source_id)
+                turn = conn.execute(
+                    "SELECT knowledge_upload_ids FROM turns WHERE turn_id=%s", (execution.turn_id,)
+                ).fetchone()
+                if turn["knowledge_upload_ids"]:
+                    metadata = upload_metadata(
+                        conn, auth, str(turn["knowledge_upload_ids"][0]), args["company_id"]
+                    )
+                    args["document_ids"] = [metadata["document_id"]]
+                elif follow_up:
+                    candidates = recent_knowledge_documents(conn, execution, args["company_id"])
+                    selected = args.get("document_ids") or []
+                    if selected:
+                        candidates = [c for c in candidates if c["document_id"] in selected]
+                    if len(candidates) != 1:
+                        raise AppError("NEEDS_CLARIFICATION", "请确认要继续查询哪一份资料。", 422)
+                    if (
+                        candidates[0]["status"] != "active"
+                        or not candidates[0]["active_version_id"]
+                    ):
+                        raise AppError(
+                            "SOURCE_INVALIDATED", "上次的资料已停用或没有有效版本。", 409
+                        )
+                    args["document_ids"] = [candidates[0]["document_id"]]
                 if args.get("period"):
                     validate_scope(
                         conn, execution, args.get("scope_ref"), args["company_id"], args["period"]

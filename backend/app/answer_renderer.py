@@ -1,7 +1,9 @@
 """Render program facts and receipts; models select evidence, never invent facts."""
 
 import json
+import re
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 
 from app.errors import AppError
 from app.identity import assert_access
@@ -12,6 +14,49 @@ from app.values import safe_json
 
 def missing(message, *, details=None):
     raise AppError("REPLY_EVIDENCE_MISSING", message, 422, details=details or {})
+
+
+def direct_conversation_topic(text):
+    """Recognize standalone requests whose answers are known to the host."""
+    text = re.sub(r"[\s？?。！!，,]", "", text)
+    text = re.sub(r"^(?:请问|请告诉我)", "", text)
+    match = re.fullmatch(
+        r"(今天|明天)(?:是?(?:星期几|周几|几号|什么日期|哪一天)(?:具体日期|几月几号|几号|星期几|周几)?|的?具体日期)",
+        text,
+    )
+    if match:
+        return "today" if match[1] == "今天" else "tomorrow"
+    if text in {"卡了", "卡了吗", "卡住了吗", "刚才卡了吗", "刚才卡住了吗", "是不是卡了"}:
+        return "previous_turn_status"
+    if text in {"你能做什么", "你可以做什么", "你有什么功能", "你能帮我做什么"}:
+        return "capabilities"
+    return None
+
+
+def _conversation_answer(conn, execution, topic, frame):
+    if topic == "capabilities":
+        return "我可以查比赛样例里的发票和银行收支，解释适用规则，检查并补充发票用途或备注，也能继续你尚未完成的任务。"
+    if topic in ("today", "tomorrow"):
+        day = date.fromisoformat(frame["current_date"])
+        if topic == "tomorrow":
+            day += timedelta(days=1)
+        label = "今天" if topic == "today" else "明天"
+        return f"{label}是 {day.year} 年 {day.month} 月 {day.day} 日，星期{'一二三四五六日'[day.weekday()]}。"
+    previous = conn.execute(
+        "SELECT status FROM turns WHERE session_id=%s AND user_id=%s AND source_seq<%s "
+        "AND status<>'deleted' ORDER BY source_seq DESC LIMIT 1",
+        (execution.session_id, execution.auth.user_id, execution.source_seq),
+    ).fetchone()
+    return {
+        "completed": "上一轮已完成。",
+        "resolved": "上一轮已在后续回复中处理。",
+        "waiting_user": "上一轮在等你补充信息。",
+        "failed": "上一轮处理失败，未正常答完。可以在运行洞察查看原因。",
+        "cancelled": "上一轮已取消。",
+        "interrupted": "上一轮已中断。",
+        "queued": "上一轮仍在排队。",
+        "running": "上一轮仍在处理。",
+    }.get(previous["status"] if previous else None, "当前会话没有可核对的上一轮处理状态。")
 
 
 @dataclass
@@ -373,6 +418,8 @@ def render(conn, execution, plan, payload, manifest):
                     text, card = _result_text(child["data"], "purpose_check")
                     texts.append(text)
                     reply.cards.append(safe_json(card))
+        elif block.type == "conversation_answer":
+            texts.append(_conversation_answer(conn, execution, block.topic, state["request_frame"]))
         elif block.type == "knowledge_quote":
             for text, card in _knowledge_quotes(conn, execution, str(block.citation_id), outputs):
                 texts.append(text)
@@ -795,6 +842,7 @@ def _clarification(conn, execution, item, state, outputs):
         "purpose": "请按发票编号提供实际用途。",
         "note": "请提供需要填写的备注。",
         "intent": "请说明本轮需要办理的事项。",
+        "target": "你指的是哪一份资料或哪一条规则？",
         "write_confirmation": "请核对修改卡片后本人确认。",
     }
     return item.model_copy(

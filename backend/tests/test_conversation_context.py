@@ -350,7 +350,7 @@ async def test_multiple_compactions_keep_old_sources_readable(db, settings, exec
     assert manifest["summary_id"]
     await compact(db, model_settings(settings), ScriptedModel([summarize]), execution, raw[10:], 1)
     _, manifest, _ = context.assemble(db, model_settings(settings), execution, [])
-    assert manifest["raw_group_count"] == 0
+    assert manifest["raw_group_count"] == 5
     assert read_page(db, execution, source_id=ids[0][0])["excerpt"].startswith(
         "旧方案事实编号-ROUND-0"
     )

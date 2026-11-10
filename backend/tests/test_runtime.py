@@ -163,6 +163,71 @@ async def test_B15_actual_query_tool_loop_and_trace(db, settings, admin):
 
 
 @pytest.mark.asyncio
+async def test_calendar_question_does_not_dispatch_search(db, settings):
+    session = str(create_session(db, AUTH, "C001")["session_id"])
+    turn = accept_turn(db, AUTH, session, uid(), "今天星期几，具体日期")
+    model = ScriptedModel([])
+    runtime = Runtime(db, model_settings(settings), model)
+    await runtime.run(runtime.claim())
+    result = read_turn(db, AUTH, turn["turn_id"])
+    assert result["status"] == "completed", result
+    assert result["final_message"].startswith("今天是 ")
+    assert "星期" in result["final_message"]
+    assert not model.requests
+
+
+@pytest.mark.asyncio
+async def test_rule_followup_refreshes_historical_tool_result(db, settings):
+    session = str(create_session(db, AUTH, "C001")["session_id"])
+
+    def select_latest_rules(payload):
+        for message in reversed(payload["messages"]):
+            if message["role"] != "tool":
+                continue
+            result = json.loads(message["content"])
+            if (result.get("data") or {}).get("kind") == "rules":
+                return {
+                    "role": "assistant",
+                    "content": json.dumps(
+                        {
+                            "blocks": [
+                                {
+                                    "type": "result",
+                                    "view": "rules",
+                                    "result_ref": result["result_ref"],
+                                }
+                            ]
+                        }
+                    ),
+                }
+        pytest.fail("Model did not receive a rule result")
+
+    first = accept_turn(db, AUTH, session, uid(), "甲企业2026年9月发票用途有什么要求？")
+    model = ScriptedModel(
+        [
+            tool("get_rules", {"company_id": "C001", "period": "2026-09", "topics": ["purpose"]}),
+            select_latest_rules,
+            select_latest_rules,
+            select_latest_rules,
+        ]
+    )
+    runtime = Runtime(db, model_settings(settings), model)
+    await runtime.run(runtime.claim())
+    assert read_turn(db, AUTH, first["turn_id"])["status"] == "completed"
+    followup = accept_turn(db, AUTH, session, uid(), "为什么？")
+    execution = runtime.claim()
+    await runtime.run(execution)
+    result = read_turn(db, AUTH, followup["turn_id"])
+    assert result["status"] == "completed", result
+    assert "2.0版" in result["final_message"]
+    with db.transaction(readonly=True) as conn:
+        calls = conn.execute(
+            "SELECT name,state FROM tool_executions WHERE run_id=%s", (execution.run_id,)
+        ).fetchall()
+    assert calls == [{"name": "get_rules", "state": "done"}]
+
+
+@pytest.mark.asyncio
 async def test_M04_check_creates_task_and_new_session_recovers(db, settings):
     session = create_session(db, AUTH, "C001")
     turn = accept_turn(db, AUTH, str(session["session_id"]), uid(), "检查甲企业2026-09用途缺项")

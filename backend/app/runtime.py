@@ -7,7 +7,7 @@ import psycopg
 from pydantic import ValidationError
 
 from app import context, tasks
-from app.answer_renderer import render
+from app.answer_renderer import direct_conversation_topic, render
 from app.config import Settings
 from app.errors import AppError
 from app.events import emit
@@ -308,6 +308,71 @@ class Runtime:
                 proactive_compact=proactive_compact,
             )
 
+    def _refresh_selected_rules(self, execution, plan, payload, manifest):
+        """Re-read a historical rule the model selected, using a current scope binding."""
+        if len(plan.blocks) != 1 or plan.clarification or plan.resume_turn_id:
+            return None
+        block = plan.blocks[0]
+        if block.type != "result" or block.view != "rules":
+            return None
+        result_ref = str(block.result_ref)
+        historical = next(
+            (
+                json.loads(message["content"])
+                for message in payload["messages"]
+                if message["role"] == "tool" and result_ref in message["content"]
+            ),
+            {},
+        )
+        if historical.get("result_ref") != result_ref or not historical.get("ok"):
+            return None
+        data = historical.get("data") or {}
+        if data.get("kind") != "rules":
+            return None
+        with self.db.transaction(readonly=True) as conn:
+            source = read_source(conn, execution.auth, result_ref)
+            if source["role"] != "tool" or str(source["turn_id"]) == execution.turn_id:
+                return None
+            original = json.loads(source["content"])
+        if original != historical:
+            return None
+        scope = next(
+            (
+                item
+                for item in manifest["request_frame"]["available_scope_refs"]
+                if item["company_id"] == data["company_id"] and item["period"] == data["period"]
+            ),
+            None,
+        )
+        topics = list(dict.fromkeys(rule["topic"] for rule in data["rules"]))
+        if not scope or not topics:
+            return None
+        call = {
+            "id": f"refresh-rule:{result_ref}",
+            "type": "function",
+            "function": {
+                "name": "get_rules",
+                "arguments": canonical(
+                    {
+                        "company_id": scope["company_id"],
+                        "period": scope["period"],
+                        "scope_ref": scope["scope_ref"],
+                        "topics": topics,
+                    }
+                ),
+            },
+        }
+        output, ref = self.tools.execute(execution, call)
+        return {
+            "messages": [
+                {"role": "assistant", "content": None, "tool_calls": [call]},
+                {"role": "tool", "tool_call_id": call["id"], "content": canonical(output)},
+            ],
+            "sources": [ref],
+            "results": [output],
+            "memory_epoch": execution.expected_epoch,
+        }
+
     async def _loop(self, execution):
         from types import SimpleNamespace
 
@@ -427,6 +492,18 @@ class Runtime:
                     422,
                 )
             execution.observed_heads = manifest["heads"]
+            if step == 1 and not groups:
+                current = payload["messages"][-1]["content"]
+                topic = direct_conversation_topic(current)
+                if topic and not manifest["request_frame"].get("request_items"):
+                    from app.telemetry import phase
+
+                    reply = FinalReply.model_validate(
+                        {"blocks": [{"type": "conversation_answer", "topic": topic}]}
+                    )
+                    with phase(self.db, execution, "conversation:" + uid(), "host", "处理普通问答"):
+                        await asyncio.to_thread(self.finish, execution, reply, payload, manifest)
+                    return
             with self.db.transaction() as conn:
                 context.validate(self.db, execution, payload, manifest, conn=conn)
                 context_id = record_context(conn, execution, step, payload, manifest)
@@ -505,12 +582,28 @@ class Runtime:
                 if isinstance(exc, AppError) and exc.code != "REPLY_EVIDENCE_MISSING":
                     raise
                 if reply_retries >= 2:
+                    if isinstance(exc, AppError):
+                        raise
                     raise AppError(
                         "MODEL_PROTOCOL_UNSUPPORTED",
                         "模型最终答复格式无效，未把它当作成功结果。",
                         422,
                     ) from exc
                 reply_retries += 1
+                if isinstance(exc, AppError) and reply_retries == 1 and not groups:
+                    refreshed = await asyncio.to_thread(
+                        self._refresh_selected_rules, execution, reply, payload, manifest
+                    )
+                    if refreshed is not None:
+                        groups.append(refreshed)
+                        tool_count += 1
+                        if refreshed["results"][0]["ok"]:
+                            exc.details["current_rule_result_ref"] = refreshed["results"][0][
+                                "result_ref"
+                            ]
+                            exc.details["instruction"] = (
+                                "已重新查询规则。请直接使用新结果编号回答，无需再次查询。"
+                            )
                 if isinstance(exc, ValidationError):
                     feedback = [
                         {"field": ".".join(str(x) for x in e["loc"]), "message": e["msg"]}
