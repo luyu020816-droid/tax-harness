@@ -408,6 +408,18 @@ def render(conn, execution, plan, payload, manifest):
     state = json.loads(payload["messages"][0]["content"].split("\n正式状态：\n", 1)[1])
     reply = RenderedReply("", plan.status, plan.clarification, plan.resume_turn_id)
     texts, rule_rows = [], []
+    web_refs = {
+        ref
+        for ref, item in outputs.items()
+        if item.get("ok") and (item.get("data") or {}).get("kind") == "public_web"
+    }
+    delivered_web = {
+        str(block.result_ref)
+        for block in plan.blocks
+        if block.type == "result" and block.view == "public_web"
+    }
+    if web_refs - delivered_web:
+        missing("答复遗漏本轮公开查询结果，请用public_web视图及其真实编号交付。")
     for item in outputs.values():
         if item.get("ok"):
             d = item.get("data") or {}
@@ -418,6 +430,11 @@ def render(conn, execution, plan, payload, manifest):
             if not output or not output.get("ok"):
                 missing("只能选择本轮实际入模的成功工具结果。")
             data = output["data"]
+            if block.view == "public_web" and data.get("clarification_turn_id"):
+                origin = data["clarification_turn_id"]
+                if reply.resume_turn_id and str(reply.resume_turn_id) != origin:
+                    missing("续问编号不匹配已核验的天气地点。")
+                reply.resume_turn_id = origin
             if block.view == "history_page":
                 if data.get("kind") not in ("history_search", "conversation_search") or (
                     data.get("kind") == "history_search" and data.get("retrieval_mode") != "date"
@@ -524,6 +541,18 @@ def render(conn, execution, plan, payload, manifest):
                     reply.cards.append(safe_json(card))
         elif block.type == "conversation_answer":
             texts.append(_conversation_answer(conn, execution, block.topic, state["request_frame"]))
+        elif block.type == "chat_answer":
+            text = block.text.strip()
+            if not text or re.search(
+                r"\bC\d{3,}\b|\bF\d{3,}\b|\bR\d{3,}\b|[￥¥]|\d[\d,.]*\s*(?:元|万元|°C|摄氏度)|"
+                r"已(?:经)?(?:保存|修改|核验|入库|提交|写入|更新|查询到)|保存成功|规则版本|发票总额",
+                text,
+                re.I,
+            ):
+                missing("普通答复只能用于交流，请用可核验的结果块表达具体事实或操作状态。")
+            if (state["request_frame"].get("request_items") or outputs) and len(plan.blocks) == 1:
+                missing("普通答复不能代替本轮业务、知识或联网结果。")
+            texts.append(text)
         elif block.type == "knowledge_quote":
             for text, card in _knowledge_quotes(conn, execution, str(block.citation_id), outputs):
                 texts.append(text)
@@ -587,6 +616,8 @@ def render(conn, execution, plan, payload, manifest):
                 c.get("quote_start"),
                 c.get("quote_end"),
                 c.get("query_id"),
+                c.get("query") if c["kind"] == "public_web" else None,
+                c.get("metric") if c["kind"] == "public_web" else None,
             ): c
             for c in reply.cards
         }.values()
@@ -830,6 +861,18 @@ def _explanation(conn, execution, code, outputs, rules, state):
                     "retry_search_required": False,
                 },
             )
+        source = read_source(conn, execution.auth, execution.source_id, allow_suppressed=True)
+        if code == "acknowledged":
+            if not outputs and re.search(
+                r"[？?]|有(?:什么|没有)|为什么|怎么(?:样|办)|推荐|什么是", source["content"]
+            ):
+                missing("本轮有明确问题。请实际回答，普通对话可使用chat_answer。")
+            return "收到。"
+        if not re.search(
+            r"(?:没|未|是否|不要|别|没有).{0,8}(?:修改|保存|写入)|(?:修改|保存|写入).{0,5}(?:了吗|没有)",
+            source["content"],
+        ):
+            missing("本轮没有要求说明修改状态。请回答用户实际提出的问题。")
         return "本轮未修改发票数据。"
     if code == "independent_totals":
         return "发票总额、银行收入和银行支出分别统计，不要求相等，也不据此推断付款或欠款。"
@@ -841,21 +884,12 @@ def _explanation(conn, execution, code, outputs, rules, state):
         if not (re.search(edit, content, re.I) and re.search(field, content, re.I)):
             missing("本轮没有要求修改字段。请回答本轮问题，或如实说明当前能力限制。")
         return "本系统只允许按明确要求修改发票用途和备注，其他发票字段及银行记录不可修改。"
-    if code in ("public_web_unavailable", "public_weather_period"):
-        from app import public_web
-
-        request, _ = public_web.current_request(
-            conn, execution, state["request_frame"]["current_date"]
-        )
-        if not request:
-            missing("本轮没有可核实的公开查询请求。")
-        if code == "public_weather_period":
-            if not request.get("unsupported_weather_period"):
-                missing("本轮没有超出当前支持范围的天气日期。")
-            return "我目前可以查今天、明天和后天的天气预报。"
-        if "PUBLIC_WEB_UNAVAILABLE" in errors:
-            return "联网查询暂时不可用，请稍后再试。"
-        return "当前工作台没有开启联网查询，暂时查不到这项实时信息。"
+    if code == "public_web_scope_required" and "PUBLIC_WEB_SCOPE_REQUIRED" in errors:
+        return "请明确要联网查的公开信息，或直接提供要查询的城市。"
+    if code == "public_web_unavailable" and "PUBLIC_WEB_UNAVAILABLE" in errors:
+        return "联网查询暂时不可用，请稍后再试。"
+    if code == "public_weather_period" and "PUBLIC_WEB_WEATHER_PERIOD" in errors:
+        return "我目前可以查今天、明天和后天的天气预报。"
     if code == "cannot_infer_payment":
         return "现有发票与银行资料没有逐票付款关联，不能判断哪些发票已付款或欠款。"
     if code == "read_only":
@@ -923,12 +957,11 @@ def _clarification(conn, execution, item, state, outputs):
     source = read_source(conn, execution.auth, execution.source_id, allow_suppressed=True)
     fields = set(item.missing_fields)
     if fields == {"location"} and item.intent == "other":
-        from app import public_web
-
-        request, _ = public_web.current_request(
-            conn, execution, state["request_frame"]["current_date"]
+        city_required = any(
+            (output.get("error") or {}).get("code") == "PUBLIC_WEB_CITY_REQUIRED"
+            for output in outputs.values()
         )
-        if not request or not request.get("weather_date") or request["query"]:
+        if not city_required:
             missing("没有需要补充城市的天气请求。")
         return item.model_copy(
             update={"company_id": None, "period": None, "summary": "你想查哪个城市的天气？"}

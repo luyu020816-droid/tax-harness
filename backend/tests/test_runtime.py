@@ -176,6 +176,28 @@ async def test_calendar_question_does_not_dispatch_search(db, settings):
     assert not model.requests
 
 
+def answer_plan(**plan):
+    return {"role": "assistant", "content": json.dumps(plan, ensure_ascii=False)}
+
+
+@pytest.mark.asyncio
+async def test_chat_question_retries_irrelevant_acknowledgement(db, settings):
+    session = create_session(db, AUTH, "C001")
+    turn = accept_turn(db, AUTH, str(session["session_id"]), uid(), "我有点无聊，推荐我做点事")
+    model = ScriptedModel(
+        [
+            answer_plan(blocks=[{"type": "explanation", "code": "acknowledged"}]),
+            answer_plan(blocks=[{"type": "chat_answer", "text": "可以听首歌，或者出门散散步。"}]),
+        ]
+    )
+    runtime = Runtime(db, model_settings(settings), model)
+    await runtime.run(runtime.claim())
+    row = read_turn(db, AUTH, turn["turn_id"])
+    assert row["status"] == "completed", row
+    assert row["final_message"] == "可以听首歌，或者出门散散步。"
+    assert len(model.requests) == 2
+
+
 @pytest.mark.asyncio
 async def test_public_weather_asks_for_city_then_searches_and_follows_up(db, settings, monkeypatch):
     from app import public_web
@@ -204,50 +226,105 @@ async def test_public_weather_asks_for_city_then_searches_and_follows_up(db, set
     session = str(create_session(db, AUTH, "C001")["session_id"])
     runtime = Runtime(
         db,
-        model_settings(settings).model_copy(update={"public_web_enabled": True}),
+        model_settings(settings).model_copy(
+            update={
+                "public_web_enabled": True,
+                "context_auto_compact": False,
+                "input_budget": 32000,
+            }
+        ),
         ScriptedModel([]),
     )
 
-    async def ask(text):
+    def delivered(payload):
+        output = json.loads(payload["messages"][-1]["content"])
+        assert output["ok"], output
+        return answer_plan(
+            blocks=[{"type": "result", "view": "public_web", "result_ref": output["result_ref"]}],
+        )
+
+    async def ask(
+        text, *, city=None, days_ahead=0, metric="overview", answer=delivered, kind="weather"
+    ):
+        runtime.model.steps = iter(
+            [
+                tool(
+                    "search_public_web",
+                    {
+                        "kind": kind,
+                        "question": text,
+                        "city": city,
+                        "days_ahead": days_ahead,
+                        "metric": metric,
+                    },
+                ),
+                answer,
+            ]
+        )
         turn = accept_turn(db, AUTH, session, uid(), text)
         await runtime.run(runtime.claim())
         return read_turn(db, AUTH, turn["turn_id"])
 
-    clarification = await ask("今天天气怎么样")
+    clarification = await ask(
+        "今天天气怎么样",
+        answer=answer_plan(
+            blocks=[],
+            status="waiting_user",
+            clarification={"intent": "other", "missing_fields": ["location"]},
+        ),
+    )
     assert clarification["status"] == "waiting_user"
     assert clarification["final_message"] == "你想查哪个城市的天气？"
     assert not requests
-    result = await ask("南京")
+    result = await ask("南京", city="南京")
     assert result["status"] == "completed"
     assert result["final_message"].startswith("南京今天是阴天，气温约 9°C，预计 8–18°C。")
     assert result["continuation_of_turn_id"] == clarification["turn_id"]
-    for question, expected in (
-        ("最低温度", "南京今天最低气温约 8°C。"),
-        ("那最高呢", "南京今天最高气温约 18°C。"),
-        ("那湿度呢", "南京今天湿度为 66%。"),
-        ("那明天呢", "南京明天是阴天，预计 8–18°C。"),
-        ("最低温度", "南京明天最低气温约 8°C。"),
-        ("会不会下雨", "这份预报没有给出南京明天的降雨概率。"),
-        ("换成上海呢", "上海明天是阴天，预计 8–18°C。"),
-        ("现在多少度", "上海今天气温约 9°C。"),
+    for question, city, days, metric, expected in (
+        ("最低温度", "南京", 0, "low", "南京今天最低气温约 8°C。"),
+        ("那最高呢", "南京", 0, "high", "南京今天最高气温约 18°C。"),
+        ("那湿度呢", "南京", 0, "humidity", "南京今天湿度为 66%。"),
+        ("那明天呢", "南京", 1, "overview", "南京明天是阴天，预计 8–18°C。"),
+        ("最低温度", "南京", 1, "low", "南京明天最低气温约 8°C。"),
+        ("会不会下雨", "南京", 1, "rain", "这份预报没有给出南京明天的降雨概率。"),
+        ("换成上海呢", "上海", 1, "overview", "上海明天是阴天，预计 8–18°C。"),
+        ("现在多少度", "上海", 0, "current", "上海今天气温约 9°C。"),
     ):
-        result = await ask(question)
+        result = await ask(question, city=city, days_ahead=days, metric=metric)
         assert result["status"] == "completed", result
         assert result["final_message"].startswith(expected), result
         assert "[天气来源]" in result["final_message"]
-    previous = requests[-1]
-    assert public_web.request("发票金额最低", "2026-11-10", previous) is None
-    assert public_web.request("联网查一下企业发票 F002 的金额", "2026-11-10") is None
     count = len(requests)
-    result = await ask("上海下周天气怎么样")
+    result = await ask(
+        "上海下周天气怎么样",
+        city="上海",
+        answer=answer_plan(
+            blocks=[{"type": "explanation", "code": "public_weather_period"}],
+        ),
+    )
     assert "今天、明天和后天" in result["final_message"]
+    result = await ask(
+        "不要联网查一下公司内部口令",
+        kind="search",
+        answer=answer_plan(
+            blocks=[{"type": "explanation", "code": "public_web_scope_required"}],
+        ),
+    )
+    assert result["status"] == "completed"
     assert len(requests) == count
 
     def unavailable(_request):
         raise AppError("PUBLIC_WEB_UNAVAILABLE", "联网查询暂时不可用，请稍后再试。", 503)
 
     monkeypatch.setattr(public_web, "search", unavailable)
-    result = await ask("南京明天最低温度")
+    result = await ask(
+        "南京明天最低温度",
+        city="南京",
+        days_ahead=1,
+        answer=answer_plan(
+            blocks=[{"type": "explanation", "code": "public_web_unavailable"}],
+        ),
+    )
     assert result["status"] == "completed", result
     assert result["final_message"] == "联网查询暂时不可用，请稍后再试。"
 

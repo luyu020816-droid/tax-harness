@@ -9,30 +9,14 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from app.errors import AppError
+from app.sources import read_source
 
 ENDPOINT = "https://mcp.exa.ai/mcp?tools=web_search_exa"
 _CITY = r"[\u4e00-\u9fff]{2,12}|[A-Za-z][A-Za-z .-]{1,30}"
-_WEATHER_TERMS = {
-    "overview": r"天气(?:预报)?",
-    "low": r"最低(?:气温|温度|温|多少度|几度)?|低温",
-    "high": r"最高(?:气温|温度|温|多少度|几度)?|高温",
-    "feels": r"体感(?:气温|温度)?",
-    "rain": r"降雨概率|下雨概率|降雨|下雨|降水",
-    "humidity": r"湿度",
-    "wind": r"风速|风力|风大",
-    "current": r"当前气温|气温|温度|多少度|几度",
-}
-_WEATHER = re.compile(
-    r"(?P<place>.*?)"
-    + "(?:"
-    + "|".join(f"(?P<{field}>{pattern})" for field, pattern in _WEATHER_TERMS.items())
-    + r")(?:大概|预计)?(?:怎么样|如何|呢|吗|多少度|几度|多少|是多少度?|是几度|多大)?"
-)
 _DAYS = ("今天", "明天", "后天")
 _OTHER_DATES = re.compile(
     r"大后天|昨[天日]|前天|上周|下周|周末|星期[一二三四五六日天]|\d+[月日号]|\d{4}-\d{1,2}-\d{1,2}"
 )
-_NO_CITY_REPLY = {"谢谢", "不用了", "算了", "不了", "随便", "不知道", "取消", "好的", "可以"}
 _PUBLIC = re.compile(
     r"(?:请)?(?:帮我)?(?:联网|上网)(?:搜索|查询|查一下|搜一下|查|搜)\s*[:：]?\s*(.{1,200})"
 )
@@ -40,119 +24,113 @@ _PRIVATE = re.compile(
     r"发票|税号|开户|银行|企业|公司|知识库|上传|附件|上[一个]轮|刚才|密码|密钥|"
     r"(?i:invoice|password|api.?key)|\d{7,}|[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}"
 )
+_WEATHER_EVIDENCE = re.compile(
+    r"天气|气温|温度|温差|几度|冷热|下雨|下雪|雨伞|淋雨|降雨|降水|阴晴|多云|湿度|风速|风力|风大|体感|(?i:\bweather\b)"
+)
+_WEATHER_FOLLOWUP = re.compile(r"最低|最高|多低|多高|今天|明天|后天|换成|换到|改查|现在")
 
 
-def request(text, today, previous=None):
-    text = text.strip().strip("？?。！!").strip()
-    previous = previous or {}
-    explicit = _PUBLIC.fullmatch(text)
-    if explicit:
-        query = explicit[1].strip()
-        return {"query": query} if query and not _PRIVATE.search(query) else None
-    city, relative, metric = "", None, "overview"
-    target = None
-    weather_text = re.sub(
-        r"^(?:请问|请帮我查一下|帮我查一下|查一下|那么|那(?=今天|明天|后天|最低|最高|温度|气温|体感|湿度|风|会|下雨))",
-        "",
-        text,
-    ).strip()
-    weather_text = weather_text.replace("今日", "今天").replace("明日", "明天")
-    if match := _WEATHER.fullmatch(weather_text):
-        metric = match.lastgroup
-        prefix = match["place"].strip()
-        if _PRIVATE.search(prefix):
-            return None
-        if _OTHER_DATES.search(prefix):
-            return {"query": "", "unsupported_weather_period": True}
-        if metric == "rain":
-            prefix = re.sub(r"(?:会不会|会|要不要|要)$", "", prefix)
-        now = None
-        if metric == "current":
-            now = re.search(r"(?:现在|此刻|目前)$", prefix)
-            prefix = re.sub(r"(?:现在|此刻|目前)$", "", prefix)
-        relative = next((day for day in _DAYS if day in prefix), None)
-        city = (prefix.replace(relative, "", 1) if relative else prefix).strip()
-        relative = relative or ("今天" if now else None)
-        city = city.removesuffix("的").strip()
-        if city in {"这里", "当地", "这边"}:
-            city = ""
-        if city and not re.fullmatch(_CITY, city):
-            return None
-        if not city and not relative and not previous and match[metric] in {"最低", "最高"}:
-            return None
-        target = previous.get("weather_date") if not relative else None
-        city = city or previous.get("city", "")
-        relative = relative or previous.get("relative", "今天")
-    elif (follow := re.fullmatch(r"(?:那|那么)?(今天|明天|后天)呢", text)) and previous.get("city"):
-        city, relative = previous["city"], follow[1]
-    elif previous.get("missing_city"):
-        location = re.fullmatch(rf"(?:我在|查一下|查)?({_CITY})(?:市)?", text)
-        if location and text not in _NO_CITY_REPLY:
-            city, relative, metric = location[1], previous["relative"], previous["metric"]
-            target = previous["weather_date"]
-    elif previous.get("city") and (
-        change := re.fullmatch(rf"(?:换成|换到|改查)\s*({_CITY})(?:呢)?", text)
-    ):
-        city, relative = change[1].removesuffix("呢"), previous["relative"]
-        target = previous["weather_date"]
-    if relative:
-        if _PRIVATE.search(city):
-            return None
-        if not target:
-            target = (date.fromisoformat(today) + timedelta(days=_DAYS.index(relative))).isoformat()
-        return {
-            "city": city,
-            "relative": relative,
-            "weather_date": target,
-            "metric": metric,
-            "query": f"{city} {relative} {target} weather forecast" if city else "",
-        }
-    return None
-
-
-def current_request(conn, execution, today=None):
+def authorized_query(conn, execution, args):
     current = conn.execute(
-        "SELECT text,created_at,upload_ids,knowledge_upload_ids FROM turns WHERE turn_id=%s AND user_id=%s",
-        (execution.turn_id, execution.auth.user_id),
+        "SELECT text,created_at,upload_ids,knowledge_upload_ids FROM turns "
+        "WHERE turn_id=%s AND user_id=%s AND session_id=%s",
+        (execution.turn_id, execution.auth.user_id, execution.session_id),
     ).fetchone()
-    if not current or current["upload_ids"] or current["knowledge_upload_ids"]:
-        return None, None
-    today = today or current["created_at"].astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
-    explicit = request(current["text"], today)
-    if explicit and (explicit["query"] or explicit.get("unsupported_weather_period")):
-        return explicit, None
-    if not explicit and not re.fullmatch(
-        rf"(?:我在|查一下|查)?({_CITY})(?:[？?。！!])?", current["text"].strip()
+    question = args["question"].strip()
+    # A quote alone must not let the model strip a negation or quote an example.
+    original = current["text"] if current else ""
+    unquoted = re.sub(r'“[^”]*”|「[^」]*」|『[^』]*』|"[^"]*"', "", original)
+    if (
+        not current
+        or current["upload_ids"]
+        or current["knowledge_upload_ids"]
+        or not question
+        or question not in unquoted
+        or re.search(
+            r"不要|不用|别(?:查|搜|联网)|禁止|无需|不必|不(?:要)?联网|假设|例如|比如", unquoted
+        )
+        or _PRIVATE.search(question)
     ):
-        return None, None
+        raise AppError("PUBLIC_WEB_SCOPE_REQUIRED", "请提供本轮用户明确请求的公开查询原话。", 422)
+    if args["kind"] == "search":
+        explicit = _PUBLIC.fullmatch(question.strip("？?。！!"))
+        if not explicit or not explicit[1].strip():
+            raise AppError("PUBLIC_WEB_SCOPE_REQUIRED", "请确认需要联网查询的公开关键词。", 422)
+        # The transmitted query comes from the user's explicit request, never from model prose.
+        return {"query": explicit[1].strip()}
+
     last = conn.execute(
-        "SELECT turn_id,text,created_at,status,pending_clarification,final_cards FROM turns "
-        "WHERE session_id=%s AND user_id=%s AND source_seq<%s AND status IN ('completed','waiting_user','resolved') "
-        "ORDER BY source_seq DESC LIMIT 1",
+        "SELECT turn_id,text,created_at,status,pending_clarification,final_cards,final_response_ref FROM turns "
+        "WHERE session_id=%s AND user_id=%s AND source_seq<%s "
+        "AND status IN ('completed','waiting_user','resolved') ORDER BY source_seq DESC LIMIT 1",
         (execution.session_id, execution.auth.user_id, execution.source_seq),
     ).fetchone()
     previous, origin = None, None
-    if last and last["status"] == "completed":
+    if last and last["final_response_ref"]:
         previous = next(
             (
                 card
                 for card in last["final_cards"]
-                if card["kind"] == "public_web" and card.get("city") and card.get("weather_date")
+                if card["kind"] == "public_web" and card.get("city")
             ),
             None,
         )
-    elif (
-        last
-        and last["status"] == "waiting_user"
-        and (last["pending_clarification"] or {}).get("missing_fields") == ["location"]
+        if (
+            last["status"] == "waiting_user"
+            and (last["pending_clarification"] or {}).get("missing_fields") == ["location"]
+            and not _WEATHER_EVIDENCE.search(question)
+        ):
+            origin = str(last["turn_id"])
+    city = (args.get("city") or "").strip().removesuffix("的")
+    if origin or (previous and city and city not in question):
+        read_source(conn, execution.auth, str(last["final_response_ref"]))
+    if not (
+        _WEATHER_EVIDENCE.search(question)
+        or (previous and _WEATHER_FOLLOWUP.search(question))
+        or (origin and city and city in question)
     ):
-        original_date = last["created_at"].astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
-        pending = request(last["text"], original_date)
-        if pending and pending.get("weather_date") and not pending["city"]:
-            previous = {**pending, "missing_city": True}
-            if explicit is None:
-                origin = str(last["turn_id"])
-    return request(current["text"], today, previous), origin
+        raise AppError("PUBLIC_WEB_SCOPE_REQUIRED", "本轮缺少可核对的天气请求。", 422)
+    if not city:
+        raise AppError("PUBLIC_WEB_CITY_REQUIRED", "请补充要查询天气的城市。", 422)
+    if (
+        not re.fullmatch(_CITY, city)
+        or _PRIVATE.search(city)
+        or (city not in question and (not previous or city != previous["city"]))
+    ):
+        raise AppError("PUBLIC_WEB_SCOPE_REQUIRED", "请确认用户提供的城市名称。", 422)
+    if _OTHER_DATES.search(question):
+        raise AppError("PUBLIC_WEB_WEATHER_PERIOD", "目前可查今天、明天和后天的天气。", 422)
+    today = current["created_at"].astimezone(ZoneInfo("Asia/Shanghai")).date()
+    offset = args.get("days_ahead", 0)
+    explicit_day = next((index for index, word in enumerate(_DAYS) if word in question), None)
+    if explicit_day is not None and explicit_day != offset:
+        raise AppError(
+            "PUBLIC_WEB_SCOPE_REQUIRED", "预报日期与本轮问句不一致，请按明确日期查询。", 422
+        )
+    if explicit_day is None and re.search(r"现在|此刻|目前", question):
+        offset = 0
+    elif explicit_day is None and origin:
+        prior_day = next((i for i, word in enumerate(_DAYS) if word in last["text"]), 0)
+        prior_today = last["created_at"].astimezone(ZoneInfo("Asia/Shanghai")).date()
+        offset = (prior_today + timedelta(days=prior_day) - today).days
+    elif (
+        explicit_day is None
+        and previous
+        and previous.get("weather_date")
+        and (city not in question or re.search(r"换成|换到|改查", question))
+    ):
+        offset = (date.fromisoformat(previous["weather_date"]) - today).days
+    if offset not in range(len(_DAYS)):
+        raise AppError("PUBLIC_WEB_WEATHER_PERIOD", "目前可查今天、明天和后天的天气。", 422)
+    target = (today + timedelta(days=offset)).isoformat()
+    return {
+        "city": city,
+        "relative": _DAYS[offset],
+        "weather_date": target,
+        "metric": args.get("metric", "overview"),
+        "query": f"{city} {_DAYS[offset]} {target} weather forecast",
+        **({"clarification_turn_id": origin} if origin else {}),
+    }
 
 
 def _rpc(client, method, params, request_id=None):

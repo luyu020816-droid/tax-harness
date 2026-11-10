@@ -257,6 +257,7 @@ class ExplanationBlock(StrictModel):
         "knowledge_compare",
         "public_web_unavailable",
         "public_weather_period",
+        "public_web_scope_required",
     ]
 
 
@@ -288,6 +289,11 @@ class ConversationAnswerBlock(StrictModel):
     topic: Literal["today", "tomorrow", "previous_turn_status", "capabilities"]
 
 
+class ChatAnswerBlock(StrictModel):
+    type: Literal["chat_answer"]
+    text: str = Field(min_length=1, max_length=4000)
+
+
 AnswerBlock = Annotated[
     ResultBlock
     | OperationBlock
@@ -296,7 +302,8 @@ AnswerBlock = Annotated[
     | HistoryBlock
     | ConfirmationBlock
     | KnowledgeBlock
-    | ConversationAnswerBlock,
+    | ConversationAnswerBlock
+    | ChatAnswerBlock,
     Field(discriminator="type"),
 ]
 
@@ -329,8 +336,21 @@ class GetInvoiceImport(StrictModel):
     cursor: int = Field(default=0, ge=0)
 
 
+class PublicWebQuery(StrictModel):
+    kind: Literal["weather", "search"]
+    question: str = Field(min_length=1, max_length=240)
+    city: str | None = Field(default=None, max_length=32)
+    days_ahead: int = Field(default=0, ge=0, le=2)
+    metric: Literal["overview", "low", "high", "current", "feels", "rain", "humidity", "wind"] = (
+        "overview"
+    )
+
+
 TOOLS = {
-    "search_public_web": (StrictModel, "由宿主执行用户请求的公开信息查询。"),
+    "search_public_web": (
+        PublicWebQuery,
+        "查用户所问的公开实时信息。天气用weather，question逐字引用本轮天气问句，city用本轮地点或上一次天气结果中的城市，days_ahead按今天=0、明天=1、后天=2，metric按所问字段；缺城市可省略。公开搜索用search，question逐字引用本轮明确要求联网的公开问句。不可传企业资料、附件或历史正文。",
+    ),
     "search_conversations": (
         SearchConversations,
         "仅在用户要查过去的聊天原话、决定或方案时搜索本人可访问的聊天。当前日期、运行状态和资料规则不查此工具。查询词须来自当前需求或可辨认的上文。partial代表覆盖不足，多个候选须澄清。date_to为不含的带时区ISO上界，分页保持参数并传next_cursor。",
@@ -436,8 +456,7 @@ def tool_definitions() -> list[dict]:
             },
         }
         for name, (schema, description) in TOOLS.items()
-        if name
-        not in ("search_history", "read_history", "read_summary_source", "search_public_web")
+        if name not in ("search_history", "read_history", "read_summary_source")
     ]
 
 
