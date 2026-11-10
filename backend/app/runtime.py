@@ -433,6 +433,12 @@ class Runtime:
                     )
                 else:
                     raise
+            if step == 1 and not groups and not manifest["request_frame"].get("request_items"):
+                execution.observed_heads = manifest["heads"]
+                if await asyncio.to_thread(
+                    self._finish_public_web, execution, settings, payload, manifest
+                ):
+                    return
             if (
                 _dropped
                 and settings.context_auto_compact
@@ -503,10 +509,6 @@ class Runtime:
                     )
                     with phase(self.db, execution, "conversation:" + uid(), "host", "处理普通问答"):
                         await asyncio.to_thread(self.finish, execution, reply, payload, manifest)
-                    return
-                if not manifest["request_frame"].get("request_items") and await asyncio.to_thread(
-                    self._finish_public_web, execution, settings, payload, manifest
-                ):
                     return
             with self.db.transaction() as conn:
                 context.validate(self.db, execution, payload, manifest, conn=conn)
@@ -651,7 +653,9 @@ class Runtime:
         if not request:
             return False
         reply = {"blocks": [{"type": "explanation", "code": "public_web_unavailable"}]}
-        if settings.public_web_enabled and not request["query"]:
+        if request.get("unsupported_weather_period"):
+            reply = {"blocks": [{"type": "explanation", "code": "public_weather_period"}]}
+        elif settings.public_web_enabled and not request["query"]:
             reply = {
                 "status": "waiting_user",
                 "clarification": {"intent": "other", "missing_fields": ["location"]},
@@ -672,13 +676,9 @@ class Runtime:
                 "results": [output],
                 "memory_epoch": execution.expected_epoch,
             }
-            payload, manifest, dropped = self._assemble_measured(
+            payload, manifest, _ = self._assemble_measured(
                 execution, [group], proactive_compact=False
             )
-            if dropped:
-                raise AppError(
-                    "CONTEXT_CAPACITY_EXCEEDED", "上下文容量不足，无法显示联网结果。", 422
-                )
             if output["ok"]:
                 reply = {
                     "blocks": [

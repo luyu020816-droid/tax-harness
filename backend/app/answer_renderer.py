@@ -143,6 +143,15 @@ _WEATHER_CONDITIONS = {
     "thunderstorm": "有雷雨",
 }
 _CELSIUS = r"(?:-?\d{1,3}(?:\.\d{1,2})?\s*°F\s*\()?(-?\d{1,3}(?:\.\d{1,2})?)\s*°C"
+_WEATHER_LABELS = {
+    "low": "最低气温",
+    "high": "最高气温",
+    "current": "气温",
+    "feels": "体感温度",
+    "rain": "降雨概率",
+    "humidity": "湿度",
+    "wind": "风速",
+}
 
 
 def _weather_text(data, today):
@@ -157,10 +166,38 @@ def _weather_text(data, today):
 
     row = data["results"][0]
     excerpt = row["excerpt"]
+    details = "\n".join((excerpt, row.get("weather_details", "")))
     condition = _WEATHER_CONDITIONS.get(re.split(r"[,.;]", excerpt, maxsplit=1)[0].strip().lower())
     current = re.match(rf"^(?:[a-z ]+,\s*|currently:\s*)?{_CELSIUS}", excerpt, re.I)
-    high = re.search(rf"\bhigh\s*:?\s*{_CELSIUS}", excerpt, re.I)
-    low = re.search(rf"\blow\s*:?\s*{_CELSIUS}", excerpt, re.I)
+    high = re.search(rf"\bhigh\s*:?\s*{_CELSIUS}", details, re.I)
+    low = re.search(rf"\blow\s*:?\s*{_CELSIUS}", details, re.I)
+    source = f"\n\n[天气来源](<{row['url']}>)"
+    metric = data.get("metric", "overview")
+    if metric in _WEATHER_LABELS:
+        if metric in {"low", "high", "current", "feels"}:
+            measurement = {
+                "low": low,
+                "high": high,
+                "current": current or re.search(rf"\bcurrently\s*:\s*{_CELSIUS}", details, re.I),
+                "feels": re.search(rf"\bfeels like\s*:?\s*{_CELSIUS}", details, re.I),
+            }[metric]
+            value = f"约 {round(float(measurement[1]))}°C" if measurement else ""
+        else:
+            pattern = {
+                "rain": r"(?:chance of rain|rain chance|precipitation probability)\s*:?\s*(\d{1,3}\s*%)",
+                "humidity": r"\bhumidity\s*:?\s*(\d{1,3}\s*%)",
+                "wind": r"\bwinds?\s*:?\s*(\d{1,3}(?:\.\d{1,2})?)\s*(km/h|mph)",
+            }[metric]
+            measurement = re.search(pattern, details, re.I)
+            value = measurement[1].replace(" ", "") if measurement else ""
+            if measurement and metric == "wind":
+                speed = float(value) * (1.609344 if measurement[2].lower() == "mph" else 1)
+                value = f"约 {round(speed)} 公里/小时"
+        label = _WEATHER_LABELS[metric]
+        if value:
+            wording = value if value.startswith("约") else f"为 {value}"
+            return f"{city}{day}{label}{wording}。{source}"
+        return f"这份预报没有给出{city}{day}的{label}。{source}"
     facts = []
     if condition:
         facts.append(condition)
@@ -173,7 +210,7 @@ def _weather_text(data, today):
     elif low:
         facts.append(f"最低约 {round(float(low[1]))}°C")
     text = f"{city}{day}{'，'.join(facts)}。" if facts else f"{city}{day}的天气详情可以查看原预报。"
-    return f"{text}\n\n[天气来源](<{row['url']}>)"
+    return text + source
 
 
 def _result_text(data, view, *, today=None):
@@ -804,7 +841,7 @@ def _explanation(conn, execution, code, outputs, rules, state):
         if not (re.search(edit, content, re.I) and re.search(field, content, re.I)):
             missing("本轮没有要求修改字段。请回答本轮问题，或如实说明当前能力限制。")
         return "本系统只允许按明确要求修改发票用途和备注，其他发票字段及银行记录不可修改。"
-    if code == "public_web_unavailable":
+    if code in ("public_web_unavailable", "public_weather_period"):
         from app import public_web
 
         request, _ = public_web.current_request(
@@ -812,6 +849,10 @@ def _explanation(conn, execution, code, outputs, rules, state):
         )
         if not request:
             missing("本轮没有可核实的公开查询请求。")
+        if code == "public_weather_period":
+            if not request.get("unsupported_weather_period"):
+                missing("本轮没有超出当前支持范围的天气日期。")
+            return "我目前可以查今天、明天和后天的天气预报。"
         if "PUBLIC_WEB_UNAVAILABLE" in errors:
             return "联网查询暂时不可用，请稍后再试。"
         return "当前工作台没有开启联网查询，暂时查不到这项实时信息。"

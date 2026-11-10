@@ -184,17 +184,20 @@ async def test_public_weather_asks_for_city_then_searches_and_follows_up(db, set
 
     def search(request):
         requests.append(request)
-        excerpt = (
+        forecast = request["weather_date"]
+        summary = (
             "Overcast, 48°F (8.9°C), feels like 44°F. Humidity 66%."
             if request["relative"] == "今天"
-            else "Overcast. High 64°F (17.6°C), low 46°F (7.5°C)."
+            else "Overcast."
         )
+        source = f"https://exa.ai/library/weather/test?date={forecast}"
+        content = f"Title: Weather forecast\nURL: {source}\nHighlights:\n{summary}\n- High: 64°F (17.6°C) / Low: 46°F (7.5°C)"
         return {
             **request,
             "kind": "public_web",
-            "results": [
-                {"title": "Weather forecast", "url": "https://example.org", "excerpt": excerpt}
-            ],
+            "results": public_web._results(
+                {"content": [{"type": "text", "text": content}]}, forecast
+            ),
         }
 
     monkeypatch.setattr(public_web, "search", search)
@@ -216,20 +219,37 @@ async def test_public_weather_asks_for_city_then_searches_and_follows_up(db, set
     assert not requests
     result = await ask("南京")
     assert result["status"] == "completed"
-    assert (
-        result["final_message"]
-        == "南京今天是阴天，气温约 9°C。\n\n[天气来源](<https://example.org>)"
-    )
+    assert result["final_message"].startswith("南京今天是阴天，气温约 9°C，预计 8–18°C。")
     assert result["continuation_of_turn_id"] == clarification["turn_id"]
-    result = await ask("那明天呢")
-    assert result["status"] == "completed"
-    assert (
-        result["final_message"]
-        == "南京明天是阴天，预计 8–18°C。\n\n[天气来源](<https://example.org>)"
-    )
-    assert [r["city"] for r in requests] == ["南京", "南京"]
-    assert [r["relative"] for r in requests] == ["今天", "明天"]
+    for question, expected in (
+        ("最低温度", "南京今天最低气温约 8°C。"),
+        ("那最高呢", "南京今天最高气温约 18°C。"),
+        ("那湿度呢", "南京今天湿度为 66%。"),
+        ("那明天呢", "南京明天是阴天，预计 8–18°C。"),
+        ("最低温度", "南京明天最低气温约 8°C。"),
+        ("会不会下雨", "这份预报没有给出南京明天的降雨概率。"),
+        ("换成上海呢", "上海明天是阴天，预计 8–18°C。"),
+        ("现在多少度", "上海今天气温约 9°C。"),
+    ):
+        result = await ask(question)
+        assert result["status"] == "completed", result
+        assert result["final_message"].startswith(expected), result
+        assert "[天气来源]" in result["final_message"]
+    previous = requests[-1]
+    assert public_web.request("发票金额最低", "2026-11-10", previous) is None
     assert public_web.request("联网查一下企业发票 F002 的金额", "2026-11-10") is None
+    count = len(requests)
+    result = await ask("上海下周天气怎么样")
+    assert "今天、明天和后天" in result["final_message"]
+    assert len(requests) == count
+
+    def unavailable(_request):
+        raise AppError("PUBLIC_WEB_UNAVAILABLE", "联网查询暂时不可用，请稍后再试。", 503)
+
+    monkeypatch.setattr(public_web, "search", unavailable)
+    result = await ask("南京明天最低温度")
+    assert result["status"] == "completed", result
+    assert result["final_message"] == "联网查询暂时不可用，请稍后再试。"
 
 
 @pytest.mark.asyncio

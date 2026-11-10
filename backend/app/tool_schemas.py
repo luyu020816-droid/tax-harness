@@ -256,6 +256,7 @@ class ExplanationBlock(StrictModel):
         "knowledge_insufficient",
         "knowledge_compare",
         "public_web_unavailable",
+        "public_weather_period",
     ]
 
 
