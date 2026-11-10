@@ -33,7 +33,9 @@ class ToolExecutor:
 
         self.history = HistoryRetrieval(db, retrieval.settings, retrieval.engine)
 
-    def execute(self, execution: Execution, call: dict) -> tuple[dict, dict]:
+    def execute(
+        self, execution: Execution, call: dict, *, host_public_web=False
+    ) -> tuple[dict, dict]:
         from app.telemetry import phase
 
         with phase(
@@ -44,20 +46,22 @@ class ToolExecutor:
             call.get("function", {}).get("name", "unknown"),
             tool_call_id=call["id"],
         ) as span:
-            result = self._execute(execution, call)
+            result = self._execute(execution, call, host_public_web=host_public_web)
             if not result[0].get("ok"):
                 span["status"] = "failed"
                 span["error_code"] = result[0].get("error", {}).get("code")
             return result
 
-    def _execute(self, execution: Execution, call: dict) -> tuple[dict, dict]:
+    def _execute(
+        self, execution: Execution, call: dict, *, host_public_web=False
+    ) -> tuple[dict, dict]:
         name = call.get("function", {}).get("name", "")
         raw = call.get("function", {}).get("arguments", "{}")
         call_id = call["id"]
         arguments = {}
         try:
             arguments = json.loads(raw) if isinstance(raw, str) else raw
-            if name not in TOOLS:
+            if name not in TOOLS or (name == "search_public_web" and not host_public_web):
                 raise AppError("INVALID_ARGUMENT", "工具未在允许列表中。")
             parsed = TOOLS[name][0].model_validate(arguments)
             arguments = parsed.model_dump(mode="json", exclude_unset=True)
@@ -188,6 +192,16 @@ class ToolExecutor:
 
     def _dispatch(self, execution, name, args):
         db, auth = self.db, execution.auth
+        if name == "search_public_web":
+            from app import public_web
+
+            if not self.retrieval.settings.public_web_enabled or execution.reference_context:
+                raise AppError("PUBLIC_WEB_UNAVAILABLE", "当前未启用公开联网查询。", 422)
+            with db.transaction(readonly=True) as conn:
+                request, _ = public_web.current_request(conn, execution)
+            if not request or not request["query"]:
+                raise AppError("INVALID_ARGUMENT", "本轮没有可发送的公开查询。", 422)
+            return public_web.search(request)
         if name in ("search_conversations", "read_conversation"):
             from app import conversation_history
 

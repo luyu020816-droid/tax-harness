@@ -188,6 +188,7 @@ class Clarification(StrictModel):
             "intent",
             "write_confirmation",
             "target",
+            "location",
         ]
     ] = Field(min_length=1, max_length=7)
     task_id: UUID | None = None
@@ -208,6 +209,7 @@ class ResultBlock(StrictModel):
         "preferences",
         "invoice_import_batch",
         "knowledge_draft",
+        "public_web",
     ]
 
 
@@ -253,6 +255,7 @@ class ExplanationBlock(StrictModel):
         "knowledge_unavailable",
         "knowledge_insufficient",
         "knowledge_compare",
+        "public_web_unavailable",
     ]
 
 
@@ -326,6 +329,7 @@ class GetInvoiceImport(StrictModel):
 
 
 TOOLS = {
+    "search_public_web": (StrictModel, "由宿主执行用户请求的公开信息查询。"),
     "search_conversations": (
         SearchConversations,
         "仅在用户要查过去的聊天原话、决定或方案时搜索本人可访问的聊天。当前日期、运行状态和资料规则不查此工具。查询词须来自当前需求或可辨认的上文。partial代表覆盖不足，多个候选须澄清。date_to为不含的带时区ISO上界，分页保持参数并传next_cursor。",
@@ -431,7 +435,8 @@ def tool_definitions() -> list[dict]:
             },
         }
         for name, (schema, description) in TOOLS.items()
-        if name not in ("search_history", "read_history", "read_summary_source")
+        if name
+        not in ("search_history", "read_history", "read_summary_source", "search_public_web")
     ]
 
 

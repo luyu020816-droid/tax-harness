@@ -177,6 +177,50 @@ async def test_calendar_question_does_not_dispatch_search(db, settings):
 
 
 @pytest.mark.asyncio
+async def test_public_weather_asks_for_city_then_searches_and_follows_up(db, settings, monkeypatch):
+    from app import public_web
+
+    requests = []
+
+    def search(request):
+        requests.append(request)
+        return {
+            **request,
+            "kind": "public_web",
+            "results": [
+                {"title": "Weather forecast", "url": "https://example.org", "excerpt": "15°C"}
+            ],
+        }
+
+    monkeypatch.setattr(public_web, "search", search)
+    session = str(create_session(db, AUTH, "C001")["session_id"])
+    runtime = Runtime(
+        db,
+        model_settings(settings).model_copy(update={"public_web_enabled": True}),
+        ScriptedModel([]),
+    )
+
+    async def ask(text):
+        turn = accept_turn(db, AUTH, session, uid(), text)
+        await runtime.run(runtime.claim())
+        return read_turn(db, AUTH, turn["turn_id"])
+
+    clarification = await ask("今天天气怎么样")
+    assert clarification["status"] == "waiting_user"
+    assert clarification["final_message"] == "你想查哪个城市的天气？"
+    assert not requests
+    result = await ask("上海")
+    assert result["status"] == "completed"
+    assert "15°C" in result["final_message"]
+    assert result["continuation_of_turn_id"] == clarification["turn_id"]
+    result = await ask("那明天呢")
+    assert result["status"] == "completed"
+    assert [r["city"] for r in requests] == ["上海", "上海"]
+    assert [r["relative"] for r in requests] == ["今天", "明天"]
+    assert public_web.request("联网查一下企业发票 F002 的金额", "2026-11-10") is None
+
+
+@pytest.mark.asyncio
 async def test_rule_followup_refreshes_historical_tool_result(db, settings):
     session = str(create_session(db, AUTH, "C001")["session_id"])
 

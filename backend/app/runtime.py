@@ -504,6 +504,10 @@ class Runtime:
                     with phase(self.db, execution, "conversation:" + uid(), "host", "处理普通问答"):
                         await asyncio.to_thread(self.finish, execution, reply, payload, manifest)
                     return
+                if not manifest["request_frame"].get("request_items") and await asyncio.to_thread(
+                    self._finish_public_web, execution, settings, payload, manifest
+                ):
+                    return
             with self.db.transaction() as conn:
                 context.validate(self.db, execution, payload, manifest, conn=conn)
                 context_id = record_context(conn, execution, step, payload, manifest)
@@ -633,6 +637,58 @@ class Runtime:
         raise AppError(
             "RUN_LIMIT_EXCEEDED", "本轮模型调用到达上限，已提交数据保留，请继续核对。", 422
         )
+
+    def _finish_public_web(self, execution, settings, payload, manifest):
+        from app import public_web
+        from app.telemetry import phase
+
+        if execution.reference_context:
+            return False
+        with self.db.transaction(readonly=True) as conn:
+            request, origin = public_web.current_request(
+                conn, execution, manifest["request_frame"]["current_date"]
+            )
+        if not request:
+            return False
+        reply = {"blocks": [{"type": "explanation", "code": "public_web_unavailable"}]}
+        if settings.public_web_enabled and not request["query"]:
+            reply = {
+                "status": "waiting_user",
+                "clarification": {"intent": "other", "missing_fields": ["location"]},
+            }
+        elif settings.public_web_enabled:
+            call = {
+                "id": "public-web",
+                "type": "function",
+                "function": {"name": "search_public_web", "arguments": "{}"},
+            }
+            output, ref = self.tools.execute(execution, call, host_public_web=True)
+            group = {
+                "messages": [
+                    {"role": "assistant", "content": None, "tool_calls": [call]},
+                    {"role": "tool", "tool_call_id": call["id"], "content": canonical(output)},
+                ],
+                "sources": [ref],
+                "results": [output],
+                "memory_epoch": execution.expected_epoch,
+            }
+            payload, manifest, dropped = self._assemble_measured(
+                execution, [group], proactive_compact=False
+            )
+            if dropped:
+                raise AppError(
+                    "CONTEXT_CAPACITY_EXCEEDED", "上下文容量不足，无法显示联网结果。", 422
+                )
+            if output["ok"]:
+                reply = {
+                    "blocks": [
+                        {"type": "result", "result_ref": output["result_ref"], "view": "public_web"}
+                    ],
+                    "resume_turn_id": origin,
+                }
+        with phase(self.db, execution, "public-web:" + uid(), "host", "交付公开联网结果"):
+            self.finish(execution, FinalReply.model_validate(reply), payload, manifest)
+        return True
 
     async def _confirm_loop(self, execution, plan_id):
         settings, _ = self._model_for(execution)

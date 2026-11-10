@@ -127,6 +127,20 @@ def _result_text(data, view):
     kind = data.get("kind")
     if kind == "knowledge_draft" and view == "knowledge_draft":
         return "已准备文字入库草稿，请核对卡片并点击提交；当前尚未入库。", data
+    if kind == "public_web" and view == "public_web":
+        if not data["results"]:
+            return "这次联网查询没有找到可核对的结果。", data
+        heading = (
+            f"以下是 {data['city']} {data['weather_date']} 的预报来源。"
+            if data.get("weather_date")
+            else "以下是本次联网查询找到的公开来源。"
+        )
+        entries = []
+        for row in data["results"]:
+            # Remote excerpts are quoted text, not HTML, links, or images.
+            text = re.sub(r"([\\\[\]<>`*])", r"\\\1", row["title"] + "  \n" + row["excerpt"])
+            entries.append(f"{text}  \n[查看来源](<{row['url']}>)")
+        return "\n\n".join([heading, *entries]), data
     if kind in ("import_preview", "import_receipt") and view == "invoice_import_batch":
         return "导入批次实际状态及回执见卡片。", data
     if kind != view and view not in ("task", "preferences"):
@@ -730,7 +744,24 @@ def _explanation(conn, execution, code, outputs, rules, state):
     if code == "independent_totals":
         return "发票总额、银行收入和银行支出分别统计，不要求相等，也不据此推断付款或欠款。"
     if code == "unsupported_fields":
+        source = read_source(conn, execution.auth, execution.source_id, allow_suppressed=True)
+        content = source["content"]
+        edit = r"修改|更改|改成|改为|改一下|更新|变更|改掉|把.{1,40}改|\b(?:change|edit|update)\b"
+        field = r"发票|银行|字段|金额|抬头|税号|开票|流水|\b(?:invoice|bank|amount|field)\b"
+        if not (re.search(edit, content, re.I) and re.search(field, content, re.I)):
+            missing("本轮没有要求修改字段。请回答本轮问题，或如实说明当前能力限制。")
         return "本系统只允许按明确要求修改发票用途和备注，其他发票字段及银行记录不可修改。"
+    if code == "public_web_unavailable":
+        from app import public_web
+
+        request, _ = public_web.current_request(
+            conn, execution, state["request_frame"]["current_date"]
+        )
+        if not request:
+            missing("本轮没有可核实的公开查询请求。")
+        if "PUBLIC_WEB_UNAVAILABLE" in errors:
+            return "联网查询暂时不可用，请稍后再试。"
+        return "当前工作台没有开启联网查询，暂时查不到这项实时信息。"
     if code == "cannot_infer_payment":
         return "现有发票与银行资料没有逐票付款关联，不能判断哪些发票已付款或欠款。"
     if code == "read_only":
@@ -797,6 +828,17 @@ def _clarification(conn, execution, item, state, outputs):
 
     source = read_source(conn, execution.auth, execution.source_id, allow_suppressed=True)
     fields = set(item.missing_fields)
+    if fields == {"location"} and item.intent == "other":
+        from app import public_web
+
+        request, _ = public_web.current_request(
+            conn, execution, state["request_frame"]["current_date"]
+        )
+        if not request or not request.get("weather_date") or request["query"]:
+            missing("没有需要补充城市的天气请求。")
+        return item.model_copy(
+            update={"company_id": None, "period": None, "summary": "你想查哪个城市的天气？"}
+        )
     from app.turns import mentioned_companies
 
     requested = mentioned_companies(conn, source["content"])
@@ -843,6 +885,7 @@ def _clarification(conn, execution, item, state, outputs):
         "note": "请提供需要填写的备注。",
         "intent": "请说明本轮需要办理的事项。",
         "target": "你指的是哪一份资料或哪一条规则？",
+        "location": "你想查哪个城市的天气？",
         "write_confirmation": "请核对修改卡片后本人确认。",
     }
     return item.model_copy(

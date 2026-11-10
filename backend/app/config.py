@@ -58,6 +58,7 @@ class Settings(BaseSettings):
         ROOT / "evals/conversation-semantic-v1/selection-policy.json"
     )
     knowledge_enabled: bool = True
+    public_web_enabled: bool = False
     knowledge_model_directory: Path = ROOT / ".local/retrieval-models"
     knowledge_selection_policy: Path = ROOT / "evals/retrieval-v2/selection-policy.json"
     knowledge_max_file_bytes: int = Field(default=20 * 1024 * 1024, ge=1024, le=20 * 1024 * 1024)
