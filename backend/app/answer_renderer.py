@@ -123,18 +123,69 @@ def _purpose_explanations(conn, refs):
     return texts
 
 
-def _result_text(data, view):
+_WEATHER_CONDITIONS = {
+    "clear": "晴朗",
+    "mainly clear": "大致晴朗",
+    "sunny": "晴朗",
+    "mostly sunny": "大致晴朗",
+    "partly cloudy": "局部多云",
+    "mostly cloudy": "多云",
+    "cloudy": "多云",
+    "overcast": "是阴天",
+    "fog": "有雾",
+    "foggy": "有雾",
+    "drizzle": "有毛毛雨",
+    "light drizzle": "有毛毛雨",
+    "light rain": "有小雨",
+    "rain": "有雨",
+    "rain showers": "有阵雨",
+    "snow": "有雪",
+    "thunderstorm": "有雷雨",
+}
+_CELSIUS = r"(?:-?\d{1,3}(?:\.\d{1,2})?\s*°F\s*\()?(-?\d{1,3}(?:\.\d{1,2})?)\s*°C"
+
+
+def _weather_text(data, today):
+    forecast = date.fromisoformat(data["weather_date"])
+    day = f"{forecast.month}月{forecast.day}日"
+    if today:
+        offset = (forecast - date.fromisoformat(today)).days
+        day = {0: "今天", 1: "明天", 2: "后天"}.get(offset, day)
+    city = data["city"].removesuffix("的").strip()
+    if not data["results"]:
+        return f"我暂时没查到{city}{day}的天气预报。"
+
+    row = data["results"][0]
+    excerpt = row["excerpt"]
+    condition = _WEATHER_CONDITIONS.get(re.split(r"[,.;]", excerpt, maxsplit=1)[0].strip().lower())
+    current = re.match(rf"^(?:[a-z ]+,\s*|currently:\s*)?{_CELSIUS}", excerpt, re.I)
+    high = re.search(rf"\bhigh\s*:?\s*{_CELSIUS}", excerpt, re.I)
+    low = re.search(rf"\blow\s*:?\s*{_CELSIUS}", excerpt, re.I)
+    facts = []
+    if condition:
+        facts.append(condition)
+    if current:
+        facts.append(f"气温约 {round(float(current[1]))}°C")
+    if high and low:
+        facts.append(f"预计 {round(float(low[1]))}–{round(float(high[1]))}°C")
+    elif high:
+        facts.append(f"最高约 {round(float(high[1]))}°C")
+    elif low:
+        facts.append(f"最低约 {round(float(low[1]))}°C")
+    text = f"{city}{day}{'，'.join(facts)}。" if facts else f"{city}{day}的天气详情可以查看原预报。"
+    return f"{text}\n\n[天气来源](<{row['url']}>)"
+
+
+def _result_text(data, view, *, today=None):
     kind = data.get("kind")
     if kind == "knowledge_draft" and view == "knowledge_draft":
         return "已准备文字入库草稿，请核对卡片并点击提交；当前尚未入库。", data
     if kind == "public_web" and view == "public_web":
+        if data.get("weather_date"):
+            return _weather_text(data, today), data
         if not data["results"]:
             return "这次联网查询没有找到可核对的结果。", data
-        heading = (
-            f"以下是 {data['city']} {data['weather_date']} 的预报来源。"
-            if data.get("weather_date")
-            else "以下是本次联网查询找到的公开来源。"
-        )
+        heading = "以下是本次联网查询找到的公开来源。"
         entries = []
         for row in data["results"]:
             # Remote excerpts are quoted text, not HTML, links, or images.
@@ -390,7 +441,9 @@ def render(conn, execution, plan, payload, manifest):
                         for k in ("invoice_total", "bank_income", "bank_expense")
                     },
                 }
-            text, card = _result_text(data, block.view)
+            text, card = _result_text(
+                data, block.view, today=state["request_frame"].get("current_date")
+            )
             if block.view == "rules":
                 for explanation in _purpose_explanations(conn, data.get("rules", [])).values():
                     text += "\n\n" + explanation

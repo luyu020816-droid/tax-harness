@@ -184,11 +184,16 @@ async def test_public_weather_asks_for_city_then_searches_and_follows_up(db, set
 
     def search(request):
         requests.append(request)
+        excerpt = (
+            "Overcast, 48°F (8.9°C), feels like 44°F. Humidity 66%."
+            if request["relative"] == "今天"
+            else "Overcast. High 64°F (17.6°C), low 46°F (7.5°C)."
+        )
         return {
             **request,
             "kind": "public_web",
             "results": [
-                {"title": "Weather forecast", "url": "https://example.org", "excerpt": "15°C"}
+                {"title": "Weather forecast", "url": "https://example.org", "excerpt": excerpt}
             ],
         }
 
@@ -209,13 +214,20 @@ async def test_public_weather_asks_for_city_then_searches_and_follows_up(db, set
     assert clarification["status"] == "waiting_user"
     assert clarification["final_message"] == "你想查哪个城市的天气？"
     assert not requests
-    result = await ask("上海")
+    result = await ask("南京")
     assert result["status"] == "completed"
-    assert "15°C" in result["final_message"]
+    assert (
+        result["final_message"]
+        == "南京今天是阴天，气温约 9°C。\n\n[天气来源](<https://example.org>)"
+    )
     assert result["continuation_of_turn_id"] == clarification["turn_id"]
     result = await ask("那明天呢")
     assert result["status"] == "completed"
-    assert [r["city"] for r in requests] == ["上海", "上海"]
+    assert (
+        result["final_message"]
+        == "南京明天是阴天，预计 8–18°C。\n\n[天气来源](<https://example.org>)"
+    )
+    assert [r["city"] for r in requests] == ["南京", "南京"]
     assert [r["relative"] for r in requests] == ["今天", "明天"]
     assert public_web.request("联网查一下企业发票 F002 的金额", "2026-11-10") is None
 
