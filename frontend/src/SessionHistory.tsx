@@ -21,6 +21,26 @@ export function SessionHistory({ sessions, activeId, onOpen, onChanged }: Props)
   const alive = useRef(true);
   const request = useRef<AbortController | null>(null);
   useEffect(() => {
+    const closeOutside = (event: PointerEvent) => {
+      document.querySelectorAll<HTMLDetailsElement>('.session-actions[open]').forEach((menu) => {
+        if (!menu.contains(event.target as Node)) menu.open = false;
+      });
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      document.querySelectorAll<HTMLDetailsElement>('.session-actions[open]').forEach((menu) => {
+        menu.open = false;
+        menu.querySelector('summary')?.focus();
+      });
+    };
+    document.addEventListener('pointerdown', closeOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, []);
+  useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;

@@ -927,7 +927,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
             />
           </div>
         ) : page === 'runs' ? (
-          <div className="page-scroll">
+          <div className="page-scroll runs-page-scroll">
             <RunsView
               key={`${user.user_id}/${company}`}
               company={company}

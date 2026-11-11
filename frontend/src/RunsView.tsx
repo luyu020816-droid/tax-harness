@@ -27,7 +27,7 @@ export function RunsView({
       : null
   );
   return (
-    <section className={tab === 'imports' ? 'management-page' : ''}>
+    <section className={tab === 'imports' ? 'management-page' : 'runs-layout'}>
       {tab === 'imports' && (
         <div className="page-heading">
           <div>

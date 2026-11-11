@@ -1,9 +1,39 @@
+.page-scroll.runs-page-scroll {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.runs-layout {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.runs-layout > .page-tabs {
+  flex-shrink: 0;
+}
+.runs-layout > .insight-comparison {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+.runs-page-scroll:has(> .management-page) {
+  overflow-y: auto;
+}
 .insights-page {
   width: 100%;
   max-width: 1440px;
   margin: 0 auto;
   padding: 28px;
   min-width: 0;
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.insights-page > :not(.insight-workspace) {
+  flex-shrink: 0;
 }
 .insights-page .page-heading {
   align-items: center;
@@ -104,12 +134,26 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-panel);
   background: var(--surface-primary);
-  min-height: 460px;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 .insight-history {
   min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   border-right: 1px solid var(--border-primary);
+}
+.insight-history-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.insight-history > .insight-section-title,
+.insight-pagination {
+  flex-shrink: 0;
 }
 .insight-section-title {
   display: flex;
@@ -137,6 +181,9 @@
   border-bottom: 1px solid var(--border-secondary);
   background: transparent;
   color: var(--text-primary);
+  height: 88px;
+  gap: 6px;
+  align-content: center;
 }
 .insight-history-row:hover {
   background: var(--bg-hover);
@@ -156,7 +203,9 @@
   font-size: 12px;
   font-weight: 500;
   line-height: 1.7;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .insight-row-metrics {
   display: flex;
@@ -174,9 +223,14 @@
   gap: 8px;
   justify-content: space-between;
   padding: 16px;
+  align-items: center;
 }
 .insight-trace-pane {
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding: 24px;
 }
 .insight-empty {
@@ -425,7 +479,7 @@
   white-space: nowrap;
   text-align: left;
 }
-@media (max-width: 1250px) {
+@media (max-width: 1000px) {
   .insight-workspace {
     grid-template-columns: 1fr;
   }

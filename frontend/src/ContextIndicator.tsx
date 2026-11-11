@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api, body } from './api';
 import './context-indicator.css';
 
@@ -24,6 +25,52 @@ export function ContextIndicator({
 }) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ left: 0, top: 0 });
+  const trigger = useRef<HTMLButtonElement>(null);
+  const popover = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const anchor = trigger.current?.getBoundingClientRect();
+      const panel = popover.current?.getBoundingClientRect();
+      if (!anchor || !panel) return;
+      setPosition({
+        left: Math.max(
+          12,
+          Math.min(anchor.right - panel.width, window.innerWidth - panel.width - 12)
+        ),
+        top: Math.max(
+          12,
+          Math.min(anchor.top - panel.height - 10, window.innerHeight - panel.height - 12)
+        ),
+      });
+    };
+    place();
+    const dismiss = (event: PointerEvent) => {
+      if (
+        !trigger.current?.contains(event.target as Node) &&
+        !popover.current?.contains(event.target as Node)
+      )
+        setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false);
+        trigger.current?.focus();
+      }
+    };
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    document.addEventListener('pointerdown', dismiss);
+    document.addEventListener('keydown', escape);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+      document.removeEventListener('pointerdown', dismiss);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [open, preview, error]);
   useEffect(() => {
     setPreview(null);
     if (!sessionId || draft.length > 16000) return;
@@ -54,8 +101,15 @@ export function ContextIndicator({
   const ring = Math.min(100, Math.max(0, percent ?? 0));
   const label = percent == null ? '上下文 --' : `上下文 ${percent}%`;
   return (
-    <details className="context-indicator">
-      <summary aria-label={`${label}，点击查看估算详情`}>
+    <div className="context-indicator">
+      <button
+        type="button"
+        ref={trigger}
+        className="context-indicator-trigger"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        aria-label={`${label}，点击查看估算详情`}
+      >
         <span
           aria-hidden="true"
           className="context-ring"
@@ -66,26 +120,30 @@ export function ContextIndicator({
           <span>{percent == null ? '--' : `${percent}%`}</span>
         </span>
         <span>上下文</span>
-      </summary>
-      <div className="context-indicator-popover" role="status">
-        {preview?.effective_window ? (
-          <>
-            <strong>下一次输入估算</strong>
-            <span>输入约 {preview.input_estimate.toLocaleString()} tokens</span>
-            <span>
-              输出预留 {preview.output_reserve.toLocaleString()} · 余量{' '}
-              {preview.margin?.toLocaleString()}
-            </span>
-            <span>
-              有效窗口 {preview.effective_window.toLocaleString()} · 输入上限{' '}
-              {preview.input_limit.toLocaleString()}
-            </span>
-            <small>包含草稿；范围引用、附件及后续工具结果可能变化，实际发送时重新计算。</small>
-          </>
-        ) : (
-          <span>{error || (preview ? '模型容量未确认' : '等待上下文估算')}</span>
+      </button>
+      {open &&
+        createPortal(
+          <div ref={popover} className="context-indicator-popover" role="status" style={position}>
+            {preview?.effective_window ? (
+              <>
+                <strong>下一次输入估算</strong>
+                <span>输入约 {preview.input_estimate.toLocaleString()} tokens</span>
+                <span>
+                  输出预留 {preview.output_reserve.toLocaleString()} · 余量{' '}
+                  {preview.margin?.toLocaleString()}
+                </span>
+                <span>
+                  有效窗口 {preview.effective_window.toLocaleString()} · 输入上限{' '}
+                  {preview.input_limit.toLocaleString()}
+                </span>
+                <small>包含草稿；范围引用、附件及后续工具结果可能变化，实际发送时重新计算。</small>
+              </>
+            ) : (
+              <span>{error || (preview ? '模型容量未确认' : '等待上下文估算')}</span>
+            )}
+          </div>,
+          document.body
         )}
-      </div>
-    </details>
+    </div>
   );
 }

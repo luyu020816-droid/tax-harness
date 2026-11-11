@@ -33,6 +33,10 @@ export function InsightsView({ company }: { company: string | null }) {
   const [ceiling, setCeiling] = useState(new Date().toISOString());
   const [revision, setRevision] = useState(0);
   const [comparison, setComparison] = useState(false);
+  const tracePane = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    tracePane.current?.scrollTo(0, 0);
+  }, [selected]);
   const valid = !!from && !!to && from <= to && Date.parse(to) - Date.parse(from) < 31 * 86400000;
   const params = new URLSearchParams({
     from: `${from}T00:00:00+08:00`,
@@ -50,7 +54,7 @@ export function InsightsView({ company }: { company: string | null }) {
     has_more: boolean;
   }>(
     valid
-      ? `/insights/requests?${query}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
+      ? `/insights/requests?${query}&limit=5${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
       : null,
     revision
   );
@@ -223,35 +227,37 @@ export function InsightsView({ company }: { company: string | null }) {
         <aside className="insight-history" aria-label="历史请求">
           <div className="insight-section-title">
             <h2>历史请求</h2>
-            <span>当前企业范围</span>
+            <span>当前企业范围 · 每页 5 条</span>
           </div>
-          {list.loading && !list.data && <p className="muted">正在读取历史计量…</p>}
-          {list.data?.requests.length === 0 && (
-            <div className="insight-empty">
-              <h3>这个范围暂无请求</h3>
-              <p>可调整日期或状态。没有记录不代表消耗为零。</p>
-            </div>
-          )}
-          {list.data?.requests.map((r) => (
-            <button
-              className={`insight-history-row ${selected === r.turn_id ? 'selected' : ''}`}
-              key={r.turn_id}
-              onClick={() => setSelected(r.turn_id)}
-            >
-              <span className="insight-row-date">
-                {dateTime(r.created_at)}
-                <span>{statusName(r.status)}</span>
-              </span>
-              <strong>{r.text}</strong>
-              <span className="insight-row-metrics">
-                {duration(r.active_ms)} ·{' '}
-                {r.usage_known_calls
-                  ? `${number(r.input_tokens + r.output_tokens)} Token`
-                  : 'Token 未采集'}
-                <ChevronRight size={13} />
-              </span>
-            </button>
-          ))}
+          <div className="insight-history-list">
+            {list.loading && !list.data && <p className="muted">正在读取历史计量…</p>}
+            {list.data?.requests.length === 0 && (
+              <div className="insight-empty">
+                <h3>这个范围暂无请求</h3>
+                <p>可调整日期或状态。没有记录不代表消耗为零。</p>
+              </div>
+            )}
+            {list.data?.requests.map((r) => (
+              <button
+                className={`insight-history-row ${selected === r.turn_id ? 'selected' : ''}`}
+                key={r.turn_id}
+                onClick={() => setSelected(r.turn_id)}
+              >
+                <span className="insight-row-date">
+                  {dateTime(r.created_at)}
+                  <span>{statusName(r.status)}</span>
+                </span>
+                <strong>{r.text}</strong>
+                <span className="insight-row-metrics">
+                  {duration(r.active_ms)} ·{' '}
+                  {r.usage_known_calls
+                    ? `${number(r.input_tokens + r.output_tokens)} Token`
+                    : 'Token 未采集'}
+                  <ChevronRight size={13} />
+                </span>
+              </button>
+            ))}
+          </div>
           <div className="insight-pagination">
             <button
               className="secondary"
@@ -259,23 +265,31 @@ export function InsightsView({ company }: { company: string | null }) {
               onClick={() => {
                 setCursor(previous.at(-1) ?? '');
                 setPrevious((v) => v.slice(0, -1));
+                setSelected('');
               }}
             >
               上一页
             </button>
+            <span className="small muted">第 {previous.length + 1} 页</span>
             <button
               className="secondary"
               disabled={!list.data?.has_more || list.loading}
               onClick={() => {
                 setPrevious((v) => [...v, cursor]);
                 setCursor(list.data?.next_cursor ?? '');
+                setSelected('');
               }}
             >
               下一页
             </button>
           </div>
         </aside>
-        <div className="insight-trace-pane">
+        <div
+          className="insight-trace-pane"
+          ref={tracePane}
+          tabIndex={0}
+          aria-label="请求详情，可独立滚动"
+        >
           {selected ? (
             <RequestInsight key={selected} turnId={selected} onBack={() => setSelected('')} />
           ) : (

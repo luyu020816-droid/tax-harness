@@ -90,8 +90,22 @@ test('insights: scoped history, chain, unknown usage, refresh, comparison and re
           runs: 2,
         },
       });
-    if (p === '/insights/requests')
-      return reply({ requests: [request], has_more: false, next_cursor: null });
+    if (p === '/insights/requests') {
+      const params = new URL(route.request().url()).searchParams;
+      expect(params.get('limit')).toBe('5');
+      const last = params.has('cursor');
+      return reply({
+        requests: last
+          ? [{ ...request, text: '末页记录' }]
+          : Array.from({ length: 5 }, (_, i) => ({
+              ...request,
+              turn_id: i === 0 ? id : `request-${i}`,
+              text: i === 0 ? request.text : `历史请求 ${i}`,
+            })),
+        has_more: !last,
+        next_cursor: last ? null : 'page-two',
+      });
+    }
     if (p === `/insights/requests/${id}`)
       return reply({
         request,
@@ -195,6 +209,22 @@ test('insights: scoped history, chain, unknown usage, refresh, comparison and re
   await page.getByRole('button', { name: '运行洞察', exact: true }).click();
   await expect(page.getByRole('heading', { name: '运行洞察', exact: true })).toBeVisible();
   await expect(page.locator('.insight-kpis')).toContainText('1,200');
+  await expect(page.locator('.insight-history-row')).toHaveCount(5);
+  const rowHeight = await page
+    .locator('.insight-history-row')
+    .first()
+    .evaluate((e) => e.getBoundingClientRect().height);
+  await page.getByRole('button', { name: '下一页', exact: true }).click();
+  await expect(page.locator('.insight-history-row')).toHaveCount(1);
+  expect(
+    await page
+      .locator('.insight-history-row')
+      .first()
+      .evaluate((e) => e.getBoundingClientRect().height)
+  ).toBe(rowHeight);
+  await expect(page.getByRole('button', { name: '下一页', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '上一页', exact: true }).click();
+  await expect(page.locator('.insight-history-row')).toHaveCount(5);
   await page.getByRole('button', { name: /查询甲企业月度资料（观测夹具）/ }).click();
   await expect(page.getByRole('region', { name: '请求执行轨迹' })).toContainText('恢复 / 重试');
   const scope = page.getByRole('button', { name: /query_month.*需确认范围/ });
@@ -208,6 +238,14 @@ test('insights: scoped history, chain, unknown usage, refresh, comparison and re
     .first()
     .click();
   await expect(page.locator('.insight-raw')).toContainText('fixture');
+  const historyBox = await page.locator('.insight-history').boundingBox();
+  const pane = page.locator('.insight-trace-pane');
+  await pane.hover();
+  await page.mouse.wheel(0, 600);
+  await expect.poll(() => pane.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
+  expect(await page.locator('.insight-history').boundingBox()).toEqual(historyBox);
+  expect(await page.locator('.runs-page-scroll').evaluate((e) => e.scrollTop)).toBe(0);
+  await pane.evaluate((e) => e.scrollTo(0, 0));
   await page.getByRole('button', { name: /聊天融合与支持度/ }).click();
   await page.getByText('聊天检索诊断', { exact: true }).click();
   await expect(page.getByText('已索引 8 / 10')).toBeVisible();
