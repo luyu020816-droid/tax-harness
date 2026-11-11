@@ -31,9 +31,7 @@ test('switching companies reuses an empty session and preserves a conversation w
     }
     if (path.endsWith('/messages')) return reply({ turns: history[path.split('/')[2]] ?? [], has_more: false });
     if (path === '/tasks') return reply([]);
-    if (path.endsWith('/context-preview')) return reply({ input_estimate: 10000, input_limit: 92952,
-      output_reserve: 2048, margin: 5000, effective_window: 100000, pressure_ratio: 0.17048,
-      window_status: 'configured', count_kind: 'estimated:utf8_div2_plus_protocol' });
+    if (path.endsWith('/context-usage')) return reply({ status: 'no_calls', input_tokens: 0, effective_window: 100000 });
     if (path === '/sessions/s1/turns') {
       const turn = { turn_id: 't1', source_seq: 1, text: '你好', status: 'completed', final_message: '你好', final_cards: [], next_event_seq: 0, active_run_generation: 1, error: null };
       history.s1 = [turn];
@@ -45,6 +43,7 @@ test('switching companies reuses an empty session and preserves a conversation w
   });
   await page.goto('/showcase.html');
   await page.getByRole('button', { name: /测试用户一/ }).click();
+  await expect(page.getByLabel('上下文用量 0%，点击查看详情')).toBeVisible();
   const company = page.getByLabel('当前企业');
   for (const value of ['C002', 'C001', 'C002']) {
     await company.selectOption(value);

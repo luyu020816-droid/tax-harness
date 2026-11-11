@@ -67,10 +67,8 @@ test('orbit chat: draft, retry identity, polling, history, sessions, and mobile'
     }
     if (path.endsWith('/messages'))
       return reply({ turns: history[path.split('/')[2]] ?? [], has_more: false });
-    if (path.endsWith('/context-preview'))
-      return reply({ input_estimate: 10000, input_limit: 92952, output_reserve: 2048,
-        margin: 5000, effective_window: 100000, pressure_ratio: 0.17048,
-        window_status: 'configured', count_kind: 'estimated:utf8_div2_plus_protocol' });
+    if (path.endsWith('/context-usage'))
+      return reply({ status: 'no_calls', input_tokens: 0, effective_window: 100000 });
     if (path === '/tasks') return reply([]);
     if (path.endsWith('/events'))
       return route.fulfill({

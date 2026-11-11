@@ -403,6 +403,13 @@ def create_app(
         actual_settings, _ = runtime._model_for()
         return preview(db, actual_settings, current, str(session_id), body.draft)
 
+    @app.get("/api/v1/sessions/{session_id}/context-usage")
+    def context_usage(session_id: UUID, current=auth_dependency):
+        from app.context_preview import actual_usage
+
+        actual_settings, _ = runtime._model_for()
+        return actual_usage(db, actual_settings, current, str(session_id))
+
     @app.get("/api/v1/sessions/{session_id}/compactions/{operation_id}")
     def compaction_status(session_id: UUID, operation_id: UUID, current=auth_dependency):
         from app import compaction_requests
