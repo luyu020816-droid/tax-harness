@@ -2145,10 +2145,11 @@ td strong {
   outline: 2px solid var(--brand-primary);
 }
 .session-actions-menu {
-  position: absolute;
-  right: 0;
-  top: 100%;
-  z-index: 40;
+  position: fixed;
+  z-index: 150;
+  max-height: calc(100dvh - 16px);
+  max-width: calc(100vw - 16px);
+  overflow-y: auto;
   background: var(--surface-primary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);

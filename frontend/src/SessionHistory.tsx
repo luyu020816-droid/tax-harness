@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { Archive, History, MessageSquare, MoreHorizontal, Pin, Trash2 } from 'lucide-react';
 import { api, body } from './api';
 import { Modal } from './Modal';
@@ -10,6 +11,89 @@ interface Props {
   onOpen: (session: Session) => void;
   onChanged: (id: string, action: string) => Promise<void>;
 }
+function SessionActions({ title, children }: { title: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ left: 0, top: 0 });
+  const trigger = useRef<HTMLDetailsElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const close = () => {
+    if (trigger.current) trigger.current.open = false;
+  };
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const anchor = trigger.current?.getBoundingClientRect();
+      const menu = panel.current?.getBoundingClientRect();
+      if (!anchor || !menu) return;
+      setPosition({
+        left: Math.max(8, Math.min(anchor.right - menu.width, innerWidth - menu.width - 8)),
+        top: Math.max(
+          8,
+          Math.min(
+            anchor.bottom + 4 + menu.height <= innerHeight - 8
+              ? anchor.bottom + 4
+              : anchor.top - menu.height - 4,
+            innerHeight - menu.height - 8
+          )
+        ),
+      });
+    };
+    place();
+    const dismiss = (event: PointerEvent) => {
+      if (
+        !trigger.current?.contains(event.target as Node) &&
+        !panel.current?.contains(event.target as Node)
+      )
+        close();
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        close();
+        trigger.current?.querySelector('summary')?.focus();
+      }
+    };
+    const scroll = (event: Event) => {
+      if (!panel.current?.contains(event.target as Node)) close();
+    };
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', scroll, true);
+    document.addEventListener('pointerdown', dismiss);
+    document.addEventListener('keydown', escape);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', scroll, true);
+      document.removeEventListener('pointerdown', dismiss);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [open]);
+  return (
+    <details
+      ref={trigger}
+      className="session-actions"
+      onToggle={(event) => {
+        const expanded = event.currentTarget.open;
+        setOpen(expanded);
+        if (expanded)
+          document
+            .querySelectorAll<HTMLDetailsElement>('.session-actions[open]')
+            .forEach((other) => {
+              if (other !== trigger.current) other.open = false;
+            });
+      }}
+    >
+      <summary aria-label={`会话操作：${title}`}>
+        <MoreHorizontal size={16} />
+      </summary>
+      {open &&
+        createPortal(
+          <div ref={panel} className="session-actions-menu" style={position} onClick={close}>
+            {children}
+          </div>,
+          document.body
+        )}
+    </details>
+  );
+}
 export function SessionHistory({ sessions, activeId, onOpen, onChanged }: Props) {
   const [show, setShow] = useState(false);
   const [archived, setArchived] = useState(false);
@@ -20,26 +104,6 @@ export function SessionHistory({ sessions, activeId, onOpen, onChanged }: Props)
   const [deleting, setDeleting] = useState<Session | null>(null);
   const alive = useRef(true);
   const request = useRef<AbortController | null>(null);
-  useEffect(() => {
-    const closeOutside = (event: PointerEvent) => {
-      document.querySelectorAll<HTMLDetailsElement>('.session-actions[open]').forEach((menu) => {
-        if (!menu.contains(event.target as Node)) menu.open = false;
-      });
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      document.querySelectorAll<HTMLDetailsElement>('.session-actions[open]').forEach((menu) => {
-        menu.open = false;
-        menu.querySelector('summary')?.focus();
-      });
-    };
-    document.addEventListener('pointerdown', closeOutside);
-    document.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('pointerdown', closeOutside);
-      document.removeEventListener('keydown', closeOnEscape);
-    };
-  }, []);
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -101,34 +165,26 @@ export function SessionHistory({ sessions, activeId, onOpen, onChanged }: Props)
           {session.pinned_at ? <Pin size={14} /> : <MessageSquare size={14} />}
           <span>{session.title || '新对话'}</span>
         </button>
-        <details className="session-actions">
-          <summary aria-label={`会话操作：${session.title || '新对话'}`}>
-            <MoreHorizontal size={16} />
-          </summary>
-          <div
-            className="session-actions-menu"
-            onClick={(e) => e.currentTarget.closest('details')?.removeAttribute('open')}
+        <SessionActions title={session.title || '新对话'}>
+          <button
+            disabled={busy}
+            onClick={() => void act(session, session.pinned_at ? 'unpin' : 'pin')}
           >
-            <button
-              disabled={busy}
-              onClick={() => void act(session, session.pinned_at ? 'unpin' : 'pin')}
-            >
-              <Pin size={14} />
-              {session.pinned_at ? '取消置顶' : '置顶'}
-            </button>
-            <button
-              disabled={busy}
-              onClick={() => void act(session, session.archived_at ? 'unarchive' : 'archive')}
-            >
-              <Archive size={14} />
-              {session.archived_at ? '取消归档' : '归档'}
-            </button>
-            <button disabled={busy} onClick={() => setDeleting(session)}>
-              <Trash2 size={14} />
-              删除
-            </button>
-          </div>
-        </details>
+            <Pin size={14} />
+            {session.pinned_at ? '取消置顶' : '置顶'}
+          </button>
+          <button
+            disabled={busy}
+            onClick={() => void act(session, session.archived_at ? 'unarchive' : 'archive')}
+          >
+            <Archive size={14} />
+            {session.archived_at ? '取消归档' : '归档'}
+          </button>
+          <button disabled={busy} onClick={() => setDeleting(session)}>
+            <Trash2 size={14} />
+            删除
+          </button>
+        </SessionActions>
       </div>
     );
   }

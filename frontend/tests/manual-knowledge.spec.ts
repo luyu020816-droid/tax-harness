@@ -69,10 +69,13 @@ test('manual knowledge and conversation management', async ({ page }, info) => {
     }
     if (path === '/knowledge/documents')
       return reply({ documents: [], has_more: false, next_offset: null });
+    if (path === '/rules/catalog') return reply({ company_id: 'C001', rules: [] });
     if (path === '/knowledge/text') {
       submissions.push(route.request().postDataJSON());
       return reply({ status: 'queued', document_id: 'doc-1' }, 202);
     }
+    if (path.endsWith('/context-usage'))
+      return reply({ status: 'no_calls', input_tokens: 0, effective_window: 100000 });
     throw new Error(`Unmocked ${path}`);
   });
   await page.goto('/showcase.html');
@@ -84,24 +87,24 @@ test('manual knowledge and conversation management', async ({ page }, info) => {
   ).toBeVisible();
   const historyDialog = page.getByRole('dialog', { name: '历史会话' });
   await historyDialog.getByLabel('会话操作：测试会话9', { exact: true }).click();
-  await historyDialog.getByRole('button', { name: '置顶', exact: true }).click();
+  await page.locator('.session-actions-menu').getByRole('button', { name: '置顶', exact: true }).click();
   await expect(
     page
       .locator('.recent-section')
       .getByRole('button', { name: '打开会话：测试会话9', exact: true })
   ).toBeVisible();
   await historyDialog.getByLabel('会话操作：测试会话8', { exact: true }).click();
-  await historyDialog.getByRole('button', { name: '归档', exact: true }).click();
+  await page.locator('.session-actions-menu').getByRole('button', { name: '归档', exact: true }).click();
   await historyDialog.getByRole('button', { name: '已归档', exact: true }).click();
   await expect(
     historyDialog.getByRole('button', { name: '打开会话：测试会话8', exact: true })
   ).toBeVisible();
   await historyDialog.getByLabel('会话操作：测试会话8', { exact: true }).click();
-  await historyDialog.getByRole('button', { name: '取消归档', exact: true }).click();
+  await page.locator('.session-actions-menu').getByRole('button', { name: '取消归档', exact: true }).click();
   await expect(historyDialog.getByText('暂无会话', { exact: true })).toBeVisible();
   await historyDialog.getByRole('button', { name: '全部会话', exact: true }).click();
   await historyDialog.getByLabel('会话操作：测试会话7', { exact: true }).click();
-  await historyDialog.getByRole('button', { name: '删除', exact: true }).click();
+  await page.locator('.session-actions-menu').getByRole('button', { name: '删除', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '删除会话' })).toContainText('知识资料');
   await page.getByRole('button', { name: '确认删除', exact: true }).click();
   await expect(

@@ -75,6 +75,8 @@ for (const mode of [
         }
         return reply(turn);
       }
+      if (path.endsWith('/context-usage'))
+        return reply({ status: 'no_calls', input_tokens: 0, effective_window: 100000 });
       throw new Error(`Unexpected endpoint: ${path}`);
     });
     await page.goto('/showcase.html');

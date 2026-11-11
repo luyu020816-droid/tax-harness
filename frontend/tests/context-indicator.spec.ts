@@ -26,7 +26,12 @@ test('context indicator and manual compact keep control separate from chat', asy
     }
     if (path === '/sessions' && route.request().method() === 'GET')
       return reply([
-        { session_id: 's1', selected_company_id: 'C001', updated_at: '2026-11-01T00:00:00Z' },
+        ...Array.from({ length: 8 }, (_, i) => ({
+          session_id: i === 0 ? 's1' : `s${i + 1}`,
+          title: `测试会话 ${i + 1}`,
+          selected_company_id: 'C001',
+          updated_at: '2026-11-01T00:00:00Z',
+        })),
       ]);
     if (path.endsWith('/messages')) return reply({ turns: [], has_more: false });
     if (path === '/tasks') return reply([]);
@@ -59,6 +64,27 @@ test('context indicator and manual compact keep control separate from chat', asy
   await menu.locator('summary').click();
   await page.keyboard.press('Escape');
   await expect(menu).not.toHaveAttribute('open', '');
+  for (const height of [650, 900]) {
+    await page.setViewportSize({ width: 1440, height });
+    const bottomTrigger = page.locator('.recent-section .session-actions summary').last();
+    await bottomTrigger.scrollIntoViewIfNeeded();
+    await bottomTrigger.click();
+    const actions = page.locator('.session-actions-menu');
+    await expect(actions.getByRole('button', { name: '删除', exact: true })).toBeInViewport();
+    expect(
+      await actions.evaluate((e) => {
+        const r = e.getBoundingClientRect();
+        return (
+          e.parentElement === document.body &&
+          r.top >= 0 &&
+          r.bottom <= innerHeight &&
+          e.contains(document.elementFromPoint(r.left + 12, r.bottom - 12))
+        );
+      })
+    ).toBe(true);
+    await page.locator('.topbar').click();
+    await expect(actions).toHaveCount(0);
+  }
   await expect(page.getByLabel('上下文用量 35%，点击查看详情')).toBeVisible();
   await page.getByLabel('上下文用量 35%，点击查看详情').click();
   await expect(page.getByText('输入 35,000 tokens')).toBeVisible();
