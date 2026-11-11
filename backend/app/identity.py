@@ -161,6 +161,26 @@ def create_session(db, auth: Identity, company_id: str | None) -> dict:
         ).fetchone()
 
 
+def switch_empty_session_company(
+    db, auth: Identity, session_id: str, company_id: str | None
+) -> dict:
+    """Reuse an empty conversation without moving existing messages to another company."""
+    with db.transaction() as conn:
+        # Turn admission uses this same lock, so an accepted turn cannot race the check.
+        conn.execute("SELECT 1 FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,))
+        owned(conn, "sessions", "session_id", session_id, auth, lock=True)
+        if company_id:
+            assert_access(conn, auth, company_id)
+        if conn.execute(
+            "SELECT 1 FROM turns WHERE session_id=%s LIMIT 1", (session_id,)
+        ).fetchone():
+            raise AppError("SESSION_NOT_EMPTY", "当前会话已有内容，需新建会话。", 409)
+        return conn.execute(
+            "UPDATE sessions SET selected_company_id=%s,updated_at=now() WHERE session_id=%s RETURNING *",
+            (company_id, session_id),
+        ).fetchone()
+
+
 def switch_company(db, auth: Identity, session_id: str, company_id: str | None) -> dict:
     with db.transaction() as conn:
         conn.execute("SELECT 1 FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,))

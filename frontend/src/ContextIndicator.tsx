@@ -15,23 +15,21 @@ interface Preview {
 
 export function ContextIndicator({
   sessionId,
-  draft,
   version,
 }: {
   sessionId: string | null;
-  draft: string;
   version: string;
 }) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
     setPreview(null);
-    if (!sessionId || draft.length > 16000) return;
+    if (!sessionId) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       api<Preview>(`/sessions/${sessionId}/context-preview`, {
         method: 'POST',
-        body: body({ draft }),
+        body: body({ draft: '' }),
         signal: controller.signal,
       })
         .then((result) => {
@@ -48,11 +46,12 @@ export function ContextIndicator({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [sessionId, draft, version]);
-  const ratio = preview?.pressure_ratio;
+  }, [sessionId, version]);
+  // Pressure includes reserved capacity; the ring shows only estimated input.
+  const ratio = preview?.effective_window ? preview.input_estimate / preview.effective_window : null;
   const percent = ratio == null ? null : Math.round(ratio * 100);
   const ring = Math.min(100, Math.max(0, percent ?? 0));
-  const label = percent == null ? '上下文 --' : `上下文 ${percent}%`;
+  const label = percent == null ? '上下文估算 --' : `上下文估算 ${percent}%`;
   return (
     <details className="context-indicator">
       <summary aria-label={`${label}，点击查看估算详情`}>
@@ -65,12 +64,12 @@ export function ContextIndicator({
         >
           <span>{percent == null ? '--' : `${percent}%`}</span>
         </span>
-        <span>上下文</span>
+        <span>输入估算</span>
       </summary>
       <div className="context-indicator-popover" role="status">
         {preview?.effective_window ? (
           <>
-            <strong>下一次输入估算</strong>
+            <strong>当前上下文估算</strong>
             <span>输入约 {preview.input_estimate.toLocaleString()} tokens</span>
             <span>
               输出预留 {preview.output_reserve.toLocaleString()} · 余量{' '}
@@ -80,7 +79,7 @@ export function ContextIndicator({
               有效窗口 {preview.effective_window.toLocaleString()} · 输入上限{' '}
               {preview.input_limit.toLocaleString()}
             </span>
-            <small>包含草稿；范围引用、附件及后续工具结果可能变化，实际发送时重新计算。</small>
+            <small>圆环仅计当前上下文估算，不含未发送草稿、预留和余量。实际请求的范围引用、附件及工具结果可能变化。</small>
           </>
         ) : (
           <span>{error || (preview ? '模型容量未确认' : '等待上下文估算')}</span>

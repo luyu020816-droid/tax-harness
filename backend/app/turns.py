@@ -25,6 +25,8 @@ def accept_turn(
     *,
     upload_ids=None,
     knowledge_upload_ids=None,
+    expected_company_id=None,
+    check_expected_company=False,
     limits=None,
 ) -> dict:
     if not text.strip() or len(text) > 16000 or len(client_request_id) > 200:
@@ -43,6 +45,10 @@ def accept_turn(
     with db.transaction() as conn:
         conn.execute("SELECT * FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,))
         session = owned(conn, "sessions", "session_id", session_id, auth)
+        if check_expected_company and session["selected_company_id"] != expected_company_id:
+            raise AppError(
+                "SESSION_COMPANY_CHANGED", "当前会话企业已在其他页面切换，请刷新后再发送。", 409
+            )
         if session.get("archived_at"):
             raise AppError("SESSION_ARCHIVED", "请先取消归档，再继续此会话。", 409)
         if knowledge_upload_ids:

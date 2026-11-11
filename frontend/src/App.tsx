@@ -78,6 +78,8 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
   const [version, setVersion] = useState(0);
   const [stage, setStage] = useState('正在处理');
   const [sending, setSending] = useState(false);
+  const [switchingCompany, setSwitchingCompany] = useState(false);
+  const companySwitchInFlight = useRef(false);
   const [newMessages, setNewMessages] = useState(false);
   const [compactTask, setCompactTask] = useState<{ session: string; id: string } | null>(null);
   const [compactNotice, setCompactNotice] = useState('');
@@ -307,18 +309,48 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
 
   async function chooseCompany(value: string) {
     const next = value || null;
-    if (activeId) {
-      try {
+    if (next === company || companySwitchInFlight.current || sending) return;
+    companySwitchInFlight.current = true;
+    setSwitchingCompany(true);
+    try {
+      if (activeId) {
         await api(`/turns/${activeId}/cancel`, {
           method: 'POST',
           body: body({ request_id: requestId() }),
         });
-      } catch {
-        setError('上一轮状态暂时无法确认，请在运行记录中核对。');
-        return;
       }
+      if (session && user && !activeId && turnList.length === 0) {
+        const stamp = ++generation.current;
+        try {
+          const updated = await api<Session>(`/sessions/${session.session_id}/empty-company`, {
+            method: 'PATCH',
+            body: body({ selected_company_id: next }),
+          });
+          if (stamp !== generation.current) return;
+          setSessions((previous) => previous.map((item) =>
+            item.session_id === updated.session_id ? { ...item, ...updated } : item
+          ));
+          setDraft('');
+          setError('');
+          setCurrentTask(null);
+          setDetail(null);
+          setAttachment(null);
+          setKnowledgeAttachment(null);
+          retryRequest.current = null;
+          await openSession(updated, user, stamp);
+          return;
+        } catch (err) {
+          if (stamp !== generation.current) return;
+          if (!(err instanceof ApiError && err.code === 'SESSION_NOT_EMPTY')) throw err;
+        }
+      }
+      await newSession(next);
+    } catch (err) {
+      setError(activeId ? '上一轮状态暂时无法确认，请在运行记录中核对。' : (err as Error).message);
+    } finally {
+      companySwitchInFlight.current = false;
+      setSwitchingCompany(false);
     }
-    await newSession(next);
   }
 
   useEffect(() => {
@@ -462,6 +494,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
       !draft.trim() ||
       (activeId && !isCompact) ||
       sending ||
+      companySwitchInFlight.current ||
       draft.length > 16000
     )
       return;
@@ -529,6 +562,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
         body: body({
           client_request_id: identity.id,
           text,
+          expected_company_id: company,
           upload_ids: attachment ? [attachment.upload_id] : [],
           knowledge_upload_ids: knowledgeAttachment ? [knowledgeAttachment.file_id] : [],
         }),
@@ -824,6 +858,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
               <span className="sr-only">当前企业</span>
               <select
                 value={company ?? ''}
+                disabled={switchingCompany || sending}
                 onChange={(event) => void chooseCompany(event.target.value)}
               >
                 <option value="">选择企业</option>
@@ -1195,7 +1230,6 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                       )}
                     <ContextIndicator
                       sessionId={session?.session_id ?? null}
-                      draft={draft}
                       version={`${version}:${company}:${activeId}:${modelSettingsOpen}`}
                     />
                     <span>
@@ -1220,6 +1254,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                         disabled={
                           !session ||
                           sending ||
+                          switchingCompany ||
                           !draft.trim() ||
                           draft.length > 16000 ||
                           !user.model_ready

@@ -59,6 +59,7 @@ class TurnBody(StrictModel):
     text: str = Field(min_length=1, max_length=16000)
     upload_ids: list[UUID] = Field(default_factory=list, max_length=1)
     knowledge_upload_ids: list[UUID] = Field(default_factory=list, max_length=1)
+    expected_company_id: str | None = None
 
 
 class CompactionBody(StrictModel):
@@ -371,6 +372,14 @@ def create_app(
             identity.switch_company(db, current, str(session_id), body.selected_company_id)
         )
 
+    @app.patch("/api/v1/sessions/{session_id}/empty-company")
+    def change_empty_session_company(session_id: UUID, body: SessionBody, current=auth_dependency):
+        return safe_json(
+            identity.switch_empty_session_company(
+                db, current, str(session_id), body.selected_company_id
+            )
+        )
+
     @app.get("/api/v1/sessions/{session_id}/messages")
     def messages(session_id: UUID, cursor: int | None = None, current=auth_dependency):
         return turns.session_messages(db, current, str(session_id), cursor)
@@ -413,6 +422,8 @@ def create_app(
             body.text,
             upload_ids=[str(x) for x in body.upload_ids],
             knowledge_upload_ids=[str(x) for x in body.knowledge_upload_ids],
+            expected_company_id=body.expected_company_id,
+            check_expected_company="expected_company_id" in body.model_fields_set,
             limits=settings,
         )
         return {**result, "events_url": f"/api/v1/turns/{result['turn_id']}/events"}

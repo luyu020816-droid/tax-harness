@@ -27,9 +27,10 @@ test('context indicator and manual compact keep control separate from chat', asy
   });
   await page.goto('/showcase.html');
   await page.getByRole('button', { name: /测试用户一/ }).click();
-  await expect(page.getByLabel('上下文 42%，点击查看估算详情')).toBeVisible();
-  await page.getByLabel('上下文 42%，点击查看估算详情').click();
+  await expect(page.getByLabel('上下文估算 35%，点击查看估算详情')).toBeVisible();
+  await page.getByLabel('上下文估算 35%，点击查看估算详情').click();
   await expect(page.getByText('输入约 35,000 tokens')).toBeVisible();
+  await expect(page.getByText(/不含未发送草稿、预留和余量/)).toBeVisible();
   const input = page.getByRole('textbox', { name: '输入办理需求' });
   await input.fill('/compact');
   await page.getByRole('button', { name: '发送消息' }).click();
