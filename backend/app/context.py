@@ -269,7 +269,7 @@ def assemble(
         or knowledge_attachments
     ):
         definitions = reference_definitions(definitions)
-    limit = budget if budget is not None else settings.context_budget
+    limit = min(budget, settings.context_budget) if budget is not None else settings.context_budget
     if limit < 512:
         raise AppError("CONTEXT_CAPACITY_EXCEEDED", "模型输入预算不足，请检查上下文上限配置。", 422)
     selected = list(recent)
@@ -295,15 +295,23 @@ def assemble(
             # Do not spend a summary call on a tiny history when fixed tool schemas
             # dominate the budget. Never discard mandatory state or tool receipts.
             target = max(int(limit * 0.65), count - history_cost + 1024)
-        if count <= target or (len(selected) <= RECENT_DIALOGUE_TURNS and count <= limit):
+        if count <= limit and (count <= target or len(selected) <= RECENT_DIALOGUE_TURNS):
             break
         if len(selected) > RECENT_DIALOGUE_TURNS:
             dropped.append(selected.pop(0))
             continue
+        from app.telemetry import input_composition
+
         raise AppError(
             "CONTEXT_CAPACITY_EXCEEDED",
-            "最近对话、当前输入和必要的工具结果超出预算，请缩小范围或新开会话。",
+            "本轮输入和必要的上下文超出模型输入预算，暂时无法生成答复。",
             422,
+            details={
+                "estimated_input_tokens": count,
+                "input_budget": limit,
+                "stage": "after_tools" if tool_groups else "initial_assembly",
+                "composition": input_composition(payload),
+            },
         )
     refs = [
         {"source_id": execution.source_id, "revision": source["revision"], "allow_suppressed": True}
