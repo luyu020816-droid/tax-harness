@@ -65,6 +65,8 @@ test('insights: scoped history, chain, unknown usage, refresh, comparison and re
       ]);
     if (p.endsWith('/messages')) return reply({ turns: [], has_more: false });
     if (p === '/tasks') return reply([]);
+    if (p.endsWith('/context-usage'))
+      return reply({ status: 'no_calls', input_tokens: 0, effective_window: 100000 });
     if (p === '/insights/summary')
       return reply({
         request_count: 1,

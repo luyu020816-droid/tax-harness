@@ -4,6 +4,7 @@ test('context indicator and manual compact keep control separate from chat', asy
   let authenticated = false;
   const chat: string[] = [];
   const controls: string[] = [];
+  let usageKnown = true;
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '');
     const reply = (json: unknown, status = 200) => route.fulfill({ status, json });
@@ -29,19 +30,15 @@ test('context indicator and manual compact keep control separate from chat', asy
       ]);
     if (path.endsWith('/messages')) return reply({ turns: [], has_more: false });
     if (path === '/tasks') return reply([]);
-    if (path.endsWith('/context-preview'))
-      return reply({
-        input_estimate: 35000,
-        input_limit: 92952,
-        output_reserve: 2048,
-        margin: 5000,
-        effective_window: 100000,
-        pressure_ratio: 0.42048,
-        window_status: 'configured',
-        count_kind: 'estimated:utf8_div2_plus_protocol',
-      });
+    if (path.endsWith('/context-usage'))
+      return reply(
+        usageKnown
+          ? { status: 'measured', input_tokens: 35000, effective_window: 100000 }
+          : { status: 'unknown', input_tokens: null, effective_window: 100000 }
+      );
     if (path === '/sessions/s1/compactions' && route.request().method() === 'POST') {
       controls.push(route.request().postDataJSON().client_request_id);
+      usageKnown = false;
       return reply({ operation_id: 'c1', status: 'queued' }, 202);
     }
     if (path === '/sessions/s1/compactions/c1')
@@ -62,9 +59,10 @@ test('context indicator and manual compact keep control separate from chat', asy
   await menu.locator('summary').click();
   await page.keyboard.press('Escape');
   await expect(menu).not.toHaveAttribute('open', '');
-  await expect(page.getByLabel('上下文 42%，点击查看估算详情')).toBeVisible();
-  await page.getByLabel('上下文 42%，点击查看估算详情').click();
-  await expect(page.getByText('输入约 35,000 tokens')).toBeVisible();
+  await expect(page.getByLabel('上下文用量 35%，点击查看详情')).toBeVisible();
+  await page.getByLabel('上下文用量 35%，点击查看详情').click();
+  await expect(page.getByText('输入 35,000 tokens')).toBeVisible();
+  await expect(page.getByText(/不累计历史调用/)).toBeVisible();
   const popover = page.locator('.context-indicator-popover');
   expect(await popover.evaluate((e) => e.parentElement === document.body)).toBe(true);
   expect(
@@ -75,13 +73,16 @@ test('context indicator and manual compact keep control separate from chat', asy
   ).toBe(true);
   await page.keyboard.press('Escape');
   await expect(popover).toHaveCount(0);
-  await page.getByLabel('上下文 42%，点击查看估算详情').click();
+  await page.getByLabel('上下文用量 35%，点击查看详情').click();
   await page.locator('.topbar').click();
   await expect(popover).toHaveCount(0);
   const input = page.getByRole('textbox', { name: '输入办理需求' });
   await input.fill('/compact');
   await page.getByRole('button', { name: '发送消息' }).click();
   await expect(page.getByRole('status').filter({ hasText: '暂无可压缩' })).toBeVisible();
+  await expect(page.getByLabel('上下文用量 --，点击查看详情')).toBeVisible();
+  await page.getByLabel('上下文用量 --，点击查看详情').click();
+  await expect(page.getByText('实际输入未知')).toBeVisible();
   expect(controls).toHaveLength(1);
   expect(chat).toHaveLength(0);
   await input.fill('请解释 /compact');

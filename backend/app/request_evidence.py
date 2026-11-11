@@ -79,14 +79,16 @@ def _task_period_source(conn, execution, task, company_id, period):
 
 def _history_basis(conn, execution, company_id):
     rows = conn.execute(
-        "SELECT t.turn_id,s.source_id,s.content,s.created_at,e.arguments,e.result_source_id,b.basis_json FROM turns t "
+        "SELECT t.turn_id,t.status,t.source_seq,s.source_id,s.content,s.created_at,e.name,e.arguments,e.result_source_id,b.basis_json FROM turns t "
         "JOIN sources s ON s.turn_id=t.turn_id AND s.role='user' "
         "JOIN runs r ON r.turn_id=t.turn_id JOIN tool_executions e ON e.run_id=r.run_id "
         "LEFT JOIN scope_bindings b ON b.binding_id=(e.arguments->>'scope_ref')::uuid "
         "AND b.user_id=t.user_id AND b.turn_id=t.turn_id "
         "WHERE t.user_id=%s AND t.session_id=%s AND t.source_seq<%s "
-        "AND t.status IN ('completed','resolved','waiting_user') AND s.recall_state='active' "
-        "AND e.state='done' AND e.name IN ('query_month','get_rules','check_purposes') "
+        "AND s.recall_state='active' AND e.state='done' "
+        "AND t.status IN ('completed','resolved','waiting_user','failed') "
+        "AND e.name IN ('query_month','get_rules','check_purposes','find_invoices') "
+        "AND e.arguments->>'period' IS NOT NULL "
         "AND e.arguments->>'company_id'=%s ORDER BY t.source_seq DESC,e.tool_call_id LIMIT 12",
         (execution.auth.user_id, execution.session_id, execution.source_seq, company_id),
     ).fetchall()
@@ -97,6 +99,73 @@ def _history_basis(conn, execution, company_id):
         if len(periods) != 1 or None in periods:
             return None
         period = next(iter(periods))
+        for candidate in candidates:
+            if candidate["name"] != "find_invoices" and candidate["status"] != "failed":
+                continue
+            # A failed reply or an invoice search is reusable only when the
+            # user explicitly stated the month and the actual result confirms it.
+            stated = request_periods(candidate["content"], candidate["created_at"])
+            if stated != {period} or any(w in candidate["content"] for w in ("还是", "或者")):
+                return None
+            if not candidate["result_source_id"]:
+                return None
+            result = read_source(
+                conn, execution.auth, str(candidate["result_source_id"]), company_id=company_id
+            )
+            try:
+                output = json.loads(result["content"])
+                data = output["data"]
+                valid = (
+                    result["role"] == "tool"
+                    and str(result["turn_id"]) == str(candidate["turn_id"])
+                    and output.get("ok") is True
+                    and data.get("kind")
+                    == {
+                        "find_invoices": "invoices",
+                        "query_month": "monthly_summary",
+                        "get_rules": "rules",
+                        "check_purposes": "purpose_check",
+                    }[candidate["name"]]
+                    and data.get("company_id") == company_id
+                    and data.get("period") == period
+                )
+            except (TypeError, ValueError, KeyError, AttributeError):
+                valid = False
+            if not valid:
+                return None
+            skipped_refs.append(
+                {"source_id": str(result["source_id"]), "revision": result["revision"]}
+            )
+            # A later explicit correction invalidates this earlier query scope.
+            from app.turns import mentioned_companies
+
+            later = conn.execute(
+                "SELECT s.content,s.created_at FROM turns t JOIN sources s ON s.turn_id=t.turn_id "
+                "AND s.role='user' WHERE t.user_id=%s AND t.session_id=%s "
+                "AND t.source_seq>%s AND t.source_seq<%s AND s.recall_state='active' "
+                "ORDER BY t.source_seq",
+                (
+                    execution.auth.user_id,
+                    execution.session_id,
+                    candidate["source_seq"],
+                    execution.source_seq,
+                ),
+            ).fetchall()
+            for item in later:
+                named = mentioned_companies(conn, item["content"])
+                if named and company_id not in named:
+                    continue
+                stated_later = request_periods(item["content"], item["created_at"])
+                if stated_later and stated_later != {period}:
+                    return None
+                bare = {int(m[1]) for m in BARE_MONTH.finditer(item["content"])}
+                if bare and bare != {int(period[5:])}:
+                    return None
+                years = set(re.findall(r"(?<!\d)(\d{4})\s*年", item["content"]))
+                if years and years != {period[:4]}:
+                    return None
+                if any(w in item["content"] for w in ("下个月", "去年", "明年")):
+                    return None
         if skipped_period is not None and period != skipped_period:
             return None
         row = candidates[0]
@@ -353,7 +422,8 @@ def prepare_frame(db, execution, core):
                         rows = conn.execute(
                             "SELECT e.arguments FROM tool_executions e JOIN runs r USING(run_id) JOIN turns t USING(turn_id) "
                             "WHERE t.user_id=%s AND t.session_id=%s AND t.source_seq<%s AND e.state='done' "
-                            "AND e.name IN ('query_month','get_rules','check_purposes') AND e.arguments->>'company_id'=%s "
+                            "AND e.name IN ('query_month','get_rules','check_purposes','find_invoices') "
+                            "AND e.arguments->>'period' IS NOT NULL AND e.arguments->>'company_id'=%s "
                             "ORDER BY t.source_seq DESC LIMIT 12",
                             (
                                 execution.auth.user_id,

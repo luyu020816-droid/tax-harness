@@ -21,6 +21,37 @@ class ProjectionScope:
     turn_id: str = "00000000-0000-0000-0000-000000000000"
 
 
+def actual_usage(db, settings, auth, session_id):
+    """Last actual normal model input in this session, not a forecast or a sum."""
+    with db.transaction(readonly=True) as conn:
+        owned(conn, "sessions", "session_id", session_id, auth)
+        row = conn.execute(
+            "SELECT c.usage,c.payload->>'model' AS model,c.created_at "
+            "FROM context_snapshots c JOIN runs r ON r.run_id=c.run_id "
+            "JOIN turns t ON t.turn_id=r.turn_id "
+            "WHERE t.session_id=%s AND t.user_id=%s "
+            "AND coalesce(c.manifest->>'kind','') NOT IN ('compaction','control_execution') "
+            "ORDER BY c.created_at DESC,c.model_step DESC LIMIT 1",
+            (session_id, auth.user_id),
+        ).fetchone()
+    window = settings.context_limits["effective_window"]
+    if not row:
+        return {"status": "no_calls", "input_tokens": 0, "effective_window": window}
+    usage = row["usage"] if isinstance(row["usage"], dict) else {}
+    count = usage.get("prompt_tokens")
+    if type(count) is not int or count < 0:
+        return {"status": "unknown", "input_tokens": None, "effective_window": window}
+    if row["model"] != settings.model_id:
+        window = None
+    return {
+        "status": "measured",
+        "input_tokens": count,
+        "effective_window": window,
+        "model": row["model"],
+        "measured_at": row["created_at"].isoformat(),
+    }
+
+
 def preview(db, settings, auth, session_id, draft):
     """Estimate without creating sources, bindings, turns or an Execution."""
     core = load_core(db, auth, session_id)

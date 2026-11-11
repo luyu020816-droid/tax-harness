@@ -1,29 +1,23 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { api, body } from './api';
+import { api } from './api';
 import './context-indicator.css';
 
-interface Preview {
-  input_estimate: number;
-  input_limit: number;
-  output_reserve: number;
-  margin: number | null;
+interface Usage {
+  status: 'no_calls' | 'measured' | 'unknown';
+  input_tokens: number | null;
   effective_window: number | null;
-  pressure_ratio: number | null;
-  window_status: string;
-  count_kind: string;
+  model?: string;
 }
 
 export function ContextIndicator({
   sessionId,
-  draft,
   version,
 }: {
   sessionId: string | null;
-  draft: string;
   version: string;
 }) {
-  const [preview, setPreview] = useState<Preview | null>(null);
+  const [usage, setUsage] = useState<Usage | null>(null);
   const [error, setError] = useState('');
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ left: 0, top: 0 });
@@ -70,36 +64,28 @@ export function ContextIndicator({
       document.removeEventListener('pointerdown', dismiss);
       document.removeEventListener('keydown', escape);
     };
-  }, [open, preview, error]);
+  }, [open, usage, error]);
   useEffect(() => {
-    setPreview(null);
-    if (!sessionId || draft.length > 16000) return;
+    setUsage(null);
+    setError('');
+    if (!sessionId) return;
     const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      api<Preview>(`/sessions/${sessionId}/context-preview`, {
-        method: 'POST',
-        body: body({ draft }),
-        signal: controller.signal,
+    api<Usage>(`/sessions/${sessionId}/context-usage`, { signal: controller.signal })
+      .then((result) => {
+        if (!controller.signal.aborted) setUsage(result);
       })
-        .then((result) => {
-          if (!controller.signal.aborted) {
-            setPreview(result);
-            setError('');
-          }
-        })
-        .catch((failure) => {
-          if (!controller.signal.aborted) setError(failure.message || '估算暂不可用');
-        });
-    }, 450);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [sessionId, draft, version]);
-  const ratio = preview?.pressure_ratio;
+      .catch((failure) => {
+        if (!controller.signal.aborted) setError(failure.message || '用量暂不可用');
+      });
+    return () => controller.abort();
+  }, [sessionId, version]);
+  const ratio =
+    usage?.effective_window && usage.input_tokens != null
+      ? usage.input_tokens / usage.effective_window
+      : null;
   const percent = ratio == null ? null : Math.round(ratio * 100);
   const ring = Math.min(100, Math.max(0, percent ?? 0));
-  const label = percent == null ? '上下文 --' : `上下文 ${percent}%`;
+  const label = percent == null ? '上下文用量 --' : `上下文用量 ${percent}%`;
   return (
     <div className="context-indicator">
       <button
@@ -108,7 +94,7 @@ export function ContextIndicator({
         className="context-indicator-trigger"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
-        aria-label={`${label}，点击查看估算详情`}
+        aria-label={`${label}，点击查看详情`}
       >
         <span
           aria-hidden="true"
@@ -119,27 +105,38 @@ export function ContextIndicator({
         >
           <span>{percent == null ? '--' : `${percent}%`}</span>
         </span>
-        <span>上下文</span>
+        <span>实际输入</span>
       </button>
       {open &&
         createPortal(
           <div ref={popover} className="context-indicator-popover" role="status" style={position}>
-            {preview?.effective_window ? (
+            {error ? (
+              <span>{error}</span>
+            ) : !usage ? (
+              <span>正在读取实际用量</span>
+            ) : usage.status === 'no_calls' ? (
               <>
-                <strong>下一次输入估算</strong>
-                <span>输入约 {preview.input_estimate.toLocaleString()} tokens</span>
-                <span>
-                  输出预留 {preview.output_reserve.toLocaleString()} · 余量{' '}
-                  {preview.margin?.toLocaleString()}
-                </span>
-                <span>
-                  有效窗口 {preview.effective_window.toLocaleString()} · 输入上限{' '}
-                  {preview.input_limit.toLocaleString()}
-                </span>
-                <small>包含草稿；范围引用、附件及后续工具结果可能变化，实际发送时重新计算。</small>
+                <strong>当前会话尚无对话模型调用</strong>
+                <span>实际输入 0 tokens</span>
+              </>
+            ) : usage.status === 'unknown' ? (
+              <>
+                <strong>实际输入未知</strong>
+                <span>最近一次调用未返回用量，不能按估算值代替。</span>
               </>
             ) : (
-              <span>{error || (preview ? '模型容量未确认' : '等待上下文估算')}</span>
+              <>
+                <strong>最近一次模型调用的实际输入</strong>
+                <span>输入 {usage.input_tokens?.toLocaleString()} tokens</span>
+                <span>
+                  {usage.effective_window
+                    ? `当前配置窗口 ${usage.effective_window.toLocaleString()}`
+                    : '模型或窗口配置已变化，占比暂不可用'}
+                </span>
+                <small>
+                  只显示当前会话最近一次模型返回的输入用量，不累计历史调用；内容变化或压缩后，需再次调用才能取得新的实际值。
+                </small>
+              </>
             )}
           </div>,
           document.body

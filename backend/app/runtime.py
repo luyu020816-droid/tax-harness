@@ -963,6 +963,88 @@ class Runtime:
         )
         return message, cards, source["source_id"]
 
+    def _failure_invoice_result_in(self, conn, execution, error):
+        """Deliver a verified, still-current query page as a partial result."""
+        if error.code != "CONTEXT_CAPACITY_EXCEEDED" or not error.details.get("query_succeeded"):
+            return None, [], None
+        from app.answer_renderer import _result_text
+
+        try:
+            guard(conn, execution)
+            rows = conn.execute(
+                "SELECT result_source_id FROM tool_executions WHERE run_id=%s "
+                "AND name='find_invoices' AND state='done' AND result_source_id IS NOT NULL "
+                "ORDER BY result_source_id DESC",
+                (execution.run_id,),
+            ).fetchall()
+            # Multiple successful searches may cover different requested scopes;
+            # do not silently choose one and imply all were delivered.
+            if len(rows) != 1:
+                return None, [], None
+            result = read_source(conn, execution.auth, str(rows[0]["result_source_id"]))
+            output = json.loads(result["content"])
+            data = output.get("data") or {}
+            if (
+                result["role"] != "tool"
+                or str(result["turn_id"]) != execution.turn_id
+                or output.get("ok") is not True
+                or data.get("kind") != "invoices"
+                or not data.get("view_id")
+            ):
+                return None, [], None
+            assert_access(conn, execution.auth, data["company_id"])
+            head = conn.execute(
+                "SELECT data_revision,rules_epoch FROM company_heads WHERE company_id=%s FOR SHARE",
+                (data["company_id"],),
+            ).fetchone()
+            view = conn.execute(
+                "SELECT * FROM result_views WHERE view_id=%s AND user_id=%s AND session_id=%s "
+                "AND result_source_id=%s AND status='active'",
+                (
+                    data["view_id"],
+                    execution.auth.user_id,
+                    execution.session_id,
+                    result["source_id"],
+                ),
+            ).fetchone()
+            if (
+                not head
+                or not view
+                or view["company_id"] != data["company_id"]
+                or view["period"] != data.get("period")
+                or any(
+                    data.get(key) != head[key] or view[key] != head[key]
+                    for key in ("data_revision", "rules_epoch")
+                )
+            ):
+                return None, [], None
+            text, card = _result_text(data, "invoices")
+            message = (
+                "发票查询已成功，以下是核验时仍有效的查询结果。"
+                "本轮后续答复因上下文预算不足未完成，其他事项不能视为已完成。\n\n" + text
+            )
+            source = add_source(
+                conn,
+                execution.auth,
+                message,
+                role="assistant",
+                kind="assistant_final",
+                turn_id=execution.turn_id,
+                source_seq=execution.source_seq,
+                companies=[data["company_id"]],
+            )
+            assess(conn, str(source["source_id"]), "no_change")
+            emit(
+                conn,
+                execution.turn_id,
+                execution.run_id,
+                "partial_query_delivered",
+                {"view_id": data["view_id"]},
+            )
+            return message, [card], source["source_id"]
+        except (AppError, ValueError, TypeError, KeyError, AttributeError):
+            return None, [], None
+
     def fail(self, execution, error: AppError):
         with self.db.transaction() as conn:
             conn.execute(
@@ -980,10 +1062,37 @@ class Runtime:
                 or turn["status"] != "running"
             ):
                 return
+            if error.code == "CONTEXT_CAPACITY_EXCEEDED":
+                try:
+                    guard(conn, execution)
+                    results = conn.execute(
+                        "SELECT result_source_id FROM tool_executions WHERE run_id=%s "
+                        "AND name='find_invoices' AND state='done' AND result_source_id IS NOT NULL",
+                        (execution.run_id,),
+                    ).fetchall()
+                    for row in results:
+                        source = read_source(conn, execution.auth, str(row["result_source_id"]))
+                        output = json.loads(source["content"])
+                        if (
+                            source["role"] == "tool"
+                            and str(source["turn_id"]) == execution.turn_id
+                            and output.get("ok") is True
+                            and output.get("data", {}).get("kind") == "invoices"
+                        ):
+                            error.message = (
+                                "发票查询已执行成功，但生成答复时输入超出预算。"
+                                "查询结果可能发生变化，请重新查询后核对。"
+                            )
+                            error.details = {**error.details, "query_succeeded": True}
+                            break
+                except (AppError, ValueError, TypeError, AttributeError):
+                    pass
             status = (
                 "interrupted" if error.code in ("STALE_CONTEXT", "SOURCE_INVALIDATED") else "failed"
             )
             message, cards, source_id = self._failure_receipts_in(conn, execution, error)
+            if not cards:
+                message, cards, source_id = self._failure_invoice_result_in(conn, execution, error)
             conn.execute(
                 "UPDATE turns SET status=%s,error=%s,final_message=%s,final_cards=%s,final_response_ref=%s,updated_at=now() WHERE turn_id=%s",
                 (

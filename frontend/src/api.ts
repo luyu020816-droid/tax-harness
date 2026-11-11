@@ -3,6 +3,8 @@ import type { Turn } from './types';
 export function turnStatusName(turn: Turn): string {
   if (turn.status === 'failed' && turn.final_cards.some((card) => card.kind === 'operation'))
     return '保存回执已交付，后续未完成';
+  if (turn.status === 'failed' && turn.final_cards.some((card) => card.kind === 'invoices'))
+    return '查询结果已交付，后续未完成';
   const items = turn.final_cards.flatMap((card) =>
     card.kind === 'request_progress' ? card.items : []
   );
