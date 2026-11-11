@@ -475,7 +475,8 @@ def test_bare_month_does_not_reopen_previous_company_after_switch(db, settings):
 
 
 @pytest.mark.asyncio
-async def test_monthly_query_and_full_rules_fit_one_bounded_tool_round(db, settings):
+@pytest.mark.parametrize(("input_budget", "expected_status"), [(15100, "failed"), (30000, "completed")])
+async def test_monthly_query_and_full_rules_fit_one_bounded_tool_round(db, settings, input_budget, expected_status):
     session = str(create_session(db, AUTH, "C001")["session_id"])
     turn = accept_turn(db, AUTH, session, uid(), "查询甲企业2026年9月发票总额，并解释适用规则")
 
@@ -506,11 +507,15 @@ async def test_monthly_query_and_full_rules_fit_one_bounded_tool_round(db, setti
             ]
         )
 
-    limited = model_settings(settings).model_copy(update={"input_budget": 15100})
+    limited = model_settings(settings).model_copy(update={"input_budget": input_budget})
     runtime = Runtime(db, limited, ExactModel([query_and_rules, final]))
     await runtime.run(runtime.claim())
     result = read_turn(db, AUTH, turn["turn_id"])
-    assert result["status"] == "completed", result["error"]
+    assert result["status"] == expected_status, result["error"]
+    if expected_status == "failed":
+        assert result["error"]["code"] == "CONTEXT_CAPACITY_EXCEEDED"
+        assert result["final_cards"] == [] and result["operations"] == []
+        return
     summary = next(c for c in result["final_cards"] if c["kind"] == "monthly_summary")
     assert summary["invoice_total"] == "9622.06"
     assert all(ref["full_text"] for ref in summary["rule_refs"])

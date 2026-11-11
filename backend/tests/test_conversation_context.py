@@ -262,7 +262,8 @@ async def test_disabling_summary_restores_raw_messages_instead_of_losing_both(
     from app.conversation_projection import groups
 
     execution = execution_factory("继续")
-    settled(db, execution.session_id, "必须恢复的早期原文-RAW-712")
+    original = "必须恢复的早期原文-RAW-712。" + "背景文字，不产生操作。" * 80
+    settled(db, execution.session_id, original)
     with db.transaction() as conn:
         seq = conn.execute(
             "UPDATE users SET next_source_seq=next_source_seq+1 WHERE user_id='U001' RETURNING next_source_seq"
@@ -287,7 +288,7 @@ async def test_disabling_summary_restores_raw_messages_instead_of_losing_both(
     config = model_settings(settings).model_copy(update={"context_use_summary": False})
     payload, manifest, _ = context.assemble(db, config, execution, [])
     assert manifest["summary_id"] is None
-    assert any(m.get("content") == "必须恢复的早期原文-RAW-712" for m in payload["messages"])
+    assert any(m.get("content") == original for m in payload["messages"])
 
 
 def test_projection_reads_authoritative_source_not_mutable_turn_fields(
@@ -344,12 +345,17 @@ async def test_multiple_compactions_keep_old_sources_readable(db, settings, exec
         }
 
     raw = groups(db, execution)
-    await compact(db, model_settings(settings), ScriptedModel([summarize]), execution, raw[:10], 1)
-    first, manifest, _ = context.assemble(db, model_settings(settings), execution, [])
+    config = model_settings(settings).model_copy(update={"input_budget": None})
+    await compact(db, config, ScriptedModel([summarize]), execution, raw[:10], 1)
+    first, manifest, _ = context.assemble(
+        db, config, execution, [], proactive_compact=False
+    )
     assert manifest["raw_group_count"] == 10
     assert manifest["summary_id"]
-    await compact(db, model_settings(settings), ScriptedModel([summarize]), execution, raw[10:], 1)
-    _, manifest, _ = context.assemble(db, model_settings(settings), execution, [])
+    await compact(db, config, ScriptedModel([summarize]), execution, raw[10:], 1)
+    _, manifest, _ = context.assemble(
+        db, config, execution, [], proactive_compact=False
+    )
     assert manifest["raw_group_count"] == 5
     assert read_page(db, execution, source_id=ids[0][0])["excerpt"].startswith(
         "旧方案事实编号-ROUND-0"

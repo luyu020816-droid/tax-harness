@@ -22,7 +22,7 @@ AND NOT EXISTS(SELECT 1 FROM turns t WHERE t.session_id=s.session_id AND NOT ({T
 SESSION_TITLE = """(SELECT CASE WHEN EXISTS(SELECT 1 FROM sources x WHERE x.turn_id=t.turn_id
     AND x.user_id=t.user_id AND x.role='user' AND x.recall_state='active' AND x.content=t.text)
     THEN left(t.text,120) ELSE '已保护的会话' END FROM turns t
-    WHERE t.session_id=s.session_id ORDER BY t.source_seq LIMIT 1)"""
+    WHERE t.session_id=s.session_id AND t.request_kind<>'compact' ORDER BY t.source_seq LIMIT 1)"""
 
 
 def session_allowed(conn, user_id, session_id):

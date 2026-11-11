@@ -96,7 +96,8 @@ def test_successful_page_probe_switches_ready_and_retains_prior_snapshot(monkeyp
         assert client.get("/api/v1/ready").json()["model"] is True
         active, adapter = runtime._model_for()
         assert active.model_id == "page-model" and adapter.settings is active
-        assert active.context_budget == active.input_budget
+        assert active.context_budget <= 16000
+        assert active.context_limits["window_status"] == "unknown"
         assert runtime._model_for(running)[0].model_id == ""
         assert app.state.settings.model_api_key == ""
 
@@ -193,7 +194,8 @@ async def test_running_business_turn_keeps_its_model_after_a_successful_switch(
         return {"message": message, "usage": None, "finish_reason": "stop"}
 
     monkeypatch.setattr(HttpModel, "complete", complete)
-    base = model_settings(settings)
+    # Keep this test focused on snapshot ownership, not the unknown-model fallback cap.
+    base = model_settings(settings).model_copy(update={"input_budget": 32000})
     connection = ModelConnection(base)
     runtime = Runtime(db, base, connection.current[1], model_connection=connection)
     user = Identity("U001")

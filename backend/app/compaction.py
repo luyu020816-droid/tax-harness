@@ -157,19 +157,21 @@ def _decode(response):
         ) from exc
 
 
-async def compact(db, settings, model, execution, groups, step: int) -> bool:
+async def compact(db, settings, model, execution, groups, step: int, *, manual=False) -> bool:
     """Bounded rolling candidates; publish only after the entire input succeeds."""
     if not groups:
         return False
     refs, scope = _capture(db, execution, groups)
     text, processed = "", []
+    previous_id, previous_content = None, ""
     with db.transaction() as conn:
         guard(conn, execution)
         previous = conn.execute(
-            "SELECT content,covered_sources FROM summaries WHERE user_id=%s AND session_id=%s AND scope=%s AND memory_epoch=%s AND status='active' ORDER BY generation DESC LIMIT 1",
+            "SELECT summary_id,content,covered_sources FROM summaries WHERE user_id=%s AND session_id=%s AND scope=%s AND memory_epoch=%s AND status='active' ORDER BY generation DESC LIMIT 1",
             (execution.auth.user_id, execution.session_id, scope, execution.expected_epoch),
         ).fetchone()
         if previous:
+            previous_id, previous_content = previous["summary_id"], previous["content"]
             for ref in previous["covered_sources"]:
                 source = read_source(conn, execution.auth, ref["source_id"])
                 if source["revision"] != ref["revision"]:
@@ -286,8 +288,37 @@ async def compact(db, settings, model, execution, groups, step: int) -> bool:
             if fixed["summary"] != text or set(fixed["covered_sources"]) != expected:
                 raise AppError("SUMMARY_INVALID", "来源标签修复失败或改变正文，未发布候选。", 422)
         pending = pending[len(batch) :]
+    before = estimate_tokens(
+        {
+            "messages": (
+                [{"role": "system", "content": previous_content}] if previous_content else []
+            )
+            + [m for group in groups for m in group["messages"]]
+        }
+    )
+    after = estimate_tokens({"messages": [{"role": "system", "content": pack(text, protected)}]})
+    if after >= before:
+        raise AppError("COMPACTION_NO_GAIN", "摘要未减少上下文，原文与旧摘要仍保留。", 422)
     with db.transaction() as conn:
         guard(conn, execution)
+        session = conn.execute(
+            "SELECT selected_company_id,deleted_at,archived_at FROM sessions WHERE session_id=%s FOR SHARE",
+            (execution.session_id,),
+        ).fetchone()
+        if (
+            not session
+            or session["deleted_at"]
+            or session["archived_at"]
+            or (session["selected_company_id"] or "@user") != scope
+        ):
+            raise AppError("STALE_CONTEXT", "会话范围已变化，摘要未发布。", 409)
+        current = conn.execute(
+            "SELECT summary_id FROM summaries WHERE user_id=%s AND session_id=%s AND scope=%s "
+            "AND memory_epoch=%s AND status='active' ORDER BY generation DESC LIMIT 1 FOR UPDATE",
+            (execution.auth.user_id, execution.session_id, scope, execution.expected_epoch),
+        ).fetchone()
+        if (current["summary_id"] if current else None) != previous_id:
+            raise AppError("STALE_CONTEXT", "摘要已更新，候选未发布。", 409)
         for ref in refs:
             source = read_source(conn, execution.auth, ref["source_id"])
             if source["revision"] != ref["revision"]:
@@ -343,4 +374,21 @@ async def compact(db, settings, model, execution, groups, step: int) -> bool:
                 }
             ),
         )
+        if manual:
+            from app.compaction_requests import finish_in
+
+            finish_in(
+                conn,
+                execution,
+                {
+                    "outcome": "succeeded",
+                    "summary_id": str(summary_id),
+                    "generation": generation,
+                    "covered_event_id": covered_event_id,
+                    "groups": len(groups),
+                    "history_tokens_before": before,
+                    "history_tokens_after": after,
+                    "count_kind": "estimated:utf8_div2_plus_protocol",
+                },
+            )
     return True

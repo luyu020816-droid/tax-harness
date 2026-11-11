@@ -17,6 +17,7 @@ export interface InsightRequest {
   unknown_dispatch_calls: number;
   input_tokens: number;
   output_tokens: number;
+  cache?: { known_calls: number; hit_tokens: number | null; miss_tokens: number | null; hit_ratio: number | null };
   active_ms: number | null;
   active_time_note?: string;
   elapsed_ms: number | null;

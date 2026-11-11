@@ -1,3 +1,4 @@
+import math
 import os
 from pathlib import Path
 from typing import Literal
@@ -26,7 +27,10 @@ class Settings(BaseSettings):
     model_extra_body: dict = Field(default_factory=dict)
     token_counter: str = "conservative_utf8"
     output_reserve: int = Field(default=2048, ge=256)
-    input_budget: int = Field(default=16000, ge=512)
+    # None means no extra input cap; existing explicit INPUT_BUDGET stays effective.
+    input_budget: int | None = Field(default=None, ge=512)
+    session_context_window: int = Field(default=100000, ge=512)
+    model_capacity_source: Literal["configured", "unknown"] = "configured"
     max_model_steps: int = Field(default=8, ge=1, le=30)
     max_tool_calls: int = Field(default=16, ge=1, le=60)
     turn_timeout: int = Field(default=180, ge=10)
@@ -87,5 +91,36 @@ class Settings(BaseSettings):
 
     @property
     def context_budget(self) -> int:
-        available = int(self.model_context_limit * 0.95) - self.output_reserve
-        return min(self.input_budget, max(0, available))
+        return self.context_limits["input_limit"]
+
+    @property
+    def context_limits(self) -> dict:
+        """Budget for one request; the model window is not a history-storage limit."""
+        if self.model_capacity_source == "unknown" or not self.model_context_limit:
+            # Unknown route: retain a conservative configured cap and never claim
+            # this derived number is the provider's actual context capacity.
+            fallback = self.input_budget or 16000
+            available = max(0, int(self.model_context_limit * 0.95) - self.output_reserve)
+            return {
+                "window_status": "unknown",
+                "input_limit": min(fallback, available) if self.model_context_limit else 0,
+                "effective_window": None,
+                "output_reserve": self.output_reserve,
+                "margin": None,
+                "trigger_input": None,
+            }
+        window = min(self.session_context_window, self.model_context_limit)
+        margin = max(2048, math.ceil(window * 0.05))
+        available = max(0, window - self.output_reserve - margin)
+        input_limit = min(available, self.input_budget) if self.input_budget else available
+        effective = input_limit + self.output_reserve + margin
+        return {
+            "window_status": "configured",
+            "model_capacity_source": self.model_capacity_source,
+            "window": window,
+            "input_limit": input_limit,
+            "effective_window": effective,
+            "output_reserve": self.output_reserve,
+            "margin": margin,
+            "trigger_input": max(0, math.ceil(effective * 0.90) - self.output_reserve - margin),
+        }

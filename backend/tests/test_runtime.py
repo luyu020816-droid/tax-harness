@@ -131,6 +131,7 @@ def model_settings(settings):
             "model_base_url": "http://test.invalid",
             "model_api_key": "test-not-a-real-key",
             "model_context_limit": 64000,
+            "input_budget": None,
         }
     )
 

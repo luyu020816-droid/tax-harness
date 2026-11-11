@@ -149,7 +149,8 @@ def advance_progress(conn, auth: Identity) -> None:
     inputs = conn.execute(
         "SELECT s.source_seq,bool_and(a.state IN ('accepted','no_change','invalidated')) AS done "
         "FROM sources s JOIN source_assessments a USING(source_id) "
-        "WHERE s.user_id=%s AND s.role='user' GROUP BY s.source_seq ORDER BY s.source_seq",
+        "WHERE s.user_id=%s AND (s.role='user' OR (s.role='control' AND s.kind='compact')) "
+        "GROUP BY s.source_seq ORDER BY s.source_seq",
         (auth.user_id,),
     ).fetchall()
     cursor = 0

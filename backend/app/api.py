@@ -61,6 +61,14 @@ class TurnBody(StrictModel):
     knowledge_upload_ids: list[UUID] = Field(default_factory=list, max_length=1)
 
 
+class CompactionBody(StrictModel):
+    client_request_id: str = Field(min_length=1, max_length=200)
+
+
+class ContextPreviewBody(StrictModel):
+    draft: str = Field(default="", max_length=16000)
+
+
 class ControlBody(StrictModel):
     request_id: str = Field(min_length=1, max_length=200)
     expected_revision: int | None = Field(default=None, ge=1)
@@ -366,6 +374,31 @@ def create_app(
     @app.get("/api/v1/sessions/{session_id}/messages")
     def messages(session_id: UUID, cursor: int | None = None, current=auth_dependency):
         return turns.session_messages(db, current, str(session_id), cursor)
+
+    @app.post("/api/v1/sessions/{session_id}/compactions", status_code=202)
+    def start_compaction(session_id: UUID, body: CompactionBody, current=auth_dependency):
+        from app import compaction_requests
+
+        actual_settings, _ = runtime._model_for()
+        if not actual_settings.model_configured:
+            raise AppError("MODEL_UNAVAILABLE", "请先配置模型，再压缩会话。", 503)
+        task = compaction_requests.accept(
+            db, current, str(session_id), body.client_request_id, actual_settings
+        )
+        return {"operation_id": task["turn_id"], "status": task["status"]}
+
+    @app.post("/api/v1/sessions/{session_id}/context-preview")
+    def context_preview(session_id: UUID, body: ContextPreviewBody, current=auth_dependency):
+        from app.context_preview import preview
+
+        actual_settings, _ = runtime._model_for()
+        return preview(db, actual_settings, current, str(session_id), body.draft)
+
+    @app.get("/api/v1/sessions/{session_id}/compactions/{operation_id}")
+    def compaction_status(session_id: UUID, operation_id: UUID, current=auth_dependency):
+        from app import compaction_requests
+
+        return compaction_requests.read(db, current, str(session_id), str(operation_id))
 
     @app.post("/api/v1/sessions/{session_id}/turns", status_code=202)
     def send(session_id: UUID, body: TurnBody, current=auth_dependency):

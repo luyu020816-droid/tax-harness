@@ -83,7 +83,8 @@ def _candidate(base: Settings, form: ConnectionInput) -> Settings:
             "model_api_key": key,
             "model_context_limit": base.model_context_limit
             if same_provider and base.model_context_limit > base.output_reserve
-            else ceil((base.input_budget + base.output_reserve) / 0.95),
+            else ceil(((base.input_budget or 16000) + base.output_reserve) / 0.95),
+            "model_capacity_source": base.model_capacity_source if same_provider else "unknown",
             "model_extra_body": base.model_extra_body if same_provider else {},
         }
     )

@@ -1,0 +1,58 @@
+.context-indicator {
+  position: relative;
+  flex: none;
+}
+.context-indicator summary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  list-style: none;
+  color: inherit;
+  font-size: 12px;
+}
+.context-indicator summary::-webkit-details-marker {
+  display: none;
+}
+.context-ring {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+}
+.context-ring span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--surface, #fff);
+  color: #405278;
+  font-size: 9px;
+}
+.context-indicator-popover {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  z-index: 10;
+  display: grid;
+  gap: 7px;
+  width: min(310px, 75vw);
+  padding: 14px;
+  border: 1px solid #dfe5ee;
+  border-radius: 12px;
+  background: #fff;
+  color: #263247;
+  box-shadow: 0 8px 30px #1f2b4324;
+  font-size: 12px;
+}
+.context-indicator-popover small {
+  color: #69758a;
+  line-height: 1.45;
+}
+.context-compact-notice {
+  margin: 6px 8px;
+  color: #66748a;
+  font-size: 12px;
+}

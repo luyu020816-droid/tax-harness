@@ -44,7 +44,7 @@ def _conversation_answer(conn, execution, topic, frame):
         return f"{label}是 {day.year} 年 {day.month} 月 {day.day} 日，星期{'一二三四五六日'[day.weekday()]}。"
     previous = conn.execute(
         "SELECT status FROM turns WHERE session_id=%s AND user_id=%s AND source_seq<%s "
-        "AND status<>'deleted' ORDER BY source_seq DESC LIMIT 1",
+        "AND status<>'deleted' AND request_kind<>'compact' ORDER BY source_seq DESC LIMIT 1",
         (execution.session_id, execution.auth.user_id, execution.source_seq),
     ).fetchone()
     return {

@@ -270,7 +270,7 @@ def prepare_frame(db, execution, core):
         if PERIOD.fullmatch(source["content"].strip().rstrip("。.!！").strip()):
             prior = conn.execute(
                 "SELECT turn_id,status,final_response_ref,final_cards FROM turns "
-                "WHERE user_id=%s AND session_id=%s AND source_seq<%s "
+                "WHERE user_id=%s AND session_id=%s AND source_seq<%s AND request_kind<>'compact' "
                 "ORDER BY source_seq DESC LIMIT 1",
                 (execution.auth.user_id, execution.session_id, execution.source_seq),
             ).fetchone()

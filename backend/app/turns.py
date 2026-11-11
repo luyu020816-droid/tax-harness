@@ -311,7 +311,7 @@ def session_messages(db, auth: Identity, session_id: str, before_seq=None) -> di
     with db.transaction(readonly=True) as conn:
         owned(conn, "sessions", "session_id", session_id, auth)
         rows = conn.execute(
-            "SELECT * FROM turns WHERE session_id=%s AND user_id=%s AND (%s::bigint IS NULL OR source_seq<%s) ORDER BY source_seq DESC LIMIT 21",
+            "SELECT * FROM turns WHERE session_id=%s AND user_id=%s AND request_kind<>'compact' AND (%s::bigint IS NULL OR source_seq<%s) ORDER BY source_seq DESC LIMIT 21",
             (session_id, auth.user_id, before_seq, before_seq),
         ).fetchall()
         for row in rows[:20]:

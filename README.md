@@ -83,12 +83,15 @@ MODEL_BASE_URL=https://your-provider.example/v1
 MODEL_ID=your-model-id
 MODEL_API_KEY=your-local-key
 MODEL_CONTEXT_LIMIT=your-provider-documented-token-limit
+SESSION_CONTEXT_WINDOW=100000
 MODEL_EXTRA_BODY={}
 ```
 
 接入标准 Chat Completions / function tools 协议。`MODEL_BASE_URL` 是到 `/v1` 的基址；程序追加 `/chat/completions`。模型必须支持函数工具和约定 JSON 最终答复。若供应商需要额外字段，使用 JSON 格式的 `MODEL_EXTRA_BODY`；核心请求字段不能覆盖。需要回传内部 reasoning 的特殊协议尚不支持，不能默认兼容所有供应商。
 
-修改配置后重启服务。未配置时界面明确显示“模型待连接”，不生成假查询结果。运行详情保存实际模型输入和工具参数/结果，不保存 Authorization 或 API 密钥。上下文计数当前为标注过的保守估算，不是供应商 tokenizer 实测。
+`SESSION_CONTEXT_WINDOW` 是项目单次请求窗口目标，不限制数据库中的历史消息。输入预算会扣除输出和估算余量；旧环境如显式设置 `INPUT_BUDGET=16000`，该额外上限仍然生效，移除后才按窗口计算。切换到未确认容量的模型时保留保守预算，界面不把推算值当成真实容量。输入框环形是下一次请求的近似估算；输入完整的 `/compact` 可以请求压缩较早对话，原文仍保留。摘要可能遗漏语义，重要内容应回查原文。
+
+修改配置后重启服务。未配置时界面明确显示“模型待连接”，不生成假查询结果。运行详情保存实际模型输入和工具参数/结果，不保存 Authorization 或 API 密钥。上下文计数是 UTF-8 近似估算，不是供应商 tokenizer 实测，也不保证总是高估。
 
 ## 数据、规则与代码位置
 

@@ -269,12 +269,16 @@ def assemble(
         or knowledge_attachments
     ):
         definitions = reference_definitions(definitions)
-    limit = budget or settings.context_budget
+    limit = budget if budget is not None else settings.context_budget
     if limit < 512:
         raise AppError("CONTEXT_CAPACITY_EXCEEDED", "模型输入预算不足，请检查上下文上限配置。", 422)
     selected = list(recent)
     dropped = []
     target = limit
+    limits = settings.context_limits
+    trigger = limits["trigger_input"]
+    # Unknown capacity keeps the previous conservative threshold.
+    trigger = int(limit * 0.85) if trigger is None else min(trigger, limit)
     while True:
         history = [m for group in selected for m in group["messages"]]
         payload = build_request(
@@ -286,10 +290,7 @@ def assemble(
             not dropped
             and selected
             and settings.context_auto_compact
-            and (
-                count > limit
-                or (proactive_compact and count > int(limit * 0.85) and history_cost > 4096)
-            )
+            and (count > limit or (proactive_compact and count >= trigger))
         ):
             # Do not spend a summary call on a tiny history when fixed tool schemas
             # dominate the budget. Never discard mandatory state or tool receipts.
@@ -298,16 +299,6 @@ def assemble(
             break
         if len(selected) > RECENT_DIALOGUE_TURNS:
             dropped.append(selected.pop(0))
-            continue
-        if any(len(group["messages"]) > 2 for group in selected):
-            selected = [
-                {
-                    **group,
-                    "messages": [group["messages"][0], group["messages"][-1]],
-                    "sources": group.get("dialogue_sources", group["sources"]),
-                }
-                for group in selected
-            ]
             continue
         raise AppError(
             "CONTEXT_CAPACITY_EXCEEDED",

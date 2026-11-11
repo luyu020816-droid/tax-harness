@@ -33,6 +33,7 @@ import {
   turnStatusName,
 } from './api';
 import { BrandMark } from './BrandMark';
+import { ContextIndicator } from './ContextIndicator';
 import { Details } from './Details';
 import { MemoryView } from './MemoryView';
 import { ModelConnection } from './ModelConnection';
@@ -78,6 +79,9 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
   const [stage, setStage] = useState('正在处理');
   const [sending, setSending] = useState(false);
   const [newMessages, setNewMessages] = useState(false);
+  const [compactTask, setCompactTask] = useState<{ session: string; id: string } | null>(null);
+  const [compactNotice, setCompactNotice] = useState('');
+  const compactRequest = useRef<{ session: string; id: string } | null>(null);
   const generation = useRef(0);
   const composer = useRef<HTMLTextAreaElement>(null);
   const scrollArea = useRef<HTMLDivElement>(null);
@@ -96,6 +100,61 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
   const acknowledged = useRef(new Set<string>());
 
   const changed = useCallback(() => setVersion((v) => v + 1), []);
+
+  useEffect(() => {
+    if (!session || !user) {
+      setCompactTask(null);
+      setCompactNotice('');
+      return;
+    }
+    const stored = localStorage.getItem(`tax-compact:${user.user_id}:${session.session_id}`);
+    const retry = localStorage.getItem(`tax-compact-request:${user.user_id}:${session.session_id}`);
+    compactRequest.current = retry ? { session: session.session_id, id: retry } : null;
+    setCompactTask(stored ? { session: session.session_id, id: stored } : null);
+    setCompactNotice('');
+  }, [session?.session_id, user?.user_id]);
+
+  useEffect(() => {
+    if (!compactTask || !user) return;
+    let stopped = false;
+    let timer: number;
+    const poll = async () => {
+      try {
+        const item = await api<{
+          status: string;
+          error?: { message?: string } | null;
+          result?: { outcome?: string; history_tokens_before?: number; history_tokens_after?: number } | null;
+        }>(`/sessions/${compactTask.session}/compactions/${compactTask.id}`);
+        if (stopped) return;
+        if (item.status === 'queued' || item.status === 'running') {
+          setCompactNotice(item.status === 'queued' ? '压缩任务排队中' : '正在压缩上下文');
+          timer = window.setTimeout(poll, 1000);
+          return;
+        }
+        const r = item.result;
+        setCompactNotice(
+          r?.outcome === 'no_content' ? '暂无可压缩的较早内容' :
+          r?.outcome === 'succeeded' ? `压缩完成，历史估算 ${r.history_tokens_before} → ${r.history_tokens_after} tokens` :
+          item.error?.message || '压缩未完成，原始记录仍保留'
+        );
+        setCompactTask(null);
+        changed();
+      } catch (failure) {
+        if (!stopped) {
+          if (failure instanceof ApiError && [401, 403, 404].includes(failure.status)) {
+            setCompactNotice('压缩记录已不可访问，请检查登录和会话权限。');
+            localStorage.removeItem(`tax-compact:${user.user_id}:${compactTask.session}`);
+            setCompactTask(null);
+          } else {
+            setCompactNotice((failure as Error).message || '无法确认压缩状态，将继续查询');
+            timer = window.setTimeout(poll, 3000);
+          }
+        }
+      }
+    };
+    void poll();
+    return () => { stopped = true; window.clearTimeout(timer); };
+  }, [compactTask, user?.user_id, changed]);
 
   async function refreshTurns() {
     if (!session) return;
@@ -121,6 +180,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
     setError('');
     setSending(false);
     retryRequest.current = null;
+    compactRequest.current = null;
     acknowledged.current.clear();
     setNavigationOpen(false);
     setPage('chat');
@@ -395,17 +455,52 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
   }
 
   async function send() {
+    const isCompact = draft.trim() === '/compact';
     if (
       !session ||
       session.archived_at ||
       !draft.trim() ||
-      activeId ||
+      (activeId && !isCompact) ||
       sending ||
       draft.length > 16000
     )
       return;
     if (!user?.model_ready) {
       setError('模型尚未配置，请打开模型设置测试并启用，或配置本地 .env。');
+      return;
+    }
+    if (isCompact) {
+      if (attachment || knowledgeAttachment) {
+        setError('压缩命令不能携带附件，请先移除附件或另开一条消息。');
+        return;
+      }
+      const stamp = generation.current;
+      const identity = compactRequest.current?.session === session.session_id
+        ? compactRequest.current
+        : { session: session.session_id, id: requestId() };
+      compactRequest.current = identity;
+      localStorage.setItem(`tax-compact-request:${user.user_id}:${session.session_id}`, identity.id);
+      setSending(true);
+      setError('');
+      try {
+        const accepted = await api<{ operation_id: string; status: string }>(
+          `/sessions/${session.session_id}/compactions`,
+          { method: 'POST', body: body({ client_request_id: identity.id }) }
+        );
+        if (!accepted.operation_id) throw new Error('未收到压缩任务编号，请使用同一请求重试。');
+        localStorage.setItem(`tax-compact:${user.user_id}:${session.session_id}`, accepted.operation_id);
+        localStorage.removeItem(`tax-compact-request:${user.user_id}:${session.session_id}`);
+        if (stamp === generation.current) {
+          setCompactTask({ session: session.session_id, id: accepted.operation_id });
+          setCompactNotice('压缩任务已受理');
+          setDraft('');
+        }
+        compactRequest.current = null;
+      } catch (failure) {
+        if (stamp === generation.current) setError((failure as Error).message);
+      } finally {
+        if (stamp === generation.current) setSending(false);
+      }
       return;
     }
     const stamp = generation.current,
@@ -544,7 +639,10 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
   const modelSettings = modelSettingsOpen && (
     <ModelConnection
       onClose={() => setModelSettingsOpen(false)}
-      onEnabled={() => setUser((current) => current && { ...current, model_ready: true })}
+      onEnabled={() => {
+        setUser((current) => current && { ...current, model_ready: true });
+        changed();
+      }}
     />
   );
 
@@ -1095,12 +1193,17 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                           <Paperclip size={18} />
                         </button>
                       )}
+                    <ContextIndicator
+                      sessionId={session?.session_id ?? null}
+                      draft={draft}
+                      version={`${version}:${company}:${activeId}:${modelSettingsOpen}`}
+                    />
                     <span>
                       {draft.length > 12000
                         ? `${draft.length.toLocaleString()} / 16,000 字符`
                         : 'Enter 发送 · Shift + Enter 换行'}
                     </span>
-                    {activeId ? (
+                    {activeId && draft.trim() !== '/compact' ? (
                       <button
                         type="button"
                         className="stop-button"
@@ -1131,6 +1234,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                     )}
                   </div>
                 </form>
+                {compactNotice && <p className="context-compact-notice" role="status">{compactNotice}</p>}
                 {!user.model_ready && (
                   <p className="model-notice">
                     <CircleAlert size={14} />

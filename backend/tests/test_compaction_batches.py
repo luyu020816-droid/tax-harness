@@ -2,10 +2,15 @@ import json
 
 import pytest
 from test_compaction import closed_group, compact
-from test_runtime import model_settings
+from test_runtime import model_settings as normal_model_settings
 
 from app.context import assemble, validate
 from app.errors import AppError
+
+
+def model_settings(settings):
+    # Explicit small cap forces the batching and oversize cases under test.
+    return normal_model_settings(settings).model_copy(update={"input_budget": 16000})
 
 
 @pytest.mark.asyncio
@@ -30,13 +35,13 @@ async def test_only_known_prior_label_omission_gets_immutable_text_repair(
             }
 
     model = Model()
-    first = closed_group(db, source_factory("最早记录"))
+    first = closed_group(db, source_factory("最早记录。" + "测试背景，不产生操作。" * 80))
     ex = execution_factory("继续")
     await compact(db, model_settings(settings), model, ex, [first], 1)
     old = admin.execute("SELECT summary_id FROM summaries WHERE status='active'").fetchone()[
         "summary_id"
     ]
-    second = closed_group(db, source_factory("后来记录"))
+    second = closed_group(db, source_factory("后来记录。" + "后续背景，不产生操作。" * 80))
     if changes_text:
         with pytest.raises(AppError) as error:
             await compact(db, model_settings(settings), model, ex, [second], 2)
@@ -64,7 +69,7 @@ async def test_summary_sources_are_checked_again_before_final_publish(
     from test_compaction import summary_message
     from test_runtime import ScriptedModel
 
-    source = source_factory("未在最近窗口中的历史来源")
+    source = source_factory("未在最近窗口中的历史来源。" + "测试背景，不产生操作。" * 80)
     group = closed_group(db, source)
     execution = execution_factory("继续")
     await compact(
@@ -139,10 +144,10 @@ async def test_new_summary_merges_existing_covered_sources(
                 }
             }
 
-    first = closed_group(db, source_factory("最初的必要记录"))
+    first = closed_group(db, source_factory("最初的必要记录。" + "测试背景，不产生操作。" * 80))
     execution = execution_factory("继续")
     assert await compact(db, model_settings(settings), Model(), execution, [first], 1)
-    second = closed_group(db, source_factory("后来补充的必要记录"))
+    second = closed_group(db, source_factory("后来补充的必要记录。" + "后续背景，不产生操作。" * 80))
     assert await compact(db, model_settings(settings), Model(), execution, [second], 2)
     row = admin.execute("select * from summaries where status='active'").fetchone()
     assert {r["source_id"] for r in row["covered_sources"]} == {

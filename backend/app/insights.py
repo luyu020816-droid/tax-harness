@@ -50,6 +50,34 @@ def _check(conn, auth, f):
         assert_access(conn, auth, f["company"])
 
 
+def _cache_usage(attempts):
+    hit_total = miss_total = known = 0
+    for attempt in attempts:
+        usage = attempt.get("usage") or {}
+        if not isinstance(usage, dict):
+            continue
+        hit, miss = usage.get("prompt_cache_hit_tokens"), usage.get("prompt_cache_miss_tokens")
+        if hit is None:
+            details = usage.get("prompt_tokens_details") or {}
+            hit = details.get("cached_tokens") if isinstance(details, dict) else None
+        total = usage.get("prompt_tokens")
+        if type(hit) is not int or hit < 0:
+            continue
+        if miss is None and type(total) is int:
+            miss = total - hit
+        if type(miss) is not int or miss < 0 or (type(total) is int and hit + miss != total):
+            continue
+        known += 1
+        hit_total += hit
+        miss_total += miss
+    return {
+        "known_calls": known,
+        "hit_tokens": hit_total if known else None,
+        "miss_tokens": miss_total if known else None,
+        "hit_ratio": hit_total / (hit_total + miss_total) if hit_total + miss_total else None,
+    }
+
+
 def _compose(turn, runs, attempts, allowed):
     usages = [a["usage"] for a in attempts if usage_valid(a["usage"])]
     intervals = [(r["started_at"], r["finished_at"]) for r in runs]
@@ -62,6 +90,7 @@ def _compose(turn, runs, attempts, allowed):
         "usage_known_calls": len(usages),
         "input_tokens": sum(u["prompt_tokens"] for u in usages),
         "output_tokens": sum(u["completion_tokens"] for u in usages),
+        "cache": _cache_usage(attempts),
         "active_ms": union_ms(intervals)
         if intervals and all(r.get("state") != "interrupted" for r in runs)
         else None,

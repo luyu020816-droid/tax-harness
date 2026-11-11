@@ -18,7 +18,7 @@ def recent_knowledge_documents(conn, execution, company_id):
     assert_access(conn, execution.auth, company_id)
     rows = conn.execute(
         "WITH recent AS (SELECT source_seq,final_cards,final_response_ref FROM turns "
-        "WHERE session_id=%s AND user_id=%s AND source_seq<%s AND status IN ('completed','resolved') "
+        "WHERE session_id=%s AND user_id=%s AND source_seq<%s AND request_kind<>'compact' AND status IN ('completed','resolved') "
         "ORDER BY source_seq DESC LIMIT 5), hits AS ("
         "SELECT r.source_seq,d.document_id,d.title,d.status,d.active_version_id "
         "FROM recent r JOIN sources s ON s.source_id=r.final_response_ref AND s.recall_state='active' "

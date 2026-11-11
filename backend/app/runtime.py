@@ -224,6 +224,8 @@ class Runtime:
                     ).fetchone()
                 if turn["request_kind"] == "write_confirmation":
                     await self._confirm_loop(execution, str(turn["control_ref"]))
+                elif turn["request_kind"] == "compact":
+                    await self._manual_compact(execution)
                 else:
                     await self._loop(execution)
         except asyncio.CancelledError:
@@ -252,6 +254,43 @@ class Runtime:
             heartbeat.cancel()
             with suppress(asyncio.CancelledError):
                 await heartbeat
+
+    async def _manual_compact(self, execution):
+        from app.compaction import compact
+        from app.compaction_requests import finish_in, model_fingerprint
+        from app.conversation_projection import groups as conversation_groups
+        from app.summary_evidence import validate as validate_summary
+
+        settings, model = self._model_for(execution)
+        with self.db.transaction() as conn:
+            guard(conn, execution)
+            request = conn.execute(
+                "SELECT * FROM compaction_requests WHERE turn_id=%s FOR UPDATE",
+                (execution.turn_id,),
+            ).fetchone()
+            session = owned(conn, "sessions", "session_id", execution.session_id, execution.auth)
+            if not request or request["model_fingerprint"] != model_fingerprint(settings):
+                raise AppError("STALE_CONTEXT", "模型配置已变化，请重新发起压缩。", 409)
+            if request["selected_company_id"] != session["selected_company_id"]:
+                raise AppError("STALE_CONTEXT", "企业范围已变化，请重新发起压缩。", 409)
+            scope = session["selected_company_id"] or "@user"
+            summary = conn.execute(
+                "SELECT * FROM summaries WHERE user_id=%s AND session_id=%s AND scope=%s "
+                "AND memory_epoch=%s AND status='active' ORDER BY generation DESC LIMIT 1",
+                (execution.auth.user_id, execution.session_id, scope, execution.expected_epoch),
+            ).fetchone()
+            if summary:
+                validate_summary(conn, execution, summary["content"], summary["covered_sources"])
+        history = conversation_groups(
+            self.db, execution, summary["covered_sources"] if summary else [], preserve_recent=5
+        )
+        candidates = [group for group in history[:-5] if not group["covered"]]
+        if not candidates:
+            with self.db.transaction() as conn:
+                guard(conn, execution)
+                finish_in(conn, execution, {"outcome": "no_content", "groups": 0})
+            return
+        await compact(self.db, settings, model, execution, candidates, 0, manual=True)
 
     def _recovery_results(self, execution):
         """Read durable results before asking the model to resume an old source."""
@@ -453,7 +492,7 @@ class Runtime:
                             "compaction_failed",
                             exc.as_dict(),
                         )
-                    if exc.code != "SUMMARY_INVALID":
+                    if exc.code not in ("SUMMARY_INVALID", "COMPACTION_NO_GAIN"):
                         raise
                     # Retry assembly with the full original history. This is
                     # safe only if no history must be dropped at the HARD limit.
@@ -663,7 +702,7 @@ class Runtime:
             settings,
             execution,
             [group],
-            budget=settings.input_budget,
+            budget=settings.context_budget,
         )
         manifest["kind"] = "control_execution"
         with self.db.transaction() as conn:
@@ -964,6 +1003,11 @@ class Runtime:
                 "UPDATE work_items SET state='failed',last_error=%s,lease_until=NULL WHERE work_id=%s",
                 (jsonb(error.as_dict()), execution.work_id),
             )
-            assess(conn, execution.source_id, "failed", [])
+            assess(
+                conn,
+                execution.source_id,
+                "no_change" if turn["request_kind"] == "compact" else "failed",
+                [],
+            )
             advance_progress(conn, execution.auth)
             emit(conn, execution.turn_id, execution.run_id, "failed", error.as_dict())

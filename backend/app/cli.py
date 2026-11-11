@@ -29,7 +29,7 @@ def configure(root: Path = ROOT) -> None:
         f"TEST_DATABASE_URL=postgresql://tax_app:{quote(runtime_password)}@127.0.0.1:54337/tax_harness_test\n"
         "MODEL_BASE_URL=\nMODEL_ID=\nMODEL_API_KEY=\nMODEL_CONTEXT_LIMIT=0\n"
         "INGEST_DATABASE_URL=\nMODEL_EXTRA_BODY={}\nTOKEN_COUNTER=conservative_utf8\nOUTPUT_RESERVE=2048\n"
-        "INPUT_BUDGET=16000\nMAX_MODEL_STEPS=8\nMAX_TOOL_CALLS=16\nTURN_TIMEOUT=180\nDEMO_MODE=true\n"
+        "SESSION_CONTEXT_WINDOW=100000\nMAX_MODEL_STEPS=8\nMAX_TOOL_CALLS=16\nTURN_TIMEOUT=180\nDEMO_MODE=true\n"
     )
     path.write_text(text, encoding="utf-8")
     example = text
@@ -76,6 +76,7 @@ def _grant_runtime(conn, settings: Settings) -> None:
         "preference_revisions",
         "memory_dependencies",
         "summaries",
+        "compaction_requests",
         "history_index",
         "history_jobs",
         "history_passages",

@@ -76,7 +76,7 @@ def summary_message(source):
 async def test_M11_summary_is_derived_and_original_remains(
     db, settings, admin, source_factory, execution_factory
 ):
-    source = source_factory("咨询甲企业资料，不修改任何字段")
+    source = source_factory("咨询甲企业资料，不修改任何字段。" + "测试背景，不产生操作。" * 80)
     group = closed_group(db, source)
     execution = execution_factory("继续查询")
     assert await compact(
@@ -102,7 +102,7 @@ async def test_M11_summary_is_derived_and_original_remains(
 async def test_F17_invalid_summary_does_not_replace_previous(
     db, settings, admin, source_factory, execution_factory
 ):
-    source = source_factory("查询甲企业资料")
+    source = source_factory("查询甲企业资料。" + "测试背景，不产生操作。" * 80)
     group = closed_group(db, source)
     execution = execution_factory("继续")
     good = ScriptedModel([summary_message(source)])
