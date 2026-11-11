@@ -919,7 +919,7 @@ class Runtime:
 
     def _failure_receipts_in(self, conn, execution, error):
         """Deliver only durable receipts, not a guessed completion of the request."""
-        if error.code not in ("SUMMARY_INVALID", "CONTEXT_CAPACITY_EXCEEDED"):
+        if error.code in ("STALE_CONTEXT", "SOURCE_INVALIDATED"):
             return None, [], None
         from app.answer_renderer import operation_receipt
 

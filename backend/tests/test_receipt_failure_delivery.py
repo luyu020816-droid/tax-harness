@@ -25,20 +25,30 @@ def committed(db, execution):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure_code",
+    [
+        "SUMMARY_INVALID",
+        "REPLY_EVIDENCE_MISSING",
+        "MODEL_PROTOCOL_UNSUPPORTED",
+        "MODEL_UNAVAILABLE",
+        "RUN_LIMIT_EXCEEDED",
+    ],
+)
 async def test_summary_failure_after_commit_delivers_receipt_and_keeps_failed_state(
-    db, settings, admin, execution_factory
+    db, settings, admin, execution_factory, failure_code
 ):
     ex = execution_factory(TEXT)
     operation_id = committed(db, ex)
     runtime = Runtime(db, model_settings(settings), ExactModel([]))
 
     async def fail_summary(_):
-        raise AppError("SUMMARY_INVALID", "摘要校验失败，原文保留。", 422)
+        raise AppError(failure_code, "后续答复失败，原文保留。", 422)
 
     runtime._loop = fail_summary
     await runtime.run(ex)
     result = read_turn(db, ex.auth, ex.turn_id)
-    assert result["status"] == "failed" and result["error"]["code"] == "SUMMARY_INVALID"
+    assert result["status"] == "failed" and result["error"]["code"] == failure_code
     assert result["final_cards"][0]["operation_id"] == operation_id
     assert result["final_cards"][0]["verification_state"] == "verified"
     assert "已保存并核验" in result["final_message"]
@@ -78,8 +88,11 @@ def test_failure_receipt_does_not_upgrade_pending_or_hide_later_changes(
 
 
 @pytest.mark.parametrize("invalidator", ["permission", "epoch", "fence"])
+@pytest.mark.parametrize(
+    "failure_code", ["SUMMARY_INVALID", "REPLY_EVIDENCE_MISSING", "MODEL_UNAVAILABLE"]
+)
 def test_receipt_failure_path_does_not_bypass_revocation_or_stale_execution(
-    db, settings, admin, execution_factory, invalidator
+    db, settings, admin, execution_factory, invalidator, failure_code
 ):
     ex = execution_factory(TEXT)
     committed(db, ex)
@@ -94,7 +107,22 @@ def test_receipt_failure_path_does_not_bypass_revocation_or_stale_execution(
             "UPDATE work_items SET fencing_token=fencing_token+1 WHERE work_id=%s", (ex.work_id,)
         )
     Runtime(db, model_settings(settings), ExactModel([])).fail(
-        ex, AppError("SUMMARY_INVALID", "摘要失败", 422)
+        ex, AppError(failure_code, "后续答复失败", 422)
+    )
+    result = admin.execute(
+        "SELECT final_cards,final_message FROM turns WHERE turn_id=%s", (ex.turn_id,)
+    ).fetchone()
+    assert result["final_cards"] == [] and result["final_message"] is None
+
+
+@pytest.mark.parametrize("failure_code", ["STALE_CONTEXT", "SOURCE_INVALIDATED"])
+def test_invalidated_execution_never_emits_a_saved_receipt(
+    db, settings, admin, execution_factory, failure_code
+):
+    ex = execution_factory(TEXT)
+    committed(db, ex)
+    Runtime(db, model_settings(settings), ExactModel([])).fail(
+        ex, AppError(failure_code, "来源失效", 409)
     )
     result = admin.execute(
         "SELECT final_cards,final_message FROM turns WHERE turn_id=%s", (ex.turn_id,)
@@ -121,6 +149,8 @@ async def test_invalid_summary_reuses_full_history_only_when_hard_budget_allows(
     session = create_session(db, AUTH, "C001")
     secret = "原话标记KEEP-HISTORY-7421，不得外发。"
     settled(db, str(session["session_id"]), secret * 180)
+    for index in range(5):
+        settled(db, str(session["session_id"]), f"近期对话 {index}，不修改数据。")
     accepted = accept_turn(
         db, AUTH, str(session["session_id"]), uid(), "只记录本轮背景，不修改数据。"
     )
@@ -133,6 +163,13 @@ async def test_invalid_summary_reuses_full_history_only_when_hard_budget_allows(
     assert not dropped
     limit = initial["token_count"] + (128 if fits else -2000)
     config = wide.model_copy(update={"input_budget": limit})
+    if fits:
+        _, probe, probe_dropped = context.assemble(db, config, ex, [], proactive_compact=False)
+        assert not probe_dropped, {
+            "initial": initial["token_count"],
+            "probe": probe["token_count"],
+            "limit": limit,
+        }
     attempts = []
 
     async def invalid(*args):
@@ -144,7 +181,7 @@ async def test_invalid_summary_reuses_full_history_only_when_hard_budget_allows(
     def answer(payload):
         assert secret in str(payload)
         assert context.estimate_tokens(payload) <= limit
-        return raw_final([{"type": "explanation", "code": "no_changes"}])
+        return raw_final([{"type": "chat_answer", "text": "收到，本轮只讨论背景。"}])
 
     model = ExactModel([answer])
     runtime = Runtime(db, config, model)
@@ -152,7 +189,10 @@ async def test_invalid_summary_reuses_full_history_only_when_hard_budget_allows(
     result = read_turn(db, AUTH, accepted["turn_id"])
     assert attempts
     if fits:
-        assert result["status"] == "completed" and len(model.requests) == 1
+        assert result["status"] == "completed" and len(model.requests) == 1, {
+            "error": result["error"],
+            "requests": len(model.requests),
+        }
     else:
         assert result["status"] == "failed" and not model.requests
         assert not result["final_cards"]

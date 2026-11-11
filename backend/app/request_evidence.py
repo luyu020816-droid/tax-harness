@@ -1,7 +1,9 @@
 """Resolve monthly tool parameters against user evidence, not model guesses."""
 
+import json
 import re
 from datetime import timedelta, timezone
+from itertools import groupby
 
 from app.errors import AppError
 from app.identity import assert_access
@@ -77,7 +79,7 @@ def _task_period_source(conn, execution, task, company_id, period):
 
 def _history_basis(conn, execution, company_id):
     rows = conn.execute(
-        "SELECT s.source_id,s.content,s.created_at,e.arguments,b.basis_json FROM turns t "
+        "SELECT t.turn_id,s.source_id,s.content,s.created_at,e.arguments,e.result_source_id,b.basis_json FROM turns t "
         "JOIN sources s ON s.turn_id=t.turn_id AND s.role='user' "
         "JOIN runs r ON r.turn_id=t.turn_id JOIN tool_executions e ON e.run_id=r.run_id "
         "LEFT JOIN scope_bindings b ON b.binding_id=(e.arguments->>'scope_ref')::uuid "
@@ -88,19 +90,64 @@ def _history_basis(conn, execution, company_id):
         "AND e.arguments->>'company_id'=%s ORDER BY t.source_seq DESC,e.tool_call_id LIMIT 12",
         (execution.auth.user_id, execution.session_id, execution.source_seq, company_id),
     ).fetchall()
-    if not rows:
-        return None
-    latest = [r for r in rows if r["source_id"] == rows[0]["source_id"]]
-    periods = {r["arguments"]["period"] for r in latest}
-    if len(periods) != 1:
-        return None
-    row = latest[0]
-    period = row["arguments"]["period"]
-    basis = row["basis_json"]
-    if not basis and period not in request_periods(row["content"], row["created_at"]):
+    skipped_refs, skipped_period = [], None
+    for _, entries in groupby(rows, key=lambda row: row["source_id"]):
+        candidates = list(entries)
+        periods = {row["arguments"].get("period") for row in candidates}
+        if len(periods) != 1 or None in periods:
+            return None
+        period = next(iter(periods))
+        if skipped_period is not None and period != skipped_period:
+            return None
+        row = candidates[0]
+        # A later check of the same request may have the scope binding even if
+        # an earlier tool did not; never select a different month implicitly.
+        bound = next((item for item in candidates if item["basis_json"]), None)
+        if bound:
+            row = bound
+        basis = row["basis_json"]
+        if basis or period in request_periods(row["content"], row["created_at"]):
+            break
+        # Only host-generated, verified post-save rechecks may be transparent.
+        # Other unproven/ambiguous requests stop the search, rather than revive
+        # an older month after the user may have changed scope.
+        text = row["content"]
+        if BARE_MONTH.search(text) or re.search(
+            r"(?<!\d)\d{4}\s*年|本月|这个月|上个月|下个月|去年|今年|明年", text
+        ):
+            return None
+        source = read_source(conn, execution.auth, str(row["source_id"]), company_id=company_id)
+        for candidate in candidates:
+            if not candidate["result_source_id"]:
+                return None
+            result = read_source(
+                conn, execution.auth, str(candidate["result_source_id"]), company_id=company_id
+            )
+            try:
+                output = json.loads(result["content"])
+                data = output["data"]
+                valid = (
+                    result["role"] == "tool"
+                    and str(result["turn_id"]) == str(candidate["turn_id"])
+                    and output.get("ok") is True
+                    and output.get("origin") == "program_after_save"
+                    and data.get("kind") == "purpose_check"
+                    and data.get("company_id") == company_id
+                    and data.get("period") == period
+                )
+            except (TypeError, ValueError, KeyError, AttributeError):
+                valid = False
+            if not valid:
+                return None
+            skipped_refs.append(
+                {"source_id": str(result["source_id"]), "revision": result["revision"]}
+            )
+        skipped_refs.append({"source_id": str(source["source_id"]), "revision": source["revision"]})
+        skipped_period = period
+    else:
         return None
     source = read_source(conn, execution.auth, str(row["source_id"]), company_id=company_id)
-    refs = list((basis or {}).get("context_sources", []))
+    refs = [*skipped_refs, *(basis or {}).get("context_sources", [])]
     if basis:
         refs.append(
             {k: v for k, v in basis.items() if k in ("source_id", "revision", "allow_suppressed")}
