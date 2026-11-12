@@ -6,13 +6,257 @@ from test_knowledge import uploaded
 from test_runtime import ScriptedModel, model_settings, tool
 
 from app.identity import Identity, create_session
-from app.knowledge_grounding import validated_indices
+from app.knowledge_grounding import Verdicts, validated_indices, validated_missing
 from app.runtime import Runtime
 from app.tool_schemas import FinalReply
 from app.turns import accept_turn, read_turn
 from app.values import uid
 
 pytest_plugins = ["test_knowledge"]
+
+
+def no_missing_coverage(_payload):
+    return {"role": "assistant", "content": json.dumps({"verdicts": [], "missing_relevant": []})}
+
+
+def test_missing_coverage_suggestions_require_actual_quotes():
+    verdicts = Verdicts.model_validate(
+        {
+            "verdicts": [],
+            "missing_relevant": [
+                {"citation_id": "real", "quote": "出租车"},
+                {"citation_id": "real", "quote": "原文没有这个"},
+                {"citation_id": "fake", "quote": "出租车"},
+            ],
+        }
+    )
+    assert validated_missing(verdicts, {"real": "符合条件可以报销出租车费用"}) == ["real"]
+
+
+def test_explicit_city_filters_unrelated_claims_and_coverage_suggestions():
+    evidence = {"a": "青杉计划员工到南京出差，住宿上限每晚437元。"}
+    claims = [{"text": "南京住宿每晚上限437元。", "evidence": evidence}]
+    raw = json.dumps(
+        {
+            "verdicts": [
+                {
+                    "claim_index": 0,
+                    "status": "supported",
+                    "supporting_quotes": [{"citation_id": "a", "quote": evidence["a"]}],
+                }
+            ],
+            "missing_relevant": [{"citation_id": "a", "quote": "南京出差"}],
+        },
+        ensure_ascii=False,
+    )
+    verdicts = Verdicts.model_validate_json(raw)
+    assert validated_indices(claims, raw, question="青衫计划去北京可以报销吗") == set()
+    assert validated_missing(verdicts, evidence, question="青衫计划去北京可以报销吗") == []
+    assert validated_indices(claims, raw, question="青杉计划去南京市可以报销吗") == {0}
+    assert validated_indices(claims, raw, question="北京和南京分别有什么规定") == {0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    ["retry_success", "retry_failure", "non_retryable", "timeout_success", "invalid_success"],
+)
+async def test_knowledge_verifier_retries_only_transient_failures(db, settings, knowledge, failure):
+    from app.errors import AppError
+
+    uploaded(knowledge, "南京出差住宿上限每人每晚437元。")
+    auth = Identity("U001")
+    session = str(create_session(db, auth, "C001")["session_id"])
+    turn = accept_turn(db, auth, session, uid(), "南京住宿报销多少？")
+
+    def answer(payload):
+        evidence = json.loads(payload["messages"][-1]["content"])["data"]["evidence"][0]
+        return {
+            "role": "assistant",
+            "content": json.dumps(
+                {
+                    "blocks": [
+                        {
+                            "type": "knowledge_answer",
+                            "coverage": "supported",
+                            "claims": [
+                                {
+                                    "text": "南京出差住宿上限每人每晚437元。",
+                                    "citation_ids": [evidence["citation_id"]],
+                                }
+                            ],
+                        }
+                    ],
+                    "status": "completed",
+                },
+                ensure_ascii=False,
+            ),
+        }
+
+    def fail(_payload):
+        if failure == "timeout_success":
+            raise TimeoutError()
+        if failure == "invalid_success":
+            return {"role": "assistant", "content": "not json"}
+        raise AppError(
+            "MODEL_UNAVAILABLE",
+            "temporary private details",
+            503,
+            failure != "non_retryable",
+            details={"http_status": 503},
+        )
+
+    def verify(payload):
+        claim = json.loads(payload["messages"][-1]["content"])["claims"][0]
+        citation, quote = next(iter(claim["evidence"].items()))
+        return {
+            "role": "assistant",
+            "content": json.dumps(
+                {
+                    "verdicts": [
+                        {
+                            "claim_index": 0,
+                            "status": "supported",
+                            "supporting_quotes": [{"citation_id": citation, "quote": quote}],
+                        }
+                    ],
+                    "missing_relevant": [],
+                },
+                ensure_ascii=False,
+            ),
+        }
+
+    steps = [tool("search_knowledge", {"company_id": "C001", "query": "南京住宿"}), answer, fail]
+    if failure != "non_retryable":
+        steps.append(
+            verify if failure in ("retry_success", "timeout_success", "invalid_success") else fail
+        )
+    model = ScriptedModel(steps)
+    runtime = Runtime(db, model_settings(settings), model, retrieval=knowledge[2])
+    await runtime.run(runtime.claim())
+    result = read_turn(db, auth, turn["turn_id"])
+    assert result["status"] == "completed"
+    if failure in ("retry_success", "timeout_success", "invalid_success"):
+        assert "437" in result["final_message"]
+        assert result["final_cards"][0]["kind"] == "knowledge_quote"
+    else:
+        assert "437" not in result["final_message"]
+        assert result["final_cards"] == [
+            {"kind": "knowledge_verification_status", "status": "unavailable", "company_id": "C001"}
+        ]
+    with db.transaction(readonly=True) as conn:
+        events = conn.execute(
+            "SELECT payload FROM run_events WHERE turn_id=%s AND kind='knowledge_verification_attempt' ORDER BY event_seq",
+            (turn["turn_id"],),
+        ).fetchall()
+        assert len(events) == (1 if failure == "non_retryable" else 2)
+        assert events[0]["payload"]["http_status"] == (
+            None if failure in ("timeout_success", "invalid_success") else 503
+        )
+        assert "temporary private details" not in json.dumps(events[0]["payload"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial_insufficient", [False, True])
+async def test_missing_retrieved_clause_prompts_one_coverage_repair(
+    db, settings, knowledge, initial_insufficient
+):
+    text = "住宿费用\n\n南京住宿每人每晚上限437元。\n\n夜间交通\n\n工作日晚于22:30回酒店乘出租车可报销，需提供行程单。"
+    uploaded(knowledge, text)
+    auth = Identity("U001")
+    session = str(create_session(db, auth, "C001")["session_id"])
+    turn = accept_turn(db, auth, session, uid(), "南京出差可以报销什么？")
+    citations = {}
+
+    def first(payload):
+        evidence = json.loads(payload["messages"][-1]["content"])["data"]["evidence"]
+        citations["stay"] = next(x["citation_id"] for x in evidence if "437" in x["excerpt"])
+        citations["taxi"] = next(x["citation_id"] for x in evidence if "出租车" in x["excerpt"])
+        if initial_insufficient:
+            return {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "blocks": [
+                            {"type": "knowledge_answer", "coverage": "insufficient", "claims": []}
+                        ],
+                        "status": "completed",
+                    }
+                ),
+            }
+        return reply(False)
+
+    def reply(include_taxi):
+        claims = [{"text": "南京住宿每人每晚上限437元。", "citation_ids": [citations["stay"]]}]
+        if include_taxi:
+            claims.append(
+                {
+                    "text": "工作日晚于22:30回酒店乘出租车可报销，需提供行程单。",
+                    "citation_ids": [citations["taxi"]],
+                }
+            )
+        return {
+            "role": "assistant",
+            "content": json.dumps(
+                {
+                    "blocks": [
+                        {
+                            "type": "knowledge_answer",
+                            "coverage": "partial",
+                            "gap": "其他项目待核实",
+                            "claims": claims,
+                        }
+                    ],
+                    "status": "completed",
+                },
+                ensure_ascii=False,
+            ),
+        }
+
+    def verify(payload):
+        data = json.loads(payload["messages"][-1]["content"])
+        results = []
+        for index, claim in enumerate(data["claims"]):
+            citation, quote = next(iter(claim["evidence"].items()))
+            results.append(
+                {
+                    "claim_index": index,
+                    "status": "supported",
+                    "supporting_quotes": [{"citation_id": citation, "quote": quote}],
+                }
+            )
+        taxi = next(
+            (cid, excerpt)
+            for cid, excerpt in data["retrieved_evidence"].items()
+            if "出租车" in excerpt
+        )
+        missing = [{"citation_id": taxi[0], "quote": "出租车"}] if len(results) < 2 else []
+        return {
+            "role": "assistant",
+            "content": json.dumps(
+                {"verdicts": results, "missing_relevant": missing}, ensure_ascii=False
+            ),
+        }
+
+    def corrected(payload):
+        assert citations["taxi"] in payload["messages"][-1]["content"]
+        return reply(True)
+
+    model = ScriptedModel(
+        [
+            tool("search_knowledge", {"company_id": "C001", "query": "南京住宿和夜间交通"}),
+            first,
+            verify,
+            corrected,
+            verify,
+        ]
+    )
+    runtime = Runtime(db, model_settings(settings), model, retrieval=knowledge[2])
+    await runtime.run(runtime.claim())
+    result = read_turn(db, auth, turn["turn_id"])
+    assert result["status"] == "completed", result
+    assert "437" in result["final_message"] and "出租车" in result["final_message"]
+    assert len(model.requests) == 5
 
 
 @pytest.mark.asyncio
@@ -38,6 +282,7 @@ async def test_policy_question_can_finish_after_search_without_formal_rule_oblig
                     ensure_ascii=False,
                 ),
             },
+            no_missing_coverage,
         ]
     )
     runtime = Runtime(db, model_settings(settings), model, retrieval=knowledge[2])
@@ -89,6 +334,7 @@ async def test_rule_scope_error_reconsiders_month_question_before_knowledge_sear
                     ensure_ascii=False,
                 ),
             },
+            no_missing_coverage,
         ]
     )
     runtime = Runtime(db, model_settings(settings), model, retrieval=knowledge[2])
@@ -270,7 +516,8 @@ async def test_answer_uses_only_verified_actual_citations(db, settings, knowledg
                             "status": verdict,
                             "supporting_quotes": [{"citation_id": citation, "quote": quote}],
                         }
-                    ]
+                    ],
+                    "missing_relevant": [],
                 },
                 ensure_ascii=False,
             ),
@@ -315,10 +562,17 @@ async def test_answer_uses_only_verified_actual_citations(db, settings, knowledg
         assert any(item.get("kind") == "knowledge_answer" for item in excluded)
     else:
         if verdict == "invalid":
-            assert "暂时无法完成答案核验" in result["final_message"]
+            assert "答案核验暂时不可用" in result["final_message"]
+            assert result["final_cards"] == [
+                {
+                    "kind": "knowledge_verification_status",
+                    "status": "unavailable",
+                    "company_id": "C001",
+                }
+            ]
         else:
             assert "没有找到足以确认答案的资料" in result["final_message"]
-        assert not result["final_cards"]
+            assert not result["final_cards"]
 
 
 @pytest.mark.asyncio
@@ -344,7 +598,11 @@ async def test_irrelevant_retrieval_is_not_cited_when_answer_is_insufficient(
         }
 
     model = ScriptedModel(
-        [tool("search_knowledge", {"company_id": "C001", "query": "北京出差住宿"}), result_block]
+        [
+            tool("search_knowledge", {"company_id": "C001", "query": "北京出差住宿"}),
+            result_block,
+            no_missing_coverage,
+        ]
     )
     runtime = Runtime(db, model_settings(settings), model, retrieval=knowledge[2])
     await runtime.run(runtime.claim())
@@ -353,7 +611,7 @@ async def test_irrelevant_retrieval_is_not_cited_when_answer_is_insufficient(
     assert "没有找到足以确认答案" in result["final_message"]
     assert "437" not in result["final_message"]
     assert result["final_cards"] == []
-    assert len(model.requests) == 2  # no verifier call without claims
+    assert len(model.requests) == 3  # a no-answer decision also checks retrieved evidence
 
 
 @pytest.mark.asyncio
@@ -405,7 +663,8 @@ async def test_revoked_document_during_verification_does_not_deliver_claim(db, s
                             "status": "supported",
                             "supporting_quotes": [{"citation_id": citation, "quote": quote}],
                         }
-                    ]
+                    ],
+                    "missing_relevant": [],
                 },
                 ensure_ascii=False,
             ),

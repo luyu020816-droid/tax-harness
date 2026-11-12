@@ -638,12 +638,21 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
             if not accepted:
                 if any(item.get("status") == "unavailable" for item in knowledge):
                     texts.append("知识资料暂时无法检索，请稍后再试。")
+                elif (verified_knowledge or {}).get("status") not in ("checked", "not_needed") or (
+                    verified_knowledge or {}
+                ).get("coverage_incomplete", False):
+                    texts.append("已找到相关资料，但答案核验暂时不可用，请稍后重试。")
+                    reply.cards.append(
+                        {
+                            "kind": "knowledge_verification_status",
+                            "status": "unavailable",
+                            "company_id": state.get("selected_company_id"),
+                        }
+                    )
                 elif any(item.get("status") == "partial" for item in knowledge):
                     texts.append(
                         "这次检索的资料尚不完整，暂时无法确认答案。请稍后重试或补充相关制度。"
                     )
-                elif block.claims and (verified_knowledge or {}).get("status") != "checked":
-                    texts.append("我已检索到资料，但暂时无法完成答案核验，请稍后重试。")
                 else:
                     question = read_source(
                         conn, execution.auth, execution.source_id, allow_suppressed=True
@@ -660,6 +669,7 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
             elif (
                 block.coverage == "partial"
                 or accepted < len(block.claims)
+                or (verified_knowledge or {}).get("coverage_incomplete", False)
                 or any(item.get("status") == "partial" for item in knowledge)
             ):
                 texts.append(

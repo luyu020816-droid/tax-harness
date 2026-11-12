@@ -123,6 +123,7 @@ export type ResultCard =
       submitted: false;
       draft_request_id: string;
     }
+  | { kind: 'knowledge_verification_status'; status: 'unavailable'; company_id: string | null }
   | SummaryCard
   | ListCard
   | OperationCard

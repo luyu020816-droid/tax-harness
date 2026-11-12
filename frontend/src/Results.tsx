@@ -69,6 +69,7 @@ export function Results({
         requestKey={card.draft_request_id}
       />
     );
+  if (card.kind === 'knowledge_verification_status') return null;
   if (card.kind === 'knowledge_quote')
     return <KnowledgeCitation id={card.citation_id} referenceLabel={card.reference_label} onDetail={onDetail} />;
   if (card.kind === 'history_quote') return <HistoryCitation card={card} />;

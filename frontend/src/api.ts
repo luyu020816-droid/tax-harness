@@ -1,6 +1,8 @@
 import type { Turn } from './types';
 
 export function turnStatusName(turn: Turn): string {
+  if (turn.final_cards.some((card) => card.kind === 'knowledge_verification_status'))
+    return '答案核验未完成';
   if (turn.status === 'failed' && turn.final_cards.some((card) => card.kind === 'operation'))
     return '保存回执已交付，后续未完成';
   if (turn.status === 'failed' && turn.final_cards.some((card) => card.kind === 'invoices'))

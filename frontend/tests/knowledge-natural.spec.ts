@@ -8,6 +8,9 @@ test('natural knowledge answer identifies its evidence and insufficient answer h
       final_cards: [{ kind: 'knowledge_quote', citation_id: 'e1', reference_label: '来源1', company_id: 'C001', title: '差旅制度', edition: 1, locator_label: '第1段' }], runs: [] },
     { turn_id: 't2', source_seq: 2, text: '北京呢？', status: 'completed',
       final_message: '关于“北京呢？”，我这次没有找到足以确认答案的资料。', final_cards: [], runs: [] },
+    { turn_id: 't3', source_seq: 3, text: '南京呢？', status: 'completed',
+      final_message: '已找到相关资料，但答案核验暂时不可用，请稍后重试。',
+      final_cards: [{ kind: 'knowledge_verification_status', status: 'unavailable', company_id: 'C001' }], runs: [] },
   ];
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '');
@@ -30,6 +33,9 @@ test('natural knowledge answer identifies its evidence and insufficient answer h
   const second = page.locator('.turn').nth(1);
   await expect(second.locator('.prose')).toContainText('没有找到足以确认答案');
   await expect(second.locator('.knowledge-citation')).toHaveCount(0);
+  const third = page.locator('.turn').nth(2);
+  await expect(third).toContainText('答案核验未完成');
+  await expect(third).not.toContainText('已完成');
   expired = true;
   await expect(first.getByRole('status').filter({ hasText: '知识依据已变化或暂不可用' })).toBeVisible({ timeout: 12000 });
   await expect(first.locator('.prose')).toHaveCount(0);
