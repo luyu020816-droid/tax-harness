@@ -16,7 +16,7 @@ def groups(db, execution, covered=(), *, excluded=None, preserve_recent=0):
         after = -1
         while True:
             rows = conn.execute(
-                "SELECT t.turn_id,t.source_seq,t.text,t.final_message,t.final_response_ref,t.status FROM conversation_events e "
+                "SELECT t.turn_id,t.source_seq,t.text,t.final_message,t.final_response_ref,t.final_cards,t.status FROM conversation_events e "
                 "JOIN sources s ON s.source_id=e.source_id JOIN turns t ON t.turn_id=e.turn_id "
                 "WHERE e.session_id=%s AND e.user_id=%s AND s.role='user' "
                 "AND t.source_seq>%s AND t.source_seq<%s AND t.turn_id<>%s "
@@ -33,6 +33,17 @@ def groups(db, execution, covered=(), *, excluded=None, preserve_recent=0):
                 break
             after = rows[-1]["source_seq"]
             for row in rows:
+                from app.knowledge_visibility import answer_visible
+
+                if not answer_visible(conn, execution.auth, row["final_cards"]):
+                    excluded.append(
+                        {
+                            "turn_id": str(row["turn_id"]),
+                            "reason": "SOURCE_INVALIDATED",
+                            "kind": "knowledge_answer",
+                        }
+                    )
+                    continue
                 sources = conn.execute(
                     "SELECT * FROM sources WHERE turn_id=%s AND role IN ('user','assistant') ORDER BY created_at,source_id",
                     (row["turn_id"],),

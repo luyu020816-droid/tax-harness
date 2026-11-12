@@ -403,11 +403,16 @@ def _validate_delivery(conn, execution, plan, reply, outputs):
         )
 
 
-def render(conn, execution, plan, payload, manifest):
+def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None):
     outputs = _results(conn, execution, payload)
     state = json.loads(payload["messages"][0]["content"].split("\n正式状态：\n", 1)[1])
     reply = RenderedReply("", plan.status, plan.clarification, plan.resume_turn_id)
     texts, rule_rows = [], []
+    legacy_insufficient = any(
+        (block.type == "explanation" and block.code == "knowledge_insufficient")
+        or (block.type == "knowledge_answer" and block.coverage == "insufficient")
+        for block in plan.blocks
+    )
     web_refs = {
         ref
         for ref, item in outputs.items()
@@ -424,6 +429,8 @@ def render(conn, execution, plan, payload, manifest):
         if item.get("ok"):
             d = item.get("data") or {}
             rule_rows.extend(d.get("rules", d.get("rule_refs", [])))
+    claim_index = 0
+    knowledge_reference_numbers = {}
     for block in plan.blocks:
         if block.type == "result":
             output = outputs.get(str(block.result_ref))
@@ -543,6 +550,13 @@ def render(conn, execution, plan, payload, manifest):
             texts.append(_conversation_answer(conn, execution, block.topic, state["request_frame"]))
         elif block.type == "chat_answer":
             text = block.text.strip()
+            if any(
+                item.get("ok")
+                and (item.get("data") or {}).get("kind")
+                in ("knowledge_search", "knowledge_evidence")
+                for item in outputs.values()
+            ):
+                missing("知识检索后的事实回答须使用knowledge_answer并关联本轮证据。")
             if not text or re.search(
                 r"\bC\d{3,}\b|\bF\d{3,}\b|\bR\d{3,}\b|[￥¥]|\d[\d,.]*\s*(?:元|万元|°C|摄氏度)|"
                 r"已(?:经)?(?:保存|修改|核验|入库|提交|写入|更新|查询到)|保存成功|规则版本|发票总额",
@@ -555,8 +569,75 @@ def render(conn, execution, plan, payload, manifest):
             texts.append(text)
         elif block.type == "knowledge_quote":
             for text, card in _knowledge_quotes(conn, execution, str(block.citation_id), outputs):
-                texts.append(text)
-                reply.cards.append(card)
+                if not legacy_insufficient:
+                    texts.append(text)
+                    reply.cards.append(card)
+        elif block.type == "knowledge_answer":
+            knowledge = [
+                (item.get("data") or {})
+                for item in outputs.values()
+                if item.get("ok")
+                and (item.get("data") or {}).get("kind")
+                in ("knowledge_search", "knowledge_evidence")
+            ]
+            if not knowledge:
+                missing("知识回答需要本轮实际检索结果。")
+            approved = (verified_knowledge or {}).get("approved", set())
+            accepted = 0
+            for claim in block.claims:
+                index = claim_index
+                claim_index += 1
+                # Revalidate at final commit, including evidence not approved by
+                # the verifier, so fake or revoked citations cannot be laundered.
+                cards = []
+                for citation_id in claim.citation_ids:
+                    cards.extend(
+                        card
+                        for _, card in _knowledge_quotes(conn, execution, str(citation_id), outputs)
+                    )
+                if index in approved:
+                    labels = []
+                    for card in cards:
+                        citation = card["citation_id"]
+                        if citation not in knowledge_reference_numbers:
+                            knowledge_reference_numbers[citation] = (
+                                len(knowledge_reference_numbers) + 1
+                            )
+                        number = knowledge_reference_numbers[citation]
+                        labels.append(str(number))
+                        reply.cards.append({**card, "reference_label": f"来源{number}"})
+                    texts.append(f"{claim.text.strip()}（来源{'、'.join(dict.fromkeys(labels))}）")
+                    accepted += 1
+            if not accepted:
+                if any(item.get("status") == "unavailable" for item in knowledge):
+                    texts.append("知识资料暂时无法检索，请稍后再试。")
+                elif any(item.get("status") == "partial" for item in knowledge):
+                    texts.append(
+                        "这次检索的资料尚不完整，暂时无法确认答案。请稍后重试或补充相关制度。"
+                    )
+                elif block.claims and (verified_knowledge or {}).get("status") != "checked":
+                    texts.append("我已检索到资料，但暂时无法完成答案核验，请稍后重试。")
+                else:
+                    question = read_source(
+                        conn, execution.auth, execution.source_id, allow_suppressed=True
+                    )["content"].strip()
+                    if 0 < len(question) <= 60 and "\n" not in question:
+                        question = re.sub(r"([\\`*_{}\[\]()<>#!|])", r"\\\1", question)
+                        texts.append(
+                            f"关于“{question}”，我这次没有找到足以确认答案的资料。你可以补充相关制度，或说明更具体的场景。"
+                        )
+                    else:
+                        texts.append(
+                            "这次找到的资料不足以可靠回答这个问题。你可以补充相关制度，或说明更具体的场景。"
+                        )
+            elif (
+                block.coverage == "partial"
+                or accepted < len(block.claims)
+                or any(item.get("status") == "partial" for item in knowledge)
+            ):
+                texts.append(
+                    "其他部分目前没有足够依据确认；你可以补充相关资料，或说明想了解的具体范围。"
+                )
         elif block.type == "preference_receipt":
             output = outputs.get(str(block.result_ref)) or {}
             pref = output.get("data") or {}
@@ -845,7 +926,7 @@ def _explanation(conn, execution, code, outputs, rules, state):
     if code == "knowledge_partial" and any(d["status"] == "partial" for d in knowledge):
         return "本轮检索范围或证据覆盖不完整，请结合引用原文核对；需要时补充资料或缩小问题。"
     if code == "knowledge_insufficient" and knowledge:
-        return "本次检索结果不足以支持回答这个问题，请补充对应条款或缩小问题范围。候选命中不代表问题已有依据。"
+        return "我这次没有找到能确认答案的资料。你可以补充相关制度，或说明更具体的范围。"
     if (
         code == "knowledge_compare"
         and len({e["document_id"] for d in knowledge for e in d["evidence"]}) > 1

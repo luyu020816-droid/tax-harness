@@ -1,0 +1,550 @@
+{
+  "fixture_hash": "f13ff4a91e5c834ab2dc5ff3a8b76a5c9d07f482ed130d8d72d267dcdcf5f35f",
+  "model": "deepseek-v4-flash",
+  "measured_at": "2026-11-12T03:55:14.710116+00:00",
+  "cases": [
+    {
+      "id": "h01",
+      "expected": "supported",
+      "accepted": true,
+      "status": "ok",
+      "elapsed_ms": 2219,
+      "usage": {
+        "prompt_tokens": 257,
+        "completion_tokens": 78,
+        "total_tokens": 335,
+        "prompt_tokens_details": {
+          "cached_tokens": 123
+        },
+        "prompt_cache_hit_tokens": 123,
+        "prompt_cache_miss_tokens": 134
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"supported\",\"supporting_quotes\":[{\"citation_id\":\"00000000-0000-0000-0000-000000000001\",\"quote\":\"青杉计划员工到南京出差，住宿报销上限为每人每晚437元。确需超标时须入住前取得项目负责人书面批准。\"}]}]}"
+    },
+    {
+      "id": "h02",
+      "expected": "supported",
+      "accepted": true,
+      "status": "ok",
+      "elapsed_ms": 2031,
+      "usage": {
+        "prompt_tokens": 250,
+        "completion_tokens": 61,
+        "total_tokens": 311,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 250
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"supported\",\"supporting_quotes\":[{\"citation_id\":\"00000000-0000-0000-0000-000000000001\",\"quote\":\"确需超标时须入住前取得项目负责人书面批准。\"}]}]}"
+    },
+    {
+      "id": "h03",
+      "expected": "supported",
+      "accepted": true,
+      "status": "ok",
+      "elapsed_ms": 1906,
+      "usage": {
+        "prompt_tokens": 255,
+        "completion_tokens": 78,
+        "total_tokens": 333,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 255
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"supported\",\"supporting_quotes\":[{\"citation_id\":\"00000000-0000-0000-0000-000000000001\",\"quote\":\"青杉计划员工到南京出差，住宿报销上限为每人每晚437元。确需超标时须入住前取得项目负责人书面批准。\"}]}]}"
+    },
+    {
+      "id": "h04",
+      "expected": "unsupported",
+      "accepted": false,
+      "status": "ok",
+      "elapsed_ms": 1297,
+      "usage": {
+        "prompt_tokens": 247,
+        "completion_tokens": 25,
+        "total_tokens": 272,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 247
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"unsupported\",\"supporting_quotes\":[]}]}"
+    },
+    {
+      "id": "h05",
+      "expected": "unsupported",
+      "accepted": false,
+      "status": "ok",
+      "elapsed_ms": 766,
+      "usage": {
+        "prompt_tokens": 247,
+        "completion_tokens": 25,
+        "total_tokens": 272,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 247
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"unsupported\",\"supporting_quotes\":[]}]}"
+    },
+    {
+      "id": "h06",
+      "expected": "unsupported",
+      "accepted": false,
+      "status": "ok",
+      "elapsed_ms": 984,
+      "usage": {
+        "prompt_tokens": 246,
+        "completion_tokens": 79,
+        "total_tokens": 325,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 246
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"unsupported\",\"supporting_quotes\":[{\"citation_id\":\"00000000-0000-0000-0000-000000000001\",\"quote\":\"青杉计划员工到南京出差，住宿报销上限为每人每晚437元。确需超标时须入住前取得项目负责人书面批准。\"}]}]}"
+    },
+    {
+      "id": "h07",
+      "expected": "supported",
+      "accepted": true,
+      "status": "ok",
+      "elapsed_ms": 859,
+      "usage": {
+        "prompt_tokens": 261,
+        "completion_tokens": 82,
+        "total_tokens": 343,
+        "prompt_tokens_details": {
+          "cached_tokens": 127
+        },
+        "prompt_cache_hit_tokens": 127,
+        "prompt_cache_miss_tokens": 134
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"supported\",\"supporting_quotes\":[{\"citation_id\":\"00000000-0000-0000-0000-000000000001\",\"quote\":\"工作日晚于22:30结束工作后乘出租车回酒店，可以报销当次车费。提交时须同时提供电子行程单和当日加班记录。\"}]}]}"
+    },
+    {
+      "id": "h08",
+      "expected": "supported",
+      "accepted": true,
+      "status": "ok",
+      "elapsed_ms": 969,
+      "usage": {
+        "prompt_tokens": 256,
+        "completion_tokens": 61,
+        "total_tokens": 317,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 256
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"supported\",\"supporting_quotes\":[{\"citation_id\":\"00000000-0000-0000-0000-000000000001\",\"quote\":\"提交时须同时提供电子行程单和当日加班记录。\"}]}]}"
+    },
+    {
+      "id": "h09",
+      "expected": "supported",
+      "accepted": true,
+      "status": "ok",
+      "elapsed_ms": 1312,
+      "usage": {
+        "prompt_tokens": 269,
+        "completion_tokens": 82,
+        "total_tokens": 351,
+        "prompt_tokens_details": {
+          "cached_tokens": 128
+        },
+        "prompt_cache_hit_tokens": 128,
+        "prompt_cache_miss_tokens": 141
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"supported\",\"supporting_quotes\":[{\"citation_id\":\"00000000-0000-0000-0000-000000000001\",\"quote\":\"工作日晚于22:30结束工作后乘出租车回酒店，可以报销当次车费。提交时须同时提供电子行程单和当日加班记录。\"}]}]}"
+    },
+    {
+      "id": "h10",
+      "expected": "unsupported",
+      "accepted": false,
+      "status": "ok",
+      "elapsed_ms": 828,
+      "usage": {
+        "prompt_tokens": 249,
+        "completion_tokens": 25,
+        "total_tokens": 274,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 249
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"unsupported\",\"supporting_quotes\":[]}]}"
+    },
+    {
+      "id": "h11",
+      "expected": "unsupported",
+      "accepted": false,
+      "status": "ok",
+      "elapsed_ms": 625,
+      "usage": {
+        "prompt_tokens": 253,
+        "completion_tokens": 25,
+        "total_tokens": 278,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 253
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"unsupported\",\"supporting_quotes\":[]}]}"
+    },
+    {
+      "id": "h12",
+      "expected": "unsupported",
+      "accepted": false,
+      "status": "ok",
+      "elapsed_ms": 1125,
+      "usage": {
+        "prompt_tokens": 250,
+        "completion_tokens": 25,
+        "total_tokens": 275,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 250
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"unsupported\",\"supporting_quotes\":[]}]}"
+    },
+    {
+      "id": "h13",
+      "expected": "supported",
+      "accepted": true,
+      "status": "ok",
+      "elapsed_ms": 969,
+      "usage": {
+        "prompt_tokens": 255,
+        "completion_tokens": 75,
+        "total_tokens": 330,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 255
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"supported\",\"supporting_quotes\":[{\"citation_id\":\"00000000-0000-0000-0000-000000000001\",\"quote\":\"住宿发票开错或缺失时，申请人应在返程后4个工作日内补交更正材料，交给项目财务联络岗。\"}]}]}"
+    },
+    {
+      "id": "h14",
+      "expected": "supported",
+      "accepted": true,
+      "status": "ok",
+      "elapsed_ms": 781,
+      "usage": {
+        "prompt_tokens": 247,
+        "completion_tokens": 75,
+        "total_tokens": 322,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 247
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"supported\",\"supporting_quotes\":[{\"citation_id\":\"00000000-0000-0000-0000-000000000001\",\"quote\":\"住宿发票开错或缺失时，申请人应在返程后4个工作日内补交更正材料，交给项目财务联络岗。\"}]}]}"
+    },
+    {
+      "id": "h15",
+      "expected": "supported",
+      "accepted": true,
+      "status": "ok",
+      "elapsed_ms": 1547,
+      "usage": {
+        "prompt_tokens": 255,
+        "completion_tokens": 75,
+        "total_tokens": 330,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 255
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"supported\",\"supporting_quotes\":[{\"citation_id\":\"00000000-0000-0000-0000-000000000001\",\"quote\":\"住宿发票开错或缺失时，申请人应在返程后4个工作日内补交更正材料，交给项目财务联络岗。\"}]}]}"
+    },
+    {
+      "id": "h16",
+      "expected": "unsupported",
+      "accepted": false,
+      "status": "ok",
+      "elapsed_ms": 844,
+      "usage": {
+        "prompt_tokens": 249,
+        "completion_tokens": 25,
+        "total_tokens": 274,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 249
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"unsupported\",\"supporting_quotes\":[]}]}"
+    },
+    {
+      "id": "h17",
+      "expected": "unsupported",
+      "accepted": false,
+      "status": "ok",
+      "elapsed_ms": 641,
+      "usage": {
+        "prompt_tokens": 242,
+        "completion_tokens": 25,
+        "total_tokens": 267,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 242
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"unsupported\",\"supporting_quotes\":[]}]}"
+    },
+    {
+      "id": "h18",
+      "expected": "unsupported",
+      "accepted": false,
+      "status": "ok",
+      "elapsed_ms": 609,
+      "usage": {
+        "prompt_tokens": 245,
+        "completion_tokens": 25,
+        "total_tokens": 270,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 245
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"unsupported\",\"supporting_quotes\":[]}]}"
+    },
+    {
+      "id": "h19",
+      "expected": "supported",
+      "accepted": true,
+      "status": "ok",
+      "elapsed_ms": 1265,
+      "usage": {
+        "prompt_tokens": 249,
+        "completion_tokens": 75,
+        "total_tokens": 324,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 249
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"supported\",\"supporting_quotes\":[{\"citation_id\":\"00000000-0000-0000-0000-000000000001\",\"quote\":\"采购金额超过2000元时，须在采购前经部门经理书面批准；2000元及以下无需该项批准。\"}]}]}"
+    },
+    {
+      "id": "h20",
+      "expected": "supported",
+      "accepted": true,
+      "status": "ok",
+      "elapsed_ms": 938,
+      "usage": {
+        "prompt_tokens": 242,
+        "completion_tokens": 75,
+        "total_tokens": 317,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 242
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"supported\",\"supporting_quotes\":[{\"citation_id\":\"00000000-0000-0000-0000-000000000001\",\"quote\":\"采购金额超过2000元时，须在采购前经部门经理书面批准；2000元及以下无需该项批准。\"}]}]}"
+    },
+    {
+      "id": "h21",
+      "expected": "supported",
+      "accepted": true,
+      "status": "ok",
+      "elapsed_ms": 1219,
+      "usage": {
+        "prompt_tokens": 244,
+        "completion_tokens": 75,
+        "total_tokens": 319,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 244
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"supported\",\"supporting_quotes\":[{\"citation_id\":\"00000000-0000-0000-0000-000000000001\",\"quote\":\"采购金额超过2000元时，须在采购前经部门经理书面批准；2000元及以下无需该项批准。\"}]}]}"
+    },
+    {
+      "id": "h22",
+      "expected": "unsupported",
+      "accepted": false,
+      "status": "ok",
+      "elapsed_ms": 844,
+      "usage": {
+        "prompt_tokens": 240,
+        "completion_tokens": 25,
+        "total_tokens": 265,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 240
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"unsupported\",\"supporting_quotes\":[]}]}"
+    },
+    {
+      "id": "h23",
+      "expected": "unsupported",
+      "accepted": false,
+      "status": "ok",
+      "elapsed_ms": 765,
+      "usage": {
+        "prompt_tokens": 243,
+        "completion_tokens": 25,
+        "total_tokens": 268,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 243
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"unsupported\",\"supporting_quotes\":[]}]}"
+    },
+    {
+      "id": "h24",
+      "expected": "unsupported",
+      "accepted": false,
+      "status": "ok",
+      "elapsed_ms": 797,
+      "usage": {
+        "prompt_tokens": 242,
+        "completion_tokens": 25,
+        "total_tokens": 267,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 242
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"unsupported\",\"supporting_quotes\":[]}]}"
+    },
+    {
+      "id": "h25",
+      "expected": "supported",
+      "accepted": true,
+      "status": "ok",
+      "elapsed_ms": 1453,
+      "usage": {
+        "prompt_tokens": 253,
+        "completion_tokens": 68,
+        "total_tokens": 321,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 253
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"supported\",\"supporting_quotes\":[{\"citation_id\":\"00000000-0000-0000-0000-000000000001\",\"quote\":\"通过审核的差旅费用统一归集至项目成本中心QINGSHAN-47\"}]}]}"
+    },
+    {
+      "id": "h26",
+      "expected": "supported",
+      "accepted": true,
+      "status": "ok",
+      "elapsed_ms": 985,
+      "usage": {
+        "prompt_tokens": 242,
+        "completion_tokens": 76,
+        "total_tokens": 318,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 242
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"supported\",\"supporting_quotes\":[{\"citation_id\":\"00000000-0000-0000-0000-000000000001\",\"quote\":\"通过审核的差旅费用统一归集至项目成本中心QINGSHAN-47；未通过审核的费用不得归集。\"}]}]}"
+    },
+    {
+      "id": "h27",
+      "expected": "supported",
+      "accepted": true,
+      "status": "ok",
+      "elapsed_ms": 1094,
+      "usage": {
+        "prompt_tokens": 251,
+        "completion_tokens": 76,
+        "total_tokens": 327,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 251
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"supported\",\"supporting_quotes\":[{\"citation_id\":\"00000000-0000-0000-0000-000000000001\",\"quote\":\"通过审核的差旅费用统一归集至项目成本中心QINGSHAN-47；未通过审核的费用不得归集。\"}]}]}"
+    },
+    {
+      "id": "h28",
+      "expected": "unsupported",
+      "accepted": false,
+      "status": "ok",
+      "elapsed_ms": 1203,
+      "usage": {
+        "prompt_tokens": 242,
+        "completion_tokens": 25,
+        "total_tokens": 267,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 242
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"unsupported\",\"supporting_quotes\":[]}]}"
+    },
+    {
+      "id": "h29",
+      "expected": "unsupported",
+      "accepted": false,
+      "status": "ok",
+      "elapsed_ms": 938,
+      "usage": {
+        "prompt_tokens": 247,
+        "completion_tokens": 25,
+        "total_tokens": 272,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 247
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"unsupported\",\"supporting_quotes\":[]}]}"
+    },
+    {
+      "id": "h30",
+      "expected": "unsupported",
+      "accepted": false,
+      "status": "ok",
+      "elapsed_ms": 718,
+      "usage": {
+        "prompt_tokens": 244,
+        "completion_tokens": 25,
+        "total_tokens": 269,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 244
+      },
+      "raw_verdict": "{\"verdicts\":[{\"claim_index\":0,\"status\":\"unsupported\",\"supporting_quotes\":[]}]}"
+    }
+  ],
+  "false_accepts": 0,
+  "false_rejections": 0,
+  "unavailable": 0
+}

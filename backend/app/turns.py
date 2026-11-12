@@ -128,6 +128,9 @@ def read_turn(db, auth: Identity, turn_id: str) -> dict:
         selected = conn.execute(
             "SELECT selected_company_id FROM sessions WHERE session_id=%s", (turn["session_id"],)
         ).fetchone()["selected_company_id"]
+        from app.knowledge_visibility import project_turn
+
+        turn = project_turn(conn, auth, turn)
         return safe_json(
             {**turn, "runs": runs, "operations": operations, "selected_company_id": selected}
         )
@@ -323,7 +326,9 @@ def session_messages(db, auth: Identity, session_id: str, before_seq=None) -> di
         for row in rows[:20]:
             _assert_turn_access(conn, auth, str(row["turn_id"]))
         # History must retain the same trace entry points as live turn polling.
-        visible = rows[:20]
+        from app.knowledge_visibility import project_turn
+
+        visible = [project_turn(conn, auth, row) for row in rows[:20]]
         by_turn = {}
         if visible:
             runs = conn.execute(

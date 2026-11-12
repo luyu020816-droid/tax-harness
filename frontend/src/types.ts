@@ -287,6 +287,7 @@ export interface KnowledgeBundle {
 export interface KnowledgeQuoteCard extends CardBase {
   kind: 'knowledge_quote';
   citation_id: string;
+  reference_label?: string;
   title: string;
   edition: number;
   locator_label: string;

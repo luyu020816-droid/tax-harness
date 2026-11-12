@@ -55,6 +55,7 @@ def add_source(
     )
     # Independent disposable chat index; this never submits knowledge documents.
     from app.conversation_log import index_source
+
     index_source(conn, row)
     return row
 
@@ -86,6 +87,19 @@ def read_source(
         ).fetchone()
         if not session or (session["deleted_at"] and not allow_suppressed):
             raise AppError("SOURCE_INVALIDATED", "来源会话已删除，不再用于上下文或引用。", 409)
+    if row["role"] == "assistant" and row["turn_id"]:
+        from app.knowledge_visibility import answer_visible
+
+        turn = conn.execute(
+            "SELECT final_cards,final_response_ref FROM turns WHERE turn_id=%s AND user_id=%s",
+            (row["turn_id"], auth.user_id),
+        ).fetchone()
+        if (
+            turn
+            and str(turn["final_response_ref"]) == str(row["source_id"])
+            and not answer_visible(conn, auth, turn["final_cards"])
+        ):
+            raise AppError("SOURCE_INVALIDATED", "回答引用的知识资料已变化，请重新查询。", 409)
     if row["role"] == "tool":
         try:
             data = json.loads(row["content"]).get("data") or {}

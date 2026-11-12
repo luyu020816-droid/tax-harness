@@ -56,10 +56,12 @@ export function useKnowledgeEvidence(id: string) {
 export function KnowledgeCitation({
   id,
   compact = false,
+  referenceLabel,
   onDetail,
 }: {
   id: string;
   compact?: boolean;
+  referenceLabel?: string;
   onDetail: (detail: Detail) => void;
 }) {
   const { evidence, error } = useKnowledgeEvidence(id);
@@ -74,6 +76,7 @@ export function KnowledgeCitation({
     <section className={`knowledge-citation ${compact ? 'compact' : ''}`}>
       <button className="text-button" onClick={() => onDetail({ kind: 'evidence', id })}>
         <FileText size={16} />
+        {referenceLabel && <span>{referenceLabel}</span>}
         <strong>{evidence.title}</strong>
         <span>
           第{evidence.edition}版 · {locatorLabel(evidence.locator)}

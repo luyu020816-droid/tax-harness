@@ -284,6 +284,29 @@ class KnowledgeBlock(StrictModel):
     citation_id: UUID
 
 
+class KnowledgeClaim(StrictModel):
+    text: str = Field(min_length=1, max_length=1200)
+    citation_ids: list[UUID] = Field(min_length=1, max_length=6)
+
+
+class KnowledgeAnswerBlock(StrictModel):
+    type: Literal["knowledge_answer"]
+    coverage: Literal["supported", "partial", "insufficient"]
+    claims: list[KnowledgeClaim] = Field(default_factory=list, max_length=6)
+    gap: str | None = Field(default=None, max_length=500)
+    follow_up: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def consistent_coverage(self):
+        if self.coverage == "insufficient" and self.claims:
+            raise ValueError("依据不足时不能输出事实断言。")
+        if self.coverage in ("supported", "partial") and not self.claims:
+            raise ValueError("有依据的回答至少需要一条带引用的断言。")
+        if self.coverage == "partial" and not self.gap:
+            raise ValueError("部分回答必须说明未覆盖的内容。")
+        return self
+
+
 class ConversationAnswerBlock(StrictModel):
     type: Literal["conversation_answer"]
     topic: Literal["today", "tomorrow", "previous_turn_status", "capabilities"]
@@ -302,6 +325,7 @@ AnswerBlock = Annotated[
     | HistoryBlock
     | ConfirmationBlock
     | KnowledgeBlock
+    | KnowledgeAnswerBlock
     | ConversationAnswerBlock
     | ChatAnswerBlock,
     Field(discriminator="type"),

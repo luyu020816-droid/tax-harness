@@ -30,7 +30,7 @@ def actual_usage(db, settings, auth, session_id):
             "FROM context_snapshots c JOIN runs r ON r.run_id=c.run_id "
             "JOIN turns t ON t.turn_id=r.turn_id "
             "WHERE t.session_id=%s AND t.user_id=%s "
-            "AND coalesce(c.manifest->>'kind','') NOT IN ('compaction','control_execution') "
+            "AND coalesce(c.manifest->>'kind','') NOT IN ('compaction','control_execution','knowledge_verification') "
             "ORDER BY c.created_at DESC,c.model_step DESC LIMIT 1",
             (session_id, auth.user_id),
         ).fetchone()

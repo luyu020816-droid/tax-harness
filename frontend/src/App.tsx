@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import ReactMarkdown from 'react-markdown';
 import {
   ArrowRight,
   ArrowUp,
@@ -38,6 +37,7 @@ import { Details } from './Details';
 import { MemoryView } from './MemoryView';
 import { ModelConnection } from './ModelConnection';
 import { KnowledgeView } from './KnowledgeView';
+import { KnowledgeAnswerText } from './KnowledgeAnswerText';
 import { Results } from './Results';
 import { RunsView } from './RunsView';
 import { SessionHistory } from './SessionHistory';
@@ -1064,9 +1064,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                           <div className="assistant-content">
                             {turn.final_message ? (
                               <>
-                                <div className="prose">
-                                  <ReactMarkdown>{turn.final_message}</ReactMarkdown>
-                                </div>
+                                <KnowledgeAnswerText text={turn.final_message} cards={turn.final_cards ?? []} />
                                 {turn.final_cards?.map((card, index) => (
                                   <Results
                                     key={`${card.kind}/${index}`}

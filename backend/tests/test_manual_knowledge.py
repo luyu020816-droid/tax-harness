@@ -149,12 +149,17 @@ def test_draft_is_not_a_document_and_tools_do_not_expose_history(
 
 @pytest.mark.asyncio
 async def test_summary_is_only_loaded_in_its_own_session(db, settings, admin, execution_factory):
-    ex = execution_factory("本会话摘要唯一事实-SUM-7159")
+    ex = execution_factory("本会话摘要唯一事实-SUM-7159。" + "背景信息不授权任何修改。" * 50)
     source = admin.execute("SELECT * FROM sources WHERE source_id=%s", (ex.source_id,)).fetchone()
+    summary = summary_message(source)
+    summary["content"] = json.dumps(
+        {"summary": "本会话摘要唯一事实-SUM-7159。", "covered_sources": [str(source["source_id"])]},
+        ensure_ascii=False,
+    )
     assert await compact(
         db,
         model_settings(settings),
-        ScriptedModel([summary_message(source)]),
+        ScriptedModel([summary]),
         ex,
         [closed_group(db, source)],
         1,

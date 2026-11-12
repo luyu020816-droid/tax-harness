@@ -347,6 +347,93 @@ class Runtime:
                 proactive_compact=proactive_compact,
             )
 
+    async def _verify_knowledge_answer(
+        self, execution, plan, payload, manifest, settings, model, step
+    ):
+        from app.knowledge_grounding import Verdicts, collect, validated_indices, verifier_payload
+        from app.telemetry import complete as measured_complete
+        from app.values import digest
+
+        if not any(block.type == "knowledge_answer" and block.claims for block in plan.blocks):
+            return {"approved": set(), "status": "not_needed"}
+        with self.db.transaction() as conn:
+            guard(conn, execution)
+            question = read_source(
+                conn, execution.auth, execution.source_id, allow_suppressed=True
+            )["content"]
+            claims = collect(conn, execution, payload, plan.blocks)
+        dialogue = [
+            {"role": item["role"], "content": item["content"]}
+            for item in payload["messages"]
+            if item.get("role") in ("user", "assistant") and isinstance(item.get("content"), str)
+        ][-10:]
+        request = verifier_payload(settings, question, claims, dialogue)
+        count = context.estimate_tokens(request)
+        if count > settings.context_budget:
+            with self.db.transaction() as conn:
+                guard(conn, execution)
+                emit(
+                    conn,
+                    execution.turn_id,
+                    execution.run_id,
+                    "knowledge_verification",
+                    {"status": "budget_exceeded", "claims": len(claims), "approved": 0},
+                )
+            return {"approved": set(), "status": "budget_exceeded"}
+        with self.db.transaction() as conn:
+            guard(conn, execution)
+            evidence_manifest = {
+                "kind": "knowledge_verification",
+                "payload_hash": digest(request),
+                "token_count": count,
+                "count_kind": "estimated:utf8_div2_plus_protocol",
+                "sources": manifest["sources"],
+                "retrieval_refs": manifest["retrieval_refs"],
+            }
+            context_id = record_context(conn, execution, step, request, evidence_manifest)
+        try:
+            response = await asyncio.wait_for(
+                measured_complete(
+                    self.db,
+                    model,
+                    execution,
+                    context_id,
+                    request,
+                    attempt_kind="knowledge_verification",
+                ),
+                timeout=15,
+            )
+            with self.db.transaction() as conn:
+                guard(conn, execution)
+                conn.execute(
+                    "UPDATE context_snapshots SET usage=%s WHERE context_id=%s",
+                    (jsonb(response.get("usage")) if response.get("usage") else None, context_id),
+                )
+            raw_verdict = response.get("message", {}).get("content") or ""
+            verdicts = Verdicts.model_validate_json(raw_verdict).verdicts
+            if (
+                len(verdicts) != len(claims)
+                or {v.claim_index for v in verdicts} != set(range(len(claims)))
+                or any(v.status not in {"supported", "unsupported", "uncertain"} for v in verdicts)
+            ):
+                raise ValueError("invalid verification result")
+            approved = validated_indices(claims, raw_verdict)
+            status = "checked"
+        except TimeoutError:
+            approved, status = set(), "timeout"
+        except (AppError, ValueError, TypeError, KeyError, RuntimeError, OSError, ImportError):
+            approved, status = set(), "unavailable_or_invalid"
+        with self.db.transaction() as conn:
+            guard(conn, execution)
+            emit(
+                conn,
+                execution.turn_id,
+                execution.run_id,
+                "knowledge_verification",
+                {"status": status, "claims": len(claims), "approved": len(approved)},
+            )
+        return {"approved": approved, "status": status}
+
     def _refresh_selected_rules(self, execution, plan, payload, manifest):
         """Re-read a historical rule the model selected, using a current scope binding."""
         if len(plan.blocks) != 1 or plan.clarification or plan.resume_turn_id:
@@ -615,7 +702,12 @@ class Runtime:
                 continue
             try:
                 reply = FinalReply.model_validate_json(message.get("content") or "")
-                await asyncio.to_thread(self.finish, execution, reply, payload, manifest)
+                verified_knowledge = await self._verify_knowledge_answer(
+                    execution, reply, payload, manifest, settings, budgeted_model, step
+                )
+                await asyncio.to_thread(
+                    self.finish, execution, reply, payload, manifest, verified_knowledge
+                )
                 return
             except (ValidationError, json.JSONDecodeError, AppError) as exc:
                 if isinstance(exc, AppError) and exc.code != "REPLY_EVIDENCE_MISSING":
@@ -774,12 +866,14 @@ class Runtime:
         )
         return {**pending, "task_id": str(task["task_id"]), "task_generation": task["generation"]}
 
-    def finish(self, execution, reply: FinalReply, payload, manifest):
+    def finish(self, execution, reply: FinalReply, payload, manifest, verified_knowledge=None):
         with self.db.transaction() as conn:
             context.validate(self.db, execution, payload, manifest, conn=conn)
             # Upgrade the same locks before committing state, answer and events atomically.
             guard(conn, execution)
-            reply = render(conn, execution, reply, payload, manifest)
+            reply = render(
+                conn, execution, reply, payload, manifest, verified_knowledge=verified_knowledge
+            )
             if reply.preference_status == "committed":
                 evidence = conn.execute(
                     "SELECT result_ref FROM memory_change_ops WHERE user_id=%s AND target_type='preference' AND action=%s AND state='committed' AND request_id LIKE %s",
