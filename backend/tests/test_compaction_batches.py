@@ -80,7 +80,8 @@ async def test_summary_sources_are_checked_again_before_final_publish(
         [group],
         1,
     )
-    payload, manifest, _ = assemble(db, model_settings(settings), execution, [])
+    # This case tests publish-time source invalidation, not a 16K payload cap.
+    payload, manifest, _ = assemble(db, normal_model_settings(settings), execution, [])
     assert manifest["summary_id"]
     admin.execute(
         "update sources set revision=revision+1 where source_id=%s", (source["source_id"],)
@@ -88,7 +89,7 @@ async def test_summary_sources_are_checked_again_before_final_publish(
     with pytest.raises(AppError) as error:
         validate(db, execution, payload, manifest)
     assert error.value.code == "SOURCE_INVALIDATED"
-    _, fresh, _ = assemble(db, model_settings(settings), execution, [])
+    _, fresh, _ = assemble(db, normal_model_settings(settings), execution, [])
     assert fresh["summary_id"] is None
 
 

@@ -447,7 +447,15 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
         if block.type == "result":
             output = outputs.get(str(block.result_ref))
             if not output or not output.get("ok"):
-                missing("只能选择本轮实际入模的成功工具结果。")
+                missing(
+                    "只能选择本轮实际入模的成功工具结果。",
+                    details={
+                        "result_error": (output or {}).get("error"),
+                        "instruction": "失败工具引用不能用于result块。ACCESS_DENIED用access_denied或"
+                        "有真实只读权限时用read_only说明；不要将权限拒绝说成write_not_authorized。"
+                        "只选用实际成功结果，未保存不能声称保存，拒绝后不需要再查或重试修改。",
+                    },
+                )
             data = output["data"]
             if block.view == "public_web" and data.get("clarification_turn_id"):
                 origin = data["clarification_turn_id"]
@@ -590,7 +598,14 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
                 text,
                 re.I,
             ):
-                missing("普通答复只能用于交流，请用可核验的结果块表达具体事实或操作状态。")
+                missing(
+                    "普通答复只能用于交流，请用可核验的结果块表达具体事实或操作状态。",
+                    details={
+                        "instruction": "若只需要追问，使用waiting_user和clarification，blocks可为空；"
+                        "程序会生成追问，不要在chat_answer或explanation中重复问题。"
+                        "已有查询结果或保存回执仍必须用实际结果块交付，不能借澄清省略。",
+                    },
+                )
             if (state["request_frame"].get("request_items") or outputs) and len(plan.blocks) == 1:
                 missing("普通答复不能代替本轮业务、知识或联网结果。")
             texts.append(text)
@@ -1066,7 +1081,17 @@ def _explanation(conn, execution, code, outputs, rules, state):
     if code in ("purpose_all", "purpose_threshold"):
         if text := _purpose_explanations(conn, rules).get(code):
             return text
-    missing("说明缺少对应的真实状态依据，请选用实际结果或正确的拒绝理由。")
+    missing(
+        "说明缺少对应的真实状态依据，请选用实际结果或正确的拒绝理由。",
+        details={
+            "explanation_code": code,
+            "tool_error_codes": sorted(e for e in errors if e),
+            "instruction": "权限不足与缺少用户授权是不同原因。ACCESS_DENIED对应access_denied；"
+            "当前账号只有查看权限可用read_only。write_not_authorized仅用于实际"
+            "WRITE_NOT_AUTHORIZED或prohibited计划，不要与权限拒绝混用。"
+            "只需追问时使用clarification，blocks可为空；不要补无依据的说明码。",
+        },
+    )
 
 
 def _clarification(conn, execution, item, state, outputs):

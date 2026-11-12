@@ -464,7 +464,12 @@ export function RequestInsight({ turnId, onBack }: { turnId: string; onBack?: ()
           费用估算 <b>{fee(r.cost)}</b>
         </span>
         <span>
-          已采集缓存 <b>{r.cache?.hit_ratio == null ? '未采集' : `${(r.cache.hit_ratio * 100).toFixed(1)}% · ${r.cache.known_calls} 次`}</b>
+          已采集缓存{' '}
+          <b>
+            {r.cache?.hit_ratio == null
+              ? '未采集'
+              : `${(r.cache.hit_ratio * 100).toFixed(1)}% · ${r.cache.known_calls} 次`}
+          </b>
         </span>
       </div>
       <p className="insight-caveat">

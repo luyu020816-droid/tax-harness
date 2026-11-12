@@ -34,7 +34,9 @@ async def test_lossy_navigation_cannot_remove_negation_ids_and_unfinished_work(
     db, settings, source_factory, execution_factory, admin
 ):
     text = "甲企业样品只允许放在西侧柜，不得外发。柜号为Q7421。范围改为2026年9月，不是8月。F002仍待确认，不授权保存。"
-    source = source_factory(text)
+    # Enough compressible history to reach anchor validation without bypassing
+    # the production no-gain guard. Repeated background has one exact anchor.
+    source = source_factory(text + "测试背景，不产生操作。" * 80)
     ex = execution_factory("继续查询")
     await compact(
         db, model_settings(settings), ScriptedModel([lossy]), ex, [closed_group(db, source)], 1
@@ -43,7 +45,7 @@ async def test_lossy_navigation_cannot_remove_negation_ids_and_unfinished_work(
     packet = unpack(row["content"])
     assert packet["navigation"] == "用户提供了项目背景。"
     quotes = "".join(u["quote"] for u in packet["protected_excerpts"])
-    assert quotes == text
+    assert quotes == text + "测试背景，不产生操作。"
     payload, manifest, _ = context.assemble(db, model_settings(settings), ex, [])
     assert manifest["summary_id"] == str(row["summary_id"])
     assert "Q7421" in payload["messages"][1]["content"]
@@ -54,7 +56,7 @@ async def test_lossy_navigation_cannot_remove_negation_ids_and_unfinished_work(
 async def test_missing_protected_sentence_makes_summary_unusable(
     db, settings, source_factory, execution_factory, admin
 ):
-    source = source_factory("柜号Q7421，不得外发。尚有两项未完成。")
+    source = source_factory("柜号Q7421，不得外发。尚有两项未完成。" + "测试背景，不产生操作。" * 80)
     ex = execution_factory("继续")
     await compact(
         db, model_settings(settings), ScriptedModel([lossy]), ex, [closed_group(db, source)], 1
@@ -175,7 +177,7 @@ def test_edit_preference_switch_company_change_invoice_then_replace_rule(
 async def test_summary_read_checks_exact_quote_scope_epoch_and_source(
     db, settings, source_factory, execution_factory, admin
 ):
-    source = source_factory("柜号Q7421，不得外发。")
+    source = source_factory("柜号Q7421，不得外发。" + "测试背景，不产生操作。" * 80)
     execution = execution_factory("甲企业之前柜号是多少？")
     runtime = Runtime(db, model_settings(settings), ScriptedModel([lossy]))
     await compact(db, runtime.settings, runtime.model, execution, [closed_group(db, source)], 1)
@@ -368,7 +370,7 @@ def test_context_ablation_cannot_call_disabled_search(db, settings, execution_fa
 async def test_single_wrapper_summary_labels_still_require_exact_known_coverage(
     db, settings, source_factory, execution_factory, unknown
 ):
-    source = source_factory("柜号Q7421，不得外发。")
+    source = source_factory("柜号Q7421，不得外发。" + "测试背景，不产生操作。" * 80)
     execution = execution_factory("继续")
 
     def wrapped(payload):

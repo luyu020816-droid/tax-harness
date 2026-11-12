@@ -71,7 +71,13 @@ export function Results({
     );
   if (card.kind === 'knowledge_verification_status') return null;
   if (card.kind === 'knowledge_quote')
-    return <KnowledgeCitation id={card.citation_id} referenceLabel={card.reference_label} onDetail={onDetail} />;
+    return (
+      <KnowledgeCitation
+        id={card.citation_id}
+        referenceLabel={card.reference_label}
+        onDetail={onDetail}
+      />
+    );
   if (card.kind === 'history_quote') return <HistoryCitation card={card} />;
   // The host already renders the page status; this persisted marker binds
   // cross-turn navigation to the page actually included in the completed reply.

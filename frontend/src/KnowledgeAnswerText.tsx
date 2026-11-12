@@ -24,10 +24,17 @@ export function KnowledgeAnswerText({ text, cards }: { text: string; cards: Resu
     };
     void verify();
     const timer = window.setInterval(() => void verify(), 5000);
-    return () => { controller.abort(); window.clearInterval(timer); };
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+    };
   }, [key]);
   if (ids.length && checked?.key !== key) return <p className="muted">正在核对知识依据…</p>;
   if (ids.length && !checked?.valid)
     return <p role="status">知识依据已变化或暂不可用，请重新查询；其他业务卡片仍可核对。</p>;
-  return <div className="prose"><ReactMarkdown>{text}</ReactMarkdown></div>;
+  return (
+    <div className="prose">
+      <ReactMarkdown>{text}</ReactMarkdown>
+    </div>
+  );
 }

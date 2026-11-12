@@ -25,6 +25,8 @@ test('history quote preserves role, continues exact text, opens original session
       });
     if (path === '/sessions') return reply([session]);
     if (path === '/tasks') return reply([]);
+    if (path.endsWith('/context-usage'))
+      return reply({ status: 'no_calls', input_tokens: 0, effective_window: 100000 });
     if (path === '/conversations/sessions/original') return reply(session);
     if (path.endsWith('/messages'))
       return reply({

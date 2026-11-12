@@ -125,7 +125,11 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
         const item = await api<{
           status: string;
           error?: { message?: string } | null;
-          result?: { outcome?: string; history_tokens_before?: number; history_tokens_after?: number } | null;
+          result?: {
+            outcome?: string;
+            history_tokens_before?: number;
+            history_tokens_after?: number;
+          } | null;
         }>(`/sessions/${compactTask.session}/compactions/${compactTask.id}`);
         if (stopped) return;
         if (item.status === 'queued' || item.status === 'running') {
@@ -135,9 +139,11 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
         }
         const r = item.result;
         setCompactNotice(
-          r?.outcome === 'no_content' ? '暂无可压缩的较早内容' :
-          r?.outcome === 'succeeded' ? `压缩完成，历史估算 ${r.history_tokens_before} → ${r.history_tokens_after} tokens` :
-          item.error?.message || '压缩未完成，原始记录仍保留'
+          r?.outcome === 'no_content'
+            ? '暂无可压缩的较早内容'
+            : r?.outcome === 'succeeded'
+              ? `压缩完成，历史估算 ${r.history_tokens_before} → ${r.history_tokens_after} tokens`
+              : item.error?.message || '压缩未完成，原始记录仍保留'
         );
         setCompactTask(null);
         changed();
@@ -155,7 +161,10 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
       }
     };
     void poll();
-    return () => { stopped = true; window.clearTimeout(timer); };
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
   }, [compactTask, user?.user_id, changed]);
 
   async function refreshTurns() {
@@ -327,9 +336,11 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
             body: body({ selected_company_id: next }),
           });
           if (stamp !== generation.current) return;
-          setSessions((previous) => previous.map((item) =>
-            item.session_id === updated.session_id ? { ...item, ...updated } : item
-          ));
+          setSessions((previous) =>
+            previous.map((item) =>
+              item.session_id === updated.session_id ? { ...item, ...updated } : item
+            )
+          );
           setDraft('');
           setError('');
           setCurrentTask(null);
@@ -508,11 +519,15 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
         return;
       }
       const stamp = generation.current;
-      const identity = compactRequest.current?.session === session.session_id
-        ? compactRequest.current
-        : { session: session.session_id, id: requestId() };
+      const identity =
+        compactRequest.current?.session === session.session_id
+          ? compactRequest.current
+          : { session: session.session_id, id: requestId() };
       compactRequest.current = identity;
-      localStorage.setItem(`tax-compact-request:${user.user_id}:${session.session_id}`, identity.id);
+      localStorage.setItem(
+        `tax-compact-request:${user.user_id}:${session.session_id}`,
+        identity.id
+      );
       setSending(true);
       setError('');
       try {
@@ -521,7 +536,10 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
           { method: 'POST', body: body({ client_request_id: identity.id }) }
         );
         if (!accepted.operation_id) throw new Error('未收到压缩任务编号，请使用同一请求重试。');
-        localStorage.setItem(`tax-compact:${user.user_id}:${session.session_id}`, accepted.operation_id);
+        localStorage.setItem(
+          `tax-compact:${user.user_id}:${session.session_id}`,
+          accepted.operation_id
+        );
         localStorage.removeItem(`tax-compact-request:${user.user_id}:${session.session_id}`);
         if (stamp === generation.current) {
           setCompactTask({ session: session.session_id, id: accepted.operation_id });
@@ -1064,7 +1082,10 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                           <div className="assistant-content">
                             {turn.final_message ? (
                               <>
-                                <KnowledgeAnswerText text={turn.final_message} cards={turn.final_cards ?? []} />
+                                <KnowledgeAnswerText
+                                  text={turn.final_message}
+                                  cards={turn.final_cards ?? []}
+                                />
                                 {turn.final_cards?.map((card, index) => (
                                   <Results
                                     key={`${card.kind}/${index}`}
@@ -1267,7 +1288,11 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                     )}
                   </div>
                 </form>
-                {compactNotice && <p className="context-compact-notice" role="status">{compactNotice}</p>}
+                {compactNotice && (
+                  <p className="context-compact-notice" role="status">
+                    {compactNotice}
+                  </p>
+                )}
                 {!user.model_ready && (
                   <p className="model-notice">
                     <CircleAlert size={14} />

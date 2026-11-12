@@ -13,7 +13,9 @@ from app.identity import Identity
 async def test_summary_preserves_provider_configuration(
     db, settings, source_factory, execution_factory
 ):
-    source = source_factory("甲企业2026年9月尚有用途待补，不授权自动修改。")
+    source = source_factory(
+        "甲企业2026年9月尚有用途待补，不授权自动修改。" + "测试背景，不产生操作。" * 80
+    )
     group = closed_group(db, source)
     config = model_settings(settings).model_copy(
         update={"model_extra_body": {"thinking": {"type": "disabled"}}}
