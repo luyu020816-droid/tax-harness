@@ -294,7 +294,7 @@ def require_period(conn, execution, company_id: str, period: str) -> dict:
             return basis
     raise AppError(
         "NEEDS_SCOPE_CLARIFICATION",
-        "尚无已确认的查询月份，请只追问缺失的月份，不自行选择样例月份。",
+        "本次业务工具调用没有可核验的查询月份，请勿自行选择样例月份。",
         422,
     )
 

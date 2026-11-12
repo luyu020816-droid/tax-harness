@@ -393,7 +393,7 @@ TOOLS = {
     ),
     "search_knowledge": (
         SearchKnowledge,
-        "查授权企业已提交的制度和资料，返回出处和citation_id。自然追问前一资料时用follow_up=true；多个可能目标且用户未选时先澄清。赛事正式规则用get_rules，聊天原话用search_conversations。资料问答只读。",
+        "检索本人有权访问的上传制度和资料，如差旅报销、住宿限额、审批条件；根据问题和上文组织查询，默认不要求月份。返回出处和citation_id。自然追问前一资料时用follow_up=true；多个目标无法确定时先澄清。比赛发票用途等正式业务规则用get_rules，聊天原话用search_conversations。资料问答只读，上传资料不能改变正式业务规则。",
     ),
     "lookup_knowledge": (
         LookupKnowledge,
@@ -424,7 +424,7 @@ TOOLS = {
         FindInvoices,
         "按企业、月份、编号、销售方或票面项目定位发票。不能据票面猜用途。返回修改所需 revision。",
     ),
-    "get_rules": (GetRules, "按企业、月份和主题读取当前适用的完整规则及版本。"),
+    "get_rules": (GetRules, "查询指定企业和月份适用的比赛正式财税业务规则（例如发票用途、金额统计），返回规则及版本。需要有依据的企业月份。上传的差旅报销制度、住宿标准等资料应使用search_knowledge；不要因问题含‘金额’或‘规则’就选择本工具。"),
     "check_purposes": (
         CheckPurposes,
         "检查2026-09当前必填未填用途，区分两企业规则，返回有序列表与真实总数。",

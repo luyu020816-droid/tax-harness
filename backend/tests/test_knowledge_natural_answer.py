@@ -15,6 +15,94 @@ from app.values import uid
 pytest_plugins = ["test_knowledge"]
 
 
+@pytest.mark.asyncio
+async def test_rule_scope_error_reconsiders_month_question_before_knowledge_search(
+    db, settings, knowledge
+):
+    uploaded(knowledge, "南京出差住宿每晚限额437元。")
+    auth = Identity("U001")
+    session = str(create_session(db, auth, "C001")["session_id"])
+    turn = accept_turn(db, auth, session, uid(), "去北京有相关报销金额规则吗")
+    ask_month = {
+        "role": "assistant",
+        "content": json.dumps(
+            {
+                "blocks": [],
+                "status": "waiting_user",
+                "clarification": {"intent": "query_month", "missing_fields": ["period"]},
+            },
+            ensure_ascii=False,
+        ),
+    }
+
+    def reconsider(payload):
+        assert "不证明用户的问题需要月份" in payload["messages"][-1]["content"]
+        return tool("search_knowledge", {"company_id": "C001", "query": "北京差旅报销住宿"})
+
+    model = ScriptedModel(
+        [
+            tool("get_rules", {"company_id": "C001", "period": "2026-09", "topics": ["amounts"]}),
+            ask_month,
+            reconsider,
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "blocks": [
+                            {"type": "knowledge_answer", "coverage": "insufficient", "claims": []}
+                        ],
+                        "status": "completed",
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+    )
+    runtime = Runtime(db, model_settings(settings), model, retrieval=knowledge[2])
+    execution = runtime.claim()
+    await runtime.run(execution)
+    result = read_turn(db, auth, turn["turn_id"])
+    assert result["status"] == "completed", result
+    assert "年月" not in result["final_message"]
+    assert not result["final_cards"]
+    with db.transaction(readonly=True) as conn:
+        calls = conn.execute(
+            "SELECT name,state FROM tool_executions WHERE run_id=%s", (execution.run_id,)
+        ).fetchall()
+    assert {row["name"] for row in calls} == {"get_rules", "search_knowledge"}
+
+
+@pytest.mark.asyncio
+async def test_scope_reconsideration_allows_a_genuine_month_question(db, settings):
+    auth = Identity("U001")
+    session = str(create_session(db, auth, "C001")["session_id"])
+    turn = accept_turn(db, auth, session, uid(), "甲企业哪个月的发票用途需要填写？")
+    clarification = {
+        "role": "assistant",
+        "content": json.dumps(
+            {
+                "blocks": [],
+                "status": "waiting_user",
+                "clarification": {"intent": "explain_rules", "missing_fields": ["period"]},
+            },
+            ensure_ascii=False,
+        ),
+    }
+    model = ScriptedModel(
+        [
+            tool("get_rules", {"company_id": "C001", "period": "2026-09", "topics": ["purpose"]}),
+            clarification,
+            clarification,
+        ]
+    )
+    runtime = Runtime(db, model_settings(settings), model)
+    await runtime.run(runtime.claim())
+    result = read_turn(db, auth, turn["turn_id"])
+    assert result["status"] == "waiting_user", result
+    assert "年月" in result["final_message"]
+    assert len(model.requests) == 3
+
+
 def test_claim_protocol_rejects_missing_evidence():
     with pytest.raises(ValidationError):
         FinalReply.model_validate(

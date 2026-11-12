@@ -23,6 +23,28 @@ from app.turns import mentioned_companies
 from app.values import canonical, digest, jsonb, uid
 
 
+def _scope_clarification_needs_review(reply, groups):
+    """Reconsider a month question after a rule-scope error, once per turn."""
+    if not (reply.clarification and "period" in reply.clarification.missing_fields):
+        return False
+    scope_error = False
+    for group in groups:
+        calls = [
+            call for message in group.get("messages", []) for call in message.get("tool_calls", [])
+        ]
+        for call, result in zip(calls, group.get("results", []), strict=False):
+            name = call.get("function", {}).get("name")
+            data = result.get("data") or {}
+            if result.get("ok") and data.get("kind") == "knowledge_search":
+                return False
+            if (
+                name in ("get_rules", "resolve_scope", "lookup_knowledge")
+                and (result.get("error") or {}).get("code") == "NEEDS_SCOPE_CLARIFICATION"
+            ):
+                scope_error = True
+    return scope_error
+
+
 class Runtime:
     def __init__(
         self, db, settings: Settings, model: ModelAdapter, *, retrieval=None, model_connection=None
@@ -527,6 +549,7 @@ class Runtime:
         retry_used = False
         stale_retry = False
         reply_retries = 0
+        scope_reviewed = False
         budget = None
         compaction_attempted = 0
         proactive_compact = True
@@ -702,6 +725,34 @@ class Runtime:
                 continue
             try:
                 reply = FinalReply.model_validate_json(message.get("content") or "")
+                if (
+                    not scope_reviewed
+                    and step < settings.max_model_steps
+                    and model_calls < settings.max_model_steps
+                    and _scope_clarification_needs_review(reply, groups)
+                ):
+                    scope_reviewed = True
+                    groups.append(
+                        {
+                            "messages": [
+                                {"role": "assistant", "content": message.get("content") or ""},
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "刚才的规则工具缺少月份，并不证明用户的问题需要月份。"
+                                        "请重新理解本轮原问题及上下文：如果询问上传的制度、"
+                                        "差旅标准或审批，请先使用授权知识资料工具；如果确实"
+                                        "查询月度数据或适用月份且缺少范围，可继续追问。"
+                                        "不要猜月份，不要重复相同错误调用或执行未授权写入。"
+                                    ),
+                                },
+                            ],
+                            "sources": [],
+                            "results": [],
+                            "memory_epoch": execution.expected_epoch,
+                        }
+                    )
+                    continue
                 verified_knowledge = await self._verify_knowledge_answer(
                     execution, reply, payload, manifest, settings, budgeted_model, step
                 )
