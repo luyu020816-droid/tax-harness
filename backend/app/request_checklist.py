@@ -73,7 +73,23 @@ def compile_items(text, companies, selected_company, available, created_at=None)
             and re.search(r"用途|待补项|必填项", clause)
         ):
             tools.append("check_purposes")
-        if re.search(r"解释|说明|查看|查询", clause) and re.search(r"规则|必填依据", clause):
+        explicit_business_rule = re.search(
+            r"发票(?:的)?(?:用途|必填|填写|金额|统计|规则)|银行(?:的)?(?:资料|收支|规则)|月度资料|金额统计|正式业务",
+            clause,
+        ) and not re.search(r"出差|差旅|报销|住宿", clause)
+        previous_business_request = any(
+            item["tool"] in ("query_month", "check_purposes") for item in items
+        )
+        rule_continuation = previous_business_request and re.fullmatch(
+            r"\s*(?:请|再|帮我)?(?:解释|说明|查看|查询)(?:一下|下)?"
+            r"(?:其|该|这个|对应|相关|适用|这些|具体|的)*规则[？?！!\s]*",
+            clause,
+        )
+        if (
+            re.search(r"解释|说明|查看|查询", clause)
+            and re.search(r"规则|必填依据", clause)
+            and (explicit_business_rule or rule_continuation)
+        ):
             tools.append("get_rules")
         named = [c["company_id"] for c in companies if any(a in clause for a in c["aliases"] if a)]
         periods = sorted(request_periods(clause, created_at))

@@ -99,6 +99,24 @@ def compile_text(text):
 
 
 @pytest.mark.parametrize(
+    "text",
+    [
+        "查询下北京的报销规则",
+        "查询北京的发票报销规则",
+        "查询甲企业出差报销规则",
+        "查看差旅审批规则",
+        "查询甲企业2026年9月发票总额，同时查询北京的报销规则",
+    ],
+)
+def test_uploaded_policy_rules_are_not_forced_into_formal_rule_checklist(text):
+    assert all(item["tool"] != "get_rules" for item in compile_text(text))
+
+
+def test_explicit_invoice_rules_remain_a_formal_rule_obligation():
+    assert [item["tool"] for item in compile_text("查询甲企业2026年9月发票规则")] == ["get_rules"]
+
+
+@pytest.mark.parametrize(
     "text,company,available",
     [
         ("查询月度发票总额", None, False),
@@ -475,8 +493,12 @@ def test_bare_month_does_not_reopen_previous_company_after_switch(db, settings):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("input_budget", "expected_status"), [(15100, "failed"), (30000, "completed")])
-async def test_monthly_query_and_full_rules_fit_one_bounded_tool_round(db, settings, input_budget, expected_status):
+@pytest.mark.parametrize(
+    ("input_budget", "expected_status"), [(15100, "failed"), (30000, "completed")]
+)
+async def test_monthly_query_and_full_rules_fit_one_bounded_tool_round(
+    db, settings, input_budget, expected_status
+):
     session = str(create_session(db, AUTH, "C001")["session_id"])
     turn = accept_turn(db, AUTH, session, uid(), "查询甲企业2026年9月发票总额，并解释适用规则")
 

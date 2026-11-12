@@ -16,6 +16,39 @@ pytest_plugins = ["test_knowledge"]
 
 
 @pytest.mark.asyncio
+async def test_policy_question_can_finish_after_search_without_formal_rule_obligation(
+    db, settings, knowledge
+):
+    uploaded(knowledge, "南京出差住宿每晚限额437元。")
+    auth = Identity("U001")
+    session = str(create_session(db, auth, "C001")["session_id"])
+    turn = accept_turn(db, auth, session, uid(), "查询下北京的报销规则")
+    model = ScriptedModel(
+        [
+            tool("search_knowledge", {"company_id": "C001", "query": "北京出差报销"}),
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "blocks": [
+                            {"type": "knowledge_answer", "coverage": "insufficient", "claims": []}
+                        ],
+                        "status": "completed",
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+    )
+    runtime = Runtime(db, model_settings(settings), model, retrieval=knowledge[2])
+    await runtime.run(runtime.claim())
+    result = read_turn(db, auth, turn["turn_id"])
+    assert result["status"] == "completed", result
+    assert "年月" not in result["final_message"]
+    assert not result["final_cards"]
+
+
+@pytest.mark.asyncio
 async def test_rule_scope_error_reconsiders_month_question_before_knowledge_search(
     db, settings, knowledge
 ):
