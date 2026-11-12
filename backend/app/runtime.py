@@ -549,6 +549,7 @@ class Runtime:
         retry_used = False
         stale_retry = False
         reply_retries = 0
+        public_web_repair_used = False
         scope_reviewed = False
         budget = None
         compaction_attempted = 0
@@ -763,7 +764,14 @@ class Runtime:
             except (ValidationError, json.JSONDecodeError, AppError) as exc:
                 if isinstance(exc, AppError) and exc.code != "REPLY_EVIDENCE_MISSING":
                     raise
-                if reply_retries >= 2:
+                weather_repair = (
+                    isinstance(exc, AppError)
+                    and exc.details.get("repair_kind") == "public_web_chat_facts"
+                    and not public_web_repair_used
+                    and step < settings.max_model_steps
+                    and model_calls < settings.max_model_steps
+                )
+                if reply_retries >= 2 and not weather_repair:
                     if isinstance(exc, AppError):
                         raise
                     raise AppError(
@@ -771,6 +779,8 @@ class Runtime:
                         "模型最终答复格式无效，未把它当作成功结果。",
                         422,
                     ) from exc
+                if weather_repair:
+                    public_web_repair_used = True
                 reply_retries += 1
                 if isinstance(exc, AppError) and reply_retries == 1 and not groups:
                     refreshed = await asyncio.to_thread(

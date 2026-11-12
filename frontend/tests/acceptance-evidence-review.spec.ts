@@ -64,7 +64,7 @@ test('review original evidence, duplicate original request, and capture loaded t
   await expect(failed).toContainText('本轮未能完成');
   await failed.scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(out, '08-summary-failure-desktop.png'), fullPage: true });
-  await failed.getByRole('button', { name: '核对已提交操作' }).click();
+  await failed.getByRole('button', { name: '查看办理记录' }).click();
   await expect(page.getByRole('region', { name: '请求执行轨迹' })).toBeVisible();
   await page.locator('summary').filter({ hasText: '记忆、规则与业务依据' }).first().click();
   const receipts = page.getByRole('heading', { name: '请求级保存与核验' });

@@ -9,7 +9,7 @@ from app.errors import AppError
 from app.identity import assert_access
 from app.sources import read_source
 from app.tool_projection import project_rule_repeats
-from app.values import safe_json
+from app.values import canonical, safe_json
 
 
 def missing(message, *, details=None):
@@ -403,6 +403,23 @@ def _validate_delivery(conn, execution, plan, reply, outputs):
         )
 
 
+def _uncovered_public_queries(outputs, selected_refs):
+    """Require each distinct actual public query, not every duplicate execution."""
+
+    def query_key(output):
+        data = output["data"]
+        return canonical({key: value for key, value in data.items() if key != "results"})
+
+    public = {
+        ref: output
+        for ref, output in outputs.items()
+        if output.get("ok") and (output.get("data") or {}).get("kind") == "public_web"
+    }
+    required = {query_key(output) for output in public.values()}
+    delivered = {query_key(public[ref]) for ref in selected_refs if ref in public}
+    return required - delivered
+
+
 def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None):
     outputs = _results(conn, execution, payload)
     state = json.loads(payload["messages"][0]["content"].split("\n正式状态：\n", 1)[1])
@@ -413,17 +430,12 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
         or (block.type == "knowledge_answer" and block.coverage == "insufficient")
         for block in plan.blocks
     )
-    web_refs = {
-        ref
-        for ref, item in outputs.items()
-        if item.get("ok") and (item.get("data") or {}).get("kind") == "public_web"
-    }
     delivered_web = {
         str(block.result_ref)
         for block in plan.blocks
         if block.type == "result" and block.view == "public_web"
     }
-    if web_refs - delivered_web:
+    if _uncovered_public_queries(outputs, delivered_web):
         missing("答复遗漏本轮公开查询结果，请用public_web视图及其真实编号交付。")
     for item in outputs.values():
         if item.get("ok"):
@@ -557,6 +569,21 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
                 for item in outputs.values()
             ):
                 missing("知识检索后的事实回答须使用knowledge_answer并关联本轮证据。")
+            if (
+                any(ref in outputs and outputs[ref].get("ok") for ref in delivered_web)
+                and re.search(r"天气|气温|温度|体感|降雨|湿度|风速|气象|最高|最低|阴天|晴天", text)
+                and re.search(r"\d[\d,.]*\s*(?:°\s*[cf]|[℃℉]|摄氏度|华氏度|度|%)", text, re.I)
+            ):
+                raise AppError(
+                    "REPLY_EVIDENCE_MISSING",
+                    "天气数据由真实公开查询结果渲染，请勿在普通答复中重复未经核验的温度。",
+                    422,
+                    details={
+                        "repair_kind": "public_web_chat_facts",
+                        "instruction": "保留真实public_web结果块，删除chat_answer中的天气数值；"
+                        "用户另外提出的普通问题可用独立chat_answer回答。",
+                    },
+                )
             if not text or re.search(
                 r"\bC\d{3,}\b|\bF\d{3,}\b|\bR\d{3,}\b|[￥¥]|\d[\d,.]*\s*(?:元|万元|°C|摄氏度)|"
                 r"已(?:经)?(?:保存|修改|核验|入库|提交|写入|更新|查询到)|保存成功|规则版本|发票总额",

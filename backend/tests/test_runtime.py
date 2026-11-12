@@ -331,6 +331,120 @@ async def test_public_weather_asks_for_city_then_searches_and_follows_up(db, set
 
 
 @pytest.mark.asyncio
+async def test_duplicate_weather_queries_deliver_one_actual_result(db, settings, monkeypatch):
+    from app import public_web
+
+    def search(request):
+        return {
+            **request,
+            "kind": "public_web",
+            "results": [
+                {
+                    "title": "Weather forecast",
+                    "url": "https://exa.ai/library/weather/test?date=" + request["weather_date"],
+                    "excerpt": "Overcast, 48°F (8.9°C).",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(public_web, "search", search)
+    text = "今天南京的天气"
+    session = str(create_session(db, AUTH, "C001")["session_id"])
+    turn = accept_turn(db, AUTH, session, uid(), text)
+    args = {"kind": "weather", "question": text, "city": "南京", "days_ahead": 0}
+
+    def first_result(payload):
+        outputs = [json.loads(m["content"]) for m in payload["messages"] if m["role"] == "tool"]
+        assert len(outputs) == 2 and all(output["ok"] for output in outputs)
+        return answer_plan(
+            blocks=[
+                {"type": "result", "view": "public_web", "result_ref": outputs[0]["result_ref"]}
+            ]
+        )
+
+    model = ScriptedModel(
+        [tool("search_public_web", args), tool("search_public_web", args), first_result]
+    )
+    runtime = Runtime(
+        db, model_settings(settings).model_copy(update={"public_web_enabled": True}), model
+    )
+    await runtime.run(runtime.claim())
+    result = read_turn(db, AUTH, turn["turn_id"])
+    assert result["status"] == "completed", result
+    assert "南京" in result["final_message"] and "天气来源" in result["final_message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "weather_text", ["南京今天最低气温约 8°C。", "南京气温约13.9℃。", "南京体感约56°F。"]
+)
+async def test_weather_result_with_repeated_temperature_gets_one_targeted_repair(
+    db, settings, monkeypatch, weather_text
+):
+    from app import public_web
+
+    monkeypatch.setattr(
+        public_web,
+        "search",
+        lambda request: {
+            **request,
+            "kind": "public_web",
+            "results": [
+                {
+                    "title": "Weather forecast",
+                    "url": "https://exa.ai/library/weather/test?date=" + request["weather_date"],
+                    "excerpt": "Overcast, 48°F (8.9°C).",
+                    "weather_details": "- Low: 46°F (7.5°C)",
+                }
+            ],
+        },
+    )
+    text = "南京今天最低温度"
+    session = str(create_session(db, AUTH, "C001")["session_id"])
+    turn = accept_turn(db, AUTH, session, uid(), text)
+    args = {"kind": "weather", "question": text, "city": "南京", "days_ahead": 0, "metric": "low"}
+
+    def output_ref(payload):
+        return next(
+            json.loads(m["content"])["result_ref"]
+            for m in payload["messages"]
+            if m["role"] == "tool"
+        )
+
+    def result_with_duplicate_chat(payload):
+        return answer_plan(
+            blocks=[
+                {"type": "result", "view": "public_web", "result_ref": output_ref(payload)},
+                {"type": "chat_answer", "text": weather_text},
+            ]
+        )
+
+    def repaired(payload):
+        assert "public_web_chat_facts" in payload["messages"][-1]["content"]
+        return answer_plan(
+            blocks=[{"type": "result", "view": "public_web", "result_ref": output_ref(payload)}]
+        )
+
+    model = ScriptedModel(
+        [
+            tool("search_public_web", args),
+            {"role": "assistant", "content": " "},
+            answer_plan(blocks=[{"type": "chat_answer", "text": "南京最低气温约 8°C。"}]),
+            result_with_duplicate_chat,
+            repaired,
+        ]
+    )
+    runtime = Runtime(
+        db, model_settings(settings).model_copy(update={"public_web_enabled": True}), model
+    )
+    await runtime.run(runtime.claim())
+    result = read_turn(db, AUTH, turn["turn_id"])
+    assert result["status"] == "completed", result
+    assert "最低气温" in result["final_message"] and "天气来源" in result["final_message"]
+    assert len(model.requests) == 5
+
+
+@pytest.mark.asyncio
 async def test_rule_followup_refreshes_historical_tool_result(db, settings):
     session = str(create_session(db, AUTH, "C001")["session_id"])
 

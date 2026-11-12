@@ -1122,7 +1122,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                                         setDetail({ kind: 'run', id: turn.runs!.at(-1)!.run_id })
                                       }
                                     >
-                                      核对已提交操作
+                                      查看办理记录
                                       <ChevronRight size={13} />
                                     </button>
                                   )}
