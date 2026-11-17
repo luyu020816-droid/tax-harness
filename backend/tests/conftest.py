@@ -29,7 +29,7 @@ def admin(settings):
         row_factory=dict_row,
         autocommit=True,
     ) as conn:
-        conn.execute("TRUNCATE users,companies,import_batches,rule_versions CASCADE")
+        conn.execute("TRUNCATE users,companies,import_batches,rule_versions,agent_profiles,agent_skills,agent_model_profiles,agent_tool_states CASCADE")
         yield conn
 
 
@@ -128,7 +128,7 @@ def extended_admin(extended_settings):
         row_factory=dict_row,
         autocommit=True,
     ) as conn:
-        conn.execute("TRUNCATE users,companies,import_batches,rule_versions CASCADE")
+        conn.execute("TRUNCATE users,companies,import_batches,rule_versions,agent_profiles,agent_skills,agent_model_profiles,agent_tool_states CASCADE")
         yield conn
 
 

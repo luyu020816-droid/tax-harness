@@ -227,11 +227,18 @@ def _commit(db, auth, plan_id, *, execution):
 
 
 def confirm(db, auth, plan_id, *, expected_revision, intent_hash, request_id, limits=None):
+    from app.agent_authority import LOCK_ID, authorize_tool
     from app.events import emit
 
     with db.transaction() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock_shared(%s)", (LOCK_ID,))
         conn.execute("SELECT 1 FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,))
         plan = _owned(conn, auth, plan_id)
+        origin_turn = conn.execute(
+            "SELECT turn_id FROM sources WHERE source_id=%s", (plan["origin_source_id"],)
+        ).fetchone()
+        if origin_turn and origin_turn["turn_id"]:
+            authorize_tool(conn, origin_turn["turn_id"], "update_invoice", {"plan_id": plan_id})
         conn.execute(
             "SELECT 1 FROM company_heads WHERE company_id=%s FOR UPDATE", (plan["company_id"],)
         )
@@ -283,6 +290,12 @@ def confirm(db, auth, plan_id, *, expected_revision, intent_hash, request_id, li
                 plan_id,
             ),
         )
+        if origin_turn and origin_turn["turn_id"]:
+            conn.execute(
+                "INSERT INTO agent_turn_bindings(turn_id,agent_id,agent_version,snapshot) "
+                "SELECT %s,agent_id,agent_version,snapshot FROM agent_turn_bindings WHERE turn_id=%s",
+                (turn_id, origin_turn["turn_id"]),
+            )
         source = add_source(
             conn,
             auth,

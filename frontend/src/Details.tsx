@@ -5,10 +5,22 @@ import { InvoiceImportDialog } from './InvoiceImportDialog';
 import { EvidenceDetails, KnowledgeDocumentDetails } from './KnowledgeDetails';
 import { Modal } from './Modal';
 import { useResource } from './useResource';
-import type { Detail, Source, UploadedInvoice, ImportBatch } from './types';
+import type { Detail, Source, UploadedInvoice, ImportBatch, RunDetail } from './types';
 
 function RunContent({ id }: { id: string }) {
-  return <RunInsightDrawer runId={id} />;
+  const { data } = useResource<RunDetail>(`/runs/${id}`);
+  return (
+    <>
+      {data?.agent && (
+        <p className="notice">
+          Agent：{data.agent.name} · 配置版本 {data.agent.agent_version} · 模型配置{' '}
+          {data.agent.model_profile_id}
+          {data.agent.model_profile_version === null ? '' : ` v${data.agent.model_profile_version}`}
+        </p>
+      )}
+      <RunInsightDrawer runId={id} />
+    </>
+  );
 }
 
 function SourceContent({ id }: { id: string }) {

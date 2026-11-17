@@ -25,14 +25,20 @@ class Execution:
     observed_heads: dict = field(default_factory=dict)
     import_context: bool = False
     reference_context: bool = False
+    active_tool: tuple[str, dict] | None = field(default=None, repr=False)
     model_configuration: tuple["Settings", "ModelAdapter"] | None = field(default=None, repr=False)
 
 
-def guard(conn, execution: Execution, *, shared=False) -> dict:
+def guard(conn, execution: Execution, *, shared=False, receipt_only=False) -> dict:
     from app.recovery import in_maintenance
 
     if in_maintenance(f"dbname={conn.info.dbname}"):
         raise AppError("MAINTENANCE", "恢复核对中，旧执行不能继续提交。", 503)
+    # Configuration writers take the exclusive form before touching user rows.
+    # Acquire the shared lock first to preserve that ordering in business writes.
+    from app.agent_authority import LOCK_ID
+
+    conn.execute("SELECT pg_advisory_xact_lock_shared(%s)", (LOCK_ID,))
     suffix = " FOR SHARE" if shared else " FOR UPDATE"
     user = conn.execute(
         "SELECT * FROM users WHERE user_id=%s" + suffix, (execution.auth.user_id,)
@@ -65,6 +71,15 @@ def guard(conn, execution: Execution, *, shared=False) -> dict:
         raise AppError("SOURCE_INVALIDATED", "本次执行已取消、超时或由新执行接管。", 409)
     if user["memory_epoch"] != execution.expected_epoch:
         raise AppError("STALE_CONTEXT", "任务或记忆已更新，本次旧上下文不能继续提交。", 409)
+    from app.agent_authority import authorize_tool, policy_for_turn, validate_snapshot
+
+    policy = None if receipt_only else policy_for_turn(conn, execution.turn_id)
+    if policy is not None:
+        if not policy.agent_enabled:
+            raise AppError("AGENT_UNAVAILABLE", "Agent 已停用，不能继续执行。", 409)
+        validate_snapshot(conn, execution.turn_id)
+    if not receipt_only and execution.active_tool:
+        authorize_tool(conn, execution.turn_id, *execution.active_tool)
     read_source(conn, execution.auth, execution.source_id, allow_suppressed=True)
     return user
 

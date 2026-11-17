@@ -880,6 +880,27 @@
     font-size: 13px;
   }
 }
+
+@media (max-width: 600px) {
+  [data-theme='orbit'] .topbar {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    row-gap: 6px;
+  }
+  [data-theme='orbit'] .topbar-left,
+  [data-theme='orbit'] .topbar-right {
+    flex-basis: 100%;
+    width: 100%;
+  }
+  [data-theme='orbit'] .topbar-right {
+    justify-content: space-between;
+  }
+  [data-theme='orbit'] .topbar-left .select-label select {
+    max-width: 30vw;
+    text-overflow: ellipsis;
+  }
+}
 @media (min-width: 768px) and (max-width: 1023px) {
   [data-theme='orbit'] .sidebar {
     width: 72px;

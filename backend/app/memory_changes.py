@@ -15,6 +15,10 @@ def begin_change(
     execution: Execution | None,
     refs: list[dict],
 ) -> tuple:
+    if execution:
+        from app.agent_authority import LOCK_ID
+
+        conn.execute("SELECT pg_advisory_xact_lock_shared(%s)", (LOCK_ID,))
     conn.execute("SELECT 1 FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,))
     fingerprint = digest([kind, action, body])
     existing = conn.execute(

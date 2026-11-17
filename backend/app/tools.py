@@ -44,7 +44,25 @@ class ToolExecutor:
             call.get("function", {}).get("name", "unknown"),
             tool_call_id=call["id"],
         ) as span:
-            result = self._execute(execution, call)
+            try:
+                result = self._execute(execution, call)
+            except AppError as exc:
+                if exc.code != "AGENT_CAPABILITY_DENIED":
+                    raise
+                name, arguments = execution.active_tool or (
+                    call.get("function", {}).get("name", "unknown"),
+                    {},
+                )
+                execution.active_tool = None
+                result = self._record(
+                    execution,
+                    call["id"],
+                    name,
+                    arguments,
+                    {"ok": False, "error": exc.as_dict()},
+                )
+            finally:
+                execution.active_tool = None
             if not result[0].get("ok"):
                 span["status"] = "failed"
                 span["error_code"] = result[0].get("error", {}).get("code")
@@ -89,6 +107,7 @@ class ToolExecutor:
                 arguments if isinstance(arguments, dict) else {},
                 {"ok": False, "error": error.as_dict()},
             )
+        execution.active_tool = (name, arguments)
         with self.db.transaction() as conn:
             guard(conn, execution)
             existing = conn.execute(
@@ -308,6 +327,17 @@ class ToolExecutor:
             )
             return {k: v for k, v in result.items() if k != "excerpt"}
         if name == "read_evidence":
+            from app.agent_authority import restrict_knowledge
+            from app.knowledge_retrieval import read_evidence_group_in
+
+            with db.transaction() as conn:
+                bound = conn.execute(
+                    "SELECT 1 FROM agent_turn_bindings WHERE turn_id=%s", (execution.turn_id,)
+                ).fetchone()
+                if bound:
+                    guard(conn, execution, shared=True)
+                    group = read_evidence_group_in(conn, auth, args["citation_id"])
+                    restrict_knowledge(conn, execution.turn_id, [e["document_id"] for e in group])
             return self.retrieval.read(auth, args["citation_id"])
         if name == "search_knowledge":
             from app.knowledge import recent_knowledge_documents, upload_metadata
@@ -348,6 +378,11 @@ class ToolExecutor:
                         "NEEDS_SCOPE_CLARIFICATION", "指定的资料生效日期需要本轮明确原话。", 422
                     )
                 current_date = source["created_at"].astimezone(timezone(timedelta(hours=8))).date()
+                from app.agent_authority import restrict_knowledge
+
+                args["document_ids"] = restrict_knowledge(
+                    conn, execution.turn_id, args.get("document_ids")
+                )
             args = {k: v for k, v in args.items() if k != "scope_ref"}
             args["as_of"] = (
                 date.fromisoformat(args["as_of"])

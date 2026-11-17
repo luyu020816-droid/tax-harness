@@ -462,6 +462,26 @@ button {
   flex-direction: column;
   overflow: hidden;
 }
+@media (max-width: 600px) {
+  .app-shell .topbar {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    row-gap: 6px;
+  }
+  .app-shell .topbar-left,
+  .app-shell .topbar-right {
+    flex-basis: 100%;
+    width: 100%;
+  }
+  .app-shell .topbar-right {
+    justify-content: space-between;
+  }
+  .app-shell .topbar-left .select-label select {
+    max-width: 30vw;
+    text-overflow: ellipsis;
+  }
+}
 .topbar {
   flex-shrink: 0;
   height: 56px;

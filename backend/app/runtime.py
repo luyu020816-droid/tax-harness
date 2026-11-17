@@ -47,10 +47,13 @@ def _scope_clarification_needs_review(reply, groups):
 
 class Runtime:
     def __init__(
-        self, db, settings: Settings, model: ModelAdapter, *, retrieval=None, model_connection=None
+        self, db, settings: Settings, model: ModelAdapter, *, retrieval=None, model_connection=None,
+        agent_models=None, agent_runtime_enabled=False,
     ):
         self.db, self.settings, self.model = db, settings, model
         self.model_connection = model_connection
+        self.agent_models = agent_models
+        self.agent_runtime_enabled = agent_runtime_enabled
         if retrieval is None:
             from app.knowledge_retrieval import KnowledgeRetrieval
             from app.retrieval_engine import LocalRetrieval
@@ -88,6 +91,9 @@ class Runtime:
         with self.db.transaction() as conn:
             # Serialize only lease allocation, shared across all web processes.
             conn.execute("SELECT pg_advisory_xact_lock(8123419416)")
+            from app.agent_authority import LOCK_ID
+
+            conn.execute("SELECT pg_advisory_xact_lock_shared(%s)", (LOCK_ID,))
             active = conn.execute(
                 "SELECT count(*) n FROM work_items WHERE kind='turn' AND state='running' AND lease_until>clock_timestamp()"
             ).fetchone()["n"]
@@ -118,6 +124,27 @@ class Runtime:
             work = conn.execute(
                 "SELECT * FROM work_items WHERE work_id=%s FOR UPDATE", (candidate["work_id"],)
             ).fetchone()
+            if not self.agent_runtime_enabled and conn.execute(
+                "SELECT 1 FROM agent_turn_bindings WHERE turn_id=%s", (turn["turn_id"],)
+            ).fetchone():
+                error = {
+                    "code": "AGENT_RUNTIME_NOT_READY",
+                    "message": "Agent 运行时尚未完成验证，未执行本轮请求。",
+                    "retryable": False,
+                    "details": {},
+                }
+                conn.execute(
+                    "UPDATE turns SET status='failed',error=%s,updated_at=now() WHERE turn_id=%s",
+                    (jsonb(error), turn["turn_id"]),
+                )
+                conn.execute(
+                    "UPDATE work_items SET state='failed',last_error=%s,lease_until=NULL WHERE work_id=%s",
+                    (jsonb(error), work["work_id"]),
+                )
+                assess(conn, str(candidate["source_id"]), "failed")
+                advance_progress(conn, Identity(user["user_id"]))
+                emit(conn, str(turn["turn_id"]), None, "failed", error)
+                return None
             if candidate["recall_state"] != "active" or not session_allowed(
                 conn, user["user_id"], turn["session_id"]
             ):
@@ -161,6 +188,39 @@ class Runtime:
             token = work["fencing_token"] + 1
             run_id = uid()
             model_settings, model = self._model_for()
+            binding = conn.execute(
+                "SELECT snapshot FROM agent_turn_bindings WHERE turn_id=%s", (turn["turn_id"],)
+            ).fetchone()
+            if binding:
+                from app.agent_authority import validate_snapshot
+
+                try:
+                    validate_snapshot(conn, turn["turn_id"])
+                    config = binding["snapshot"]
+                    if config["model_profile_id"] != "default":
+                        if not self.agent_models:
+                            raise AppError("MODEL_CONFIG_UNAVAILABLE", "Agent 模型配置不可用。", 503)
+                        model_settings, model = self.agent_models.resolve(
+                            config["model_profile_id"], config["model_profile_version"]
+                        )
+                    if config["knowledge_mode"] != "authorized":
+                        model_settings = model_settings.model_copy(
+                            update={"context_use_summary": False, "context_auto_compact": False}
+                        )
+                except AppError as exc:
+                    error = exc.as_dict()
+                    conn.execute(
+                        "UPDATE turns SET status='failed',error=%s,updated_at=now() WHERE turn_id=%s",
+                        (jsonb(error), turn["turn_id"]),
+                    )
+                    conn.execute(
+                        "UPDATE work_items SET state='failed',last_error=%s,lease_until=NULL WHERE work_id=%s",
+                        (jsonb(error), work["work_id"]),
+                    )
+                    assess(conn, str(candidate["source_id"]), "failed")
+                    advance_progress(conn, Identity(user["user_id"]))
+                    emit(conn, str(turn["turn_id"]), None, "failed", error)
+                    return None
             conn.execute(
                 "UPDATE runs SET state='interrupted',finished_at=now() WHERE turn_id=%s AND finished_at IS NULL",
                 (turn["turn_id"],),
@@ -203,7 +263,7 @@ class Runtime:
                 generation,
                 token,
                 user["memory_epoch"],
-                model_configuration=(model_settings, model) if self.model_connection else None,
+                model_configuration=(model_settings, model) if self.model_connection or binding else None,
             )
 
     async def _worker(self):
@@ -1175,7 +1235,11 @@ class Runtime:
         from app.answer_renderer import operation_receipt
 
         try:
-            guard(conn, execution)
+            guard(
+                conn,
+                execution,
+                receipt_only=error.code in ("AGENT_AUTHORITY_CHANGED", "AGENT_UNAVAILABLE"),
+            )
             rows = conn.execute(
                 "SELECT * FROM operations WHERE user_id=%s AND source_id=%s "
                 "AND state IN ('committed','no_change') ORDER BY committed_at,operation_id",
@@ -1298,6 +1362,9 @@ class Runtime:
 
     def fail(self, execution, error: AppError):
         with self.db.transaction() as conn:
+            from app.agent_authority import LOCK_ID
+
+            conn.execute("SELECT pg_advisory_xact_lock_shared(%s)", (LOCK_ID,))
             conn.execute(
                 "SELECT 1 FROM users WHERE user_id=%s FOR UPDATE", (execution.auth.user_id,)
             )

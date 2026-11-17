@@ -15,6 +15,48 @@ from app.values import uid
 pytest_plugins = ["test_knowledge"]
 
 
+@pytest.mark.asyncio
+async def test_knowledge_search_repairs_mixed_clarification(db, settings, knowledge):
+    auth = Identity("U001")
+    session = str(create_session(db, auth, "C001")["session_id"])
+    turn = accept_turn(db, auth, session, uid(), "我们这边的发票用途有什么要求？")
+    insufficient = {"type": "knowledge_answer", "coverage": "insufficient", "claims": []}
+
+    def repair(payload):
+        feedback = payload["messages"][-1]["content"]
+        assert "删除chat_answer" in feedback
+        assert "clarification" in feedback
+        return {
+            "role": "assistant",
+            "content": json.dumps({"blocks": [insufficient], "status": "completed"}),
+        }
+
+    model = ScriptedModel(
+        [
+            tool("search_knowledge", {"company_id": "C001", "query": "发票用途要求"}),
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "blocks": [
+                            insufficient,
+                            {"type": "chat_answer", "text": "请补充相关制度。"},
+                        ],
+                        "status": "completed",
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+            repair,
+        ]
+    )
+    runtime = Runtime(db, model_settings(settings), model, retrieval=knowledge[2])
+    await runtime.run(runtime.claim())
+    result = read_turn(db, auth, turn["turn_id"])
+    assert result["status"] == "completed", result
+    assert "知识资料暂时无法检索" in result["final_message"]
+
+
 def no_missing_coverage(_payload):
     return {"role": "assistant", "content": json.dumps({"verdicts": [], "missing_relevant": []})}
 

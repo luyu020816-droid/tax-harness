@@ -65,7 +65,25 @@ def read_run(db, auth: Identity, run_id: str, *, conn=None) -> dict:
         events = conn.execute(
             "SELECT * FROM run_events WHERE run_id=%s ORDER BY event_seq", (run_id,)
         ).fetchall()
-        return safe_json({"run": run, "contexts": contexts, "tools": tools, "events": events})
+        binding = conn.execute(
+            "SELECT agent_id,agent_version,snapshot FROM agent_turn_bindings WHERE turn_id=%s",
+            (run["turn_id"],),
+        ).fetchone()
+        agent = None
+        if binding:
+            config = binding["snapshot"]
+            agent = {
+                "agent_id": binding["agent_id"],
+                "agent_version": binding["agent_version"],
+                "name": config["name"],
+                "model_profile_id": config["model_profile_id"],
+                "model_profile_version": config["model_profile_version"],
+                "tool_grants": config["tool_grants"],
+                "skill_versions": config["skill_versions"],
+            }
+        return safe_json(
+            {"run": run, "contexts": contexts, "tools": tools, "events": events, "agent": agent}
+        )
 
 
 def list_runs(db, auth: Identity, company_id=None) -> list[dict]:
@@ -75,11 +93,12 @@ def list_runs(db, auth: Identity, company_id=None) -> list[dict]:
         if company_id:
             assert_access(conn, auth, company_id)
         rows = conn.execute(
-            'SELECT r.*,t.text,t.session_id FROM runs r JOIN turns t USING(turn_id) WHERE ' + VISIBLE +
-            ' AND (%(company)s::text IS NULL OR EXISTS(SELECT 1 FROM sources s JOIN source_scopes z USING(source_id) WHERE s.turn_id=t.turn_id AND z.company_id=%(company)s)) ORDER BY started_at DESC LIMIT 100',
-            {'user':auth.user_id,'company':company_id},
+            "SELECT r.*,t.text,t.session_id FROM runs r JOIN turns t USING(turn_id) WHERE "
+            + VISIBLE
+            + " AND (%(company)s::text IS NULL OR EXISTS(SELECT 1 FROM sources s JOIN source_scopes z USING(source_id) WHERE s.turn_id=t.turn_id AND z.company_id=%(company)s)) ORDER BY started_at DESC LIMIT 100",
+            {"user": auth.user_id, "company": company_id},
         ).fetchall()
         for row in rows:
-            if not content_allowed(conn,auth,str(row['run_id'])):
-                row['text']='历史内容已失效，仅保留计量'
+            if not content_allowed(conn, auth, str(row["run_id"])):
+                row["text"] = "历史内容已失效，仅保留计量"
         return safe_json(redact(rows))

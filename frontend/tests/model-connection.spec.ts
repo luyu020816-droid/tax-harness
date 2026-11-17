@@ -9,9 +9,28 @@ test('local model settings test the env or enable a validated draft', async ({ p
     test_status: 'untested',
   };
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.route('**/api/v1/me', (route) =>
-    route.fulfill({ status: 401, json: { code: 'UNAUTHENTICATED', message: '请登录' } })
-  );
+  await page.route('**/api/v1/**', (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/me'))
+      return route.fulfill({
+        json: {
+          user_id: 'U001',
+          display_name: '一',
+          companies: [{ company_id: 'C001', name: '甲', can_update: true }],
+          model_ready: true,
+          model_mode: 'test',
+          dataset_profile: 'competition',
+          invoice_import_ready: false,
+        },
+      });
+    if (path.endsWith('/sessions'))
+      return route.fulfill({
+        json: [{ session_id: 's1', selected_company_id: 'C001', title: '新对话' }],
+      });
+    if (path.endsWith('/messages')) return route.fulfill({ json: { turns: [], has_more: false } });
+    if (path.endsWith('/tasks')) return route.fulfill({ json: [] });
+    return route.fulfill({ status: 404, json: { message: 'not found' } });
+  });
   await page.route('**/api/v1/model-connection', (route) => route.fulfill({ json: status }));
   await page.route('**/api/v1/model-connection/test', async (route) => {
     const input = route.request().postDataJSON();

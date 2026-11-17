@@ -28,6 +28,7 @@ def accept_turn(
     expected_company_id=None,
     check_expected_company=False,
     limits=None,
+    agent_id=None,
 ) -> dict:
     if not text.strip() or len(text) > 16000 or len(client_request_id) > 200:
         raise AppError("INVALID_ARGUMENT", "消息不能为空且最多 16000 字符，请求编号最多 200 字符。")
@@ -42,7 +43,13 @@ def accept_turn(
     )
     if knowledge_upload_ids:
         fingerprint = digest([session_id, text, upload_ids, knowledge_upload_ids])
+    if agent_id is not None:
+        fingerprint = digest([fingerprint, agent_id])
     with db.transaction() as conn:
+        if agent_id is not None:
+            from app.agent_authority import LOCK_ID
+
+            conn.execute("SELECT pg_advisory_xact_lock_shared(%s)", (LOCK_ID,))
         conn.execute("SELECT * FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,))
         session = owned(conn, "sessions", "session_id", session_id, auth)
         if check_expected_company and session["selected_company_id"] != expected_company_id:
@@ -93,6 +100,10 @@ def accept_turn(
             "INSERT INTO turns(turn_id,session_id,user_id,client_request_id,request_hash,source_seq,text) VALUES(%s,%s,%s,%s,%s,%s,%s)",
             (turn_id, session_id, auth.user_id, client_request_id, fingerprint, sequence, text),
         )
+        if agent_id is not None:
+            from app.agent_authority import bind_turn
+
+            bind_turn(conn, auth, turn_id, agent_id)
         conn.execute("UPDATE turns SET upload_ids=%s WHERE turn_id=%s", (upload_ids, turn_id))
         conn.execute(
             "UPDATE turns SET knowledge_upload_ids=%s WHERE turn_id=%s",

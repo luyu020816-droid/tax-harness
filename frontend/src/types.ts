@@ -194,6 +194,15 @@ export interface RunSummary {
 }
 export interface RunDetail {
   run: RunSummary;
+  agent?: {
+    agent_id: string;
+    agent_version: number;
+    name: string;
+    model_profile_id: string;
+    model_profile_version: number | null;
+    tool_grants: Record<string, string[]>;
+    skill_versions: { skill_id: string; version: number }[];
+  } | null;
   contexts: {
     context_id: string;
     model_step: number;

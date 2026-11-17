@@ -576,7 +576,15 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
                 in ("knowledge_search", "knowledge_evidence")
                 for item in outputs.values()
             ):
-                missing("知识检索后的事实回答须使用knowledge_answer并关联本轮证据。")
+                missing(
+                    "知识检索后的事实回答须使用knowledge_answer并关联本轮证据。",
+                    details={
+                        "instruction": "删除chat_answer；知识结论使用knowledge_answer及本轮引用，"
+                        "资料不足时使用insufficient和空claims，由程序说明检索结果。"
+                        "确需向用户追问时使用waiting_user和clarification，不要重复追问文字。"
+                        "其他已完成事项仍须使用对应结果块交付。",
+                    },
+                )
             if (
                 any(ref in outputs and outputs[ref].get("ok") for ref in delivered_web)
                 and re.search(r"天气|气温|温度|体感|降雨|湿度|风速|气象|最高|最低|阴天|晴天", text)

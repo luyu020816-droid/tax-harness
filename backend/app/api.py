@@ -60,6 +60,7 @@ class TurnBody(StrictModel):
     upload_ids: list[UUID] = Field(default_factory=list, max_length=1)
     knowledge_upload_ids: list[UUID] = Field(default_factory=list, max_length=1)
     expected_company_id: str | None = None
+    agent_id: UUID | None = None
 
 
 class CompactionBody(StrictModel):
@@ -124,7 +125,13 @@ def create_app(
     model_connection = ModelConnection(settings) if model is None else None
     if model_connection:
         _, model = model_connection.current
-    runtime = Runtime(db, settings, model, model_connection=model_connection)
+    from app.agent_models import PersistentAgentModels
+
+    agent_models = PersistentAgentModels(db, settings)
+    runtime = Runtime(
+        db, settings, model, model_connection=model_connection, agent_models=agent_models,
+        agent_runtime_enabled=True,
+    )
 
     def model_ready():
         return (model_connection.current[0] if model_connection else settings).model_configured
@@ -181,8 +188,12 @@ def create_app(
         conversation_router(db, auth_dependency, settings, runtime.tools.retrieval.engine)
     )
     app.include_router(import_router(imports, auth_dependency))
+    from app.api_agent_admin import agent_admin_router
+
+    app.state.agent_models = agent_models
+    app.include_router(agent_admin_router(db, auth_dependency, agent_models))
     if model_connection:
-        app.include_router(model_connection_router(model_connection))
+        app.include_router(model_connection_router(model_connection, db, auth_dependency))
     app.include_router(insight_router(db, auth_dependency))
     app.include_router(
         knowledge_router(knowledge, runtime.tools.retrieval, auth_dependency, runtime.tools.history)
@@ -346,6 +357,31 @@ def create_app(
             "invoice_import_ready": imports.available(),
         }
 
+    @app.get("/api/v1/agents")
+    def available_agents(current=auth_dependency):
+        with db.transaction(readonly=True) as conn:
+            rows = conn.execute(
+                "SELECT p.agent_id,p.current_version,v.config FROM agent_profiles p "
+                "JOIN agent_profile_versions v ON v.agent_id=p.agent_id AND v.version=p.current_version "
+                "WHERE p.enabled ORDER BY p.name,p.agent_id"
+            ).fetchall()
+        result = []
+        for row in rows:
+            config = row["config"]
+            if config["model_profile_id"] == "default":
+                ready = model_ready()
+            else:
+                try:
+                    agent_models.resolve(config["model_profile_id"], config["model_profile_version"])
+                    ready = True
+                except AppError:
+                    ready = False
+            result.append({
+                "agent_id": str(row["agent_id"]), "version": row["current_version"],
+                "name": config["name"], "description": config["description"], "model_ready": ready,
+            })
+        return result
+
     @app.get("/api/v1/sessions")
     def sessions(current=auth_dependency):
         return turns.list_sessions(db, current)
@@ -432,6 +468,7 @@ def create_app(
             expected_company_id=body.expected_company_id,
             check_expected_company="expected_company_id" in body.model_fields_set,
             limits=settings,
+            agent_id=str(body.agent_id) if body.agent_id else None,
         )
         return {**result, "events_url": f"/api/v1/turns/{result['turn_id']}/events"}
 

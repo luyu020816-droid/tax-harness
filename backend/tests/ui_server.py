@@ -43,7 +43,10 @@ with psycopg.connect(
         "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid()"
     ).fetchone()[0]:
         raise SystemExit("Stop other test database connections before starting the UI fixture.")
-    conn.execute("TRUNCATE users,companies,import_batches,rule_versions CASCADE")
+    conn.execute(
+        "TRUNCATE users,companies,import_batches,rule_versions,agent_profiles,"
+        "agent_skills,agent_model_profiles,agent_tool_states CASCADE"
+    )
 initialize(settings, test=True)
 settings = model_settings(settings).model_copy(update={"database_url": settings.test_database_url})
 model = ScriptedModel(

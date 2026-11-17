@@ -52,6 +52,7 @@ def _grant_runtime(conn, settings: Settings) -> None:
     role = sql.Identifier(user)
     conn.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(role))
     conn.execute(sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA public TO {}").format(role))
+    conn.execute(sql.SQL("GRANT UPDATE(lock_token) ON agent_config_managers TO {}").format(role))
     tables = [
         "file_uploads",
         "invoice_import_batches",
@@ -97,10 +98,22 @@ def _grant_runtime(conn, settings: Settings) -> None:
         "retrieval_queries",
         "retrieval_evidence",
         "rule_knowledge_refs",
+        "agent_profiles",
+        "agent_model_profiles",
+        "agent_skills",
+        "agent_tool_states",
     ]
     conn.execute(
         sql.SQL("GRANT INSERT,UPDATE ON {} TO {}").format(
             sql.SQL(",").join(map(sql.Identifier, tables)), role
+        )
+    )
+    conn.execute(
+        sql.SQL("GRANT INSERT ON agent_profile_versions,agent_config_events,agent_skill_versions,agent_capability_events,agent_turn_bindings TO {}").format(role)
+    )
+    conn.execute(
+        sql.SQL("REVOKE UPDATE,DELETE ON agent_profile_versions,agent_config_events,agent_skill_versions,agent_capability_events,agent_turn_bindings FROM {}").format(
+            role
         )
     )
     if conn.execute("SELECT to_regclass('public.conversation_passages') t").fetchone()["t"]:
@@ -141,6 +154,70 @@ def _grant_runtime(conn, settings: Settings) -> None:
     )
     conn.execute(sql.SQL("GRANT UPDATE(data_revision) ON company_heads TO {}").format(role))
     conn.execute(sql.SQL("GRANT UPDATE(purpose,note,revision) ON invoices TO {}").format(role))
+
+
+def _seed_default_agents(conn):
+    """Seed examples once; never replace an existing user's agent or skill."""
+    from app.agent_capabilities import ACTION_TOOLS, ALIASES
+    from app.tool_schemas import tool_definitions
+    from app.values import jsonb, uid
+
+    if (
+        not conn.execute("SELECT 1 FROM users WHERE user_id='U001'").fetchone()
+        or conn.execute("SELECT 1 FROM agent_profiles LIMIT 1").fetchone()
+        or conn.execute("SELECT 1 FROM agent_skills LIMIT 1").fetchone()
+    ):
+        return
+    tool_names = {
+        item["function"]["name"] for item in tool_definitions()
+        if item["function"]["name"] not in ALIASES
+    }
+    grants = {name: sorted(ACTION_TOOLS.get(name, {"invoke"})) for name in sorted(tool_names)}
+    read_names = {"query_month", "resolve_scope", "find_invoices", "get_rules", "check_purposes", "search_knowledge", "read_evidence"}
+    read_grants = {name: grants[name] for name in sorted(read_names & tool_names)}
+    skill_id = uid()
+    skill = {
+        "name": "发票与规则核对", "description": "查询发票并核对适用规则",
+        "instructions": "根据用户指定范围查询发票与正式规则，不猜测事实。",
+        "tool_grants": {"find_invoices": ["invoke"], "get_rules": ["invoke"]},
+        "requires_knowledge": False,
+    }
+    conn.execute(
+        "INSERT INTO agent_skills(skill_id,name,current_version) VALUES(%s,%s,1)",
+        (skill_id, skill["name"]),
+    )
+    conn.execute(
+        "INSERT INTO agent_skill_versions(skill_id,version,config,published_by) VALUES(%s,1,%s,'U001')",
+        (skill_id, jsonb(skill)),
+    )
+    conn.execute(
+        "INSERT INTO agent_capability_events(event_id,actor_id,kind,capability_id,action,revision) "
+        "VALUES(%s,'U001','skill',%s,'publish',1)", (uid(), skill_id),
+    )
+    for name, description, prompt, allowed in (
+        ("财税办理助手", "查询财税资料并按授权办理发票", "按用户要求办理财税事项，写入前核对授权。", grants),
+        ("知识查阅助手", "只读查询资料、发票和规则", "仅查询和解释有权访问的资料，不修改业务数据。", read_grants),
+    ):
+        agent_id = uid()
+        draft = {
+            "name": name, "description": description, "prompt": prompt,
+            "model_profile_id": "default", "tool_grants": allowed, "skill_ids": [skill_id],
+            "knowledge_mode": "authorized", "knowledge_document_ids": [],
+        }
+        config = {**draft, "skill_versions": [{"skill_id": skill_id, "version": 1}], "model_profile_version": None}
+        conn.execute(
+            "INSERT INTO agent_profiles(agent_id,name,enabled,revision,draft,current_version) "
+            "VALUES(%s,%s,true,3,%s,1)", (agent_id, name, jsonb(draft)),
+        )
+        conn.execute(
+            "INSERT INTO agent_profile_versions(agent_id,version,config,published_by) VALUES(%s,1,%s,'U001')",
+            (agent_id, jsonb(config)),
+        )
+        for revision, action in enumerate(("create", "publish", "enable"), 1):
+            conn.execute(
+                "INSERT INTO agent_config_events(event_id,agent_id,actor_id,action,revision) VALUES(%s,%s,'U001',%s,%s)",
+                (uid(), agent_id, action, revision),
+            )
 
 
 def _grant_ingest(conn, settings):
@@ -240,6 +317,13 @@ def initialize(settings: Settings, *, test=False, extended=False) -> dict:
         result = import_samples(
             conn, materials / "02_示例数据.xlsx", materials / "03_业务规则.docx"
         )
+        if not result.get("already_imported"):
+            conn.execute(
+                "INSERT INTO agent_config_managers(user_id) SELECT user_id FROM users "
+                "WHERE user_id='U001' ON CONFLICT DO NOTHING"
+            )
+        if 23 not in applied:
+            _seed_default_agents(conn)
         if extended:
             if database not in ("tax_harness_extended", "tax_harness_extended_test"):
                 raise AppError("IMPORT_DISABLED", "不能将比赛库改为扩展模式。", 403)

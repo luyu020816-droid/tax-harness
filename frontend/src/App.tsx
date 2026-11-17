@@ -32,6 +32,7 @@ import {
   turnStatusName,
 } from './api';
 import { BrandMark } from './BrandMark';
+import { AgentAdmin } from './AgentAdmin';
 import { ContextIndicator } from './ContextIndicator';
 import { Details } from './Details';
 import { MemoryView } from './MemoryView';
@@ -54,6 +55,7 @@ import type {
 } from './types';
 
 type Page = 'chat' | 'memory' | 'runs' | 'knowledge';
+type AgentOption = { agent_id: string; name: string; description: string; model_ready: boolean };
 
 export default function App({ appearance = 'default' }: { appearance?: 'default' | 'orbit' }) {
   const orbit = appearance === 'orbit';
@@ -72,6 +74,10 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
   const [requestUncertain, setRequestUncertain] = useState(false);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
+  const [agentAdminOpen, setAgentAdminOpen] = useState(false);
+  const [agentOptions, setAgentOptions] = useState<AgentOption[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [agentCatalogVersion, setAgentCatalogVersion] = useState(0);
   const [navigationOpen, setNavigationOpen] = useState(false);
   const [currentTask, setCurrentTask] = useState<Task | null>(null);
   const [taskError, setTaskError] = useState('');
@@ -95,10 +101,26 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
     session: string;
     upload: string | null;
     knowledge: string | null;
+    agent: string | null;
   } | null>(null);
   const resumeRequest = useRef<{ turnId: string; generation: number; requestId: string } | null>(
     null
   );
+
+  useEffect(() => {
+    if (!user) {
+      setAgentOptions([]);
+      setSelectedAgent(null);
+      return;
+    }
+    const controller = new AbortController();
+    api<AgentOption[]>('/agents', { signal: controller.signal })
+      .then(setAgentOptions)
+      .catch(() => {
+        if (!controller.signal.aborted) setAgentOptions([]);
+      });
+    return () => controller.abort();
+  }, [user?.user_id, agentCatalogVersion]);
   const acknowledged = useRef(new Set<string>());
 
   const changed = useCallback(() => setVersion((v) => v + 1), []);
@@ -500,6 +522,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
   async function send() {
     const isCompact = draft.trim() === '/compact';
     if (
+      !user ||
       !session ||
       session.archived_at ||
       !draft.trim() ||
@@ -509,11 +532,16 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
       draft.length > 16000
     )
       return;
-    if (!user?.model_ready) {
+    const selected = agentOptions.find((item) => item.agent_id === selectedAgent);
+    if (!(selectedAgent ? selected?.model_ready : user?.model_ready)) {
       setError('模型尚未配置，请打开模型设置测试并启用，或配置本地 .env。');
       return;
     }
     if (isCompact) {
+      if (selectedAgent) {
+        setError('当前 Agent 暂不支持手动压缩，请使用普通对话继续。');
+        return;
+      }
       if (attachment || knowledgeAttachment) {
         setError('压缩命令不能携带附件，请先移除附件或另开一条消息。');
         return;
@@ -560,7 +588,8 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
       retryRequest.current?.text === text &&
       retryRequest.current.session === session.session_id &&
       retryRequest.current.upload === (attachment?.upload_id ?? null) &&
-      retryRequest.current.knowledge === (knowledgeAttachment?.file_id ?? null)
+      retryRequest.current.knowledge === (knowledgeAttachment?.file_id ?? null) &&
+      retryRequest.current.agent === selectedAgent
         ? retryRequest.current
         : {
             id: requestId(),
@@ -568,6 +597,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
             session: session.session_id,
             upload: attachment?.upload_id ?? null,
             knowledge: knowledgeAttachment?.file_id ?? null,
+            agent: selectedAgent,
           };
     retryRequest.current = identity;
     setRequestUncertain(false);
@@ -583,6 +613,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
           expected_company_id: company,
           upload_ids: attachment ? [attachment.upload_id] : [],
           knowledge_upload_ids: knowledgeAttachment ? [knowledgeAttachment.file_id] : [],
+          agent_id: identity.agent,
         }),
       });
       if (stamp !== generation.current) return;
@@ -687,12 +718,16 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
     }
   };
   const canUpdate = user?.companies.find((c) => c.company_id === company)?.can_update ?? false;
+  const activeModelReady = selectedAgent
+    ? (agentOptions.find((item) => item.agent_id === selectedAgent)?.model_ready ?? false)
+    : (user?.model_ready ?? false);
 
   const modelSettings = modelSettingsOpen && (
     <ModelConnection
       onClose={() => setModelSettingsOpen(false)}
       onEnabled={() => {
         setUser((current) => current && { ...current, model_ready: true });
+        setAgentCatalogVersion((value) => value + 1);
         changed();
       }}
     />
@@ -737,9 +772,6 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
             </button>
           </div>
           {error && <p className="error-note">{error}</p>}
-          <button className="text-button" onClick={() => setModelSettingsOpen(true)}>
-            模型设置
-          </button>
           <p className="login-footnote">
             <ShieldCheck size={14} />
             全部企业、资料与规则均为比赛模拟内容
@@ -751,6 +783,15 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
   return (
     <div className="app-shell">
       {modelSettings}
+      {agentAdminOpen && (
+        <AgentAdmin
+          company={company}
+          onClose={() => {
+            setAgentAdminOpen(false);
+            setAgentCatalogVersion((value) => value + 1);
+          }}
+        />
+      )}
       {navigationOpen && (
         <button
           className="nav-backdrop"
@@ -891,13 +932,36 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
             <span className={`permission-label ${canUpdate ? '' : 'readonly'}`}>
               {company ? (canUpdate ? '可查询与补充' : '只读') : '企业待确认'}
             </span>
+            <label className="select-label">
+              <span className="sr-only">当前 Agent</span>
+              <select
+                value={selectedAgent ?? ''}
+                disabled={sending || !!activeId || requestUncertain}
+                onChange={(event) => setSelectedAgent(event.target.value || null)}
+              >
+                <option value="">原助手</option>
+                {selectedAgent && !agentOptions.some((item) => item.agent_id === selectedAgent) && (
+                  <option value={selectedAgent}>Agent 不可用</option>
+                )}
+                {agentOptions.map((item) => (
+                  <option key={item.agent_id} value={item.agent_id}>
+                    {item.name}
+                    {item.model_ready ? '' : '（模型未就绪）'}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={13} />
+            </label>
           </div>
           <div className="topbar-right">
-            <span className={`connection-status ${user.model_ready ? 'connected' : ''}`}>
+            <button className="text-button" onClick={() => setAgentAdminOpen(true)}>
+              Agent 管理
+            </button>
+            <span className={`connection-status ${activeModelReady ? 'connected' : ''}`}>
               <span />
-              {user.model_mode === 'test'
+              {!selectedAgent && user.model_mode === 'test'
                 ? '程序测试模型'
-                : user.model_ready
+                : activeModelReady
                   ? '模型已配置'
                   : '模型未配置'}
             </span>
@@ -938,7 +1002,8 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
               retryRequest.current.session === session?.session_id &&
               retryRequest.current.text === draft &&
               retryRequest.current.upload === (attachment?.upload_id ?? null) &&
-              retryRequest.current.knowledge === (knowledgeAttachment?.file_id ?? null) && (
+              retryRequest.current.knowledge === (knowledgeAttachment?.file_id ?? null) &&
+              retryRequest.current.agent === selectedAgent && (
                 <button
                   className="recovery-button"
                   disabled={sending || !!activeId}
@@ -1276,7 +1341,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                           switchingCompany ||
                           !draft.trim() ||
                           draft.length > 16000 ||
-                          !user.model_ready
+                          !activeModelReady
                         }
                       >
                         {sending ? (
@@ -1293,7 +1358,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                     {compactNotice}
                   </p>
                 )}
-                {!user.model_ready && (
+                {!activeModelReady && (
                   <p className="model-notice">
                     <CircleAlert size={14} />
                     模型尚未配置，可在模型设置中测试并启用。
@@ -1309,7 +1374,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                   turns={turnList}
                   active={!!activeId || sending}
                   stage={sending ? '正在发送需求' : stage}
-                  modelReady={user.model_ready}
+                  modelReady={activeModelReady}
                   onDetail={setDetail}
                 />
               )}

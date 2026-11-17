@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from contextlib import contextmanager, nullcontext
 from ipaddress import ip_address
 from math import ceil
 from urllib.parse import urlsplit
@@ -108,7 +109,7 @@ class ModelConnection:
             "test_status": self.test_status,
         }
 
-    async def test_and_enable(self, form: ConnectionInput | None):
+    async def test_and_enable(self, form: ConnectionInput | None, *, enable_guard=None):
         if self.testing.locked():
             raise AppError("MODEL_TEST_BUSY", "已有连接测试在进行，请稍后再试。", 409)
         async with self.testing:
@@ -179,22 +180,36 @@ class ModelConnection:
                 raise AppError(
                     "MODEL_TEST_FAILED", "接口连接失败，请检查 API 地址和网络。", 422
                 ) from exc
-            self.current = (settings, candidate)
-            self.test_status = "success"
+            previous, prior_status = self.current, self.test_status
+            try:
+                with enable_guard() if enable_guard else nullcontext():
+                    self.current = (settings, candidate)
+                    self.test_status = "success"
+            except Exception:
+                self.current, self.test_status = previous, prior_status
+                raise
             return self.status()
 
 
-def model_connection_router(connection: ModelConnection):
+def model_connection_router(connection: ModelConnection, db, auth_dependency):
     router = APIRouter(prefix="/api/v1/model-connection")
 
     @router.get("")
-    async def status(request: Request):
+    async def status(request: Request, current=auth_dependency):
         _check_local(request)
+        from app.agent_profiles import _require_manager
+
+        with db.transaction(readonly=True) as conn:
+            _require_manager(conn, current)
         return connection.status()
 
     @router.post("/test")
-    async def test_connection(request: Request):
+    async def test_connection(request: Request, current=auth_dependency):
         _check_local(request, writing=True)
+        from app.agent_profiles import _require_manager
+
+        with db.transaction(readonly=True) as conn:
+            _require_manager(conn, current)
         try:
             body = await request.json()
             form = None if body == {} else ConnectionInput.model_validate(body)
@@ -203,6 +218,14 @@ def model_connection_router(connection: ModelConnection):
             raise AppError(
                 "INVALID_MODEL_CONFIG", "请检查 API 地址、模型名称和 API Key。", 422
             ) from exc
-        return await connection.test_and_enable(form)
+
+        @contextmanager
+        def enable_guard():
+            with db.transaction() as conn:
+                conn.execute("SELECT pg_advisory_xact_lock(8123419417)")
+                _require_manager(conn, current, lock=True)
+                yield
+
+        return await connection.test_and_enable(form, enable_guard=enable_guard)
 
     return router

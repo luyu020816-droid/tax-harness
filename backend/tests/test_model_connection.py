@@ -25,7 +25,7 @@ FORM = {
 }
 
 
-def make_app(*, configured=True):
+def make_app(db, *, configured=True):
     settings = Settings(
         _env_file=None,
         model_base_url="https://env.example.test/v1" if configured else "",
@@ -36,12 +36,13 @@ def make_app(*, configured=True):
         database_url="dbname=local_demo",
         ingest_database_url="",
     )
-    # A connection probe must never touch the application database.
-    return create_app(settings, db=SimpleNamespace(ready=lambda: False), start_workers=False)
+    return create_app(settings, db=db, start_workers=False)
 
 
 def browser(app, client_host="127.0.0.1", origin=LOCAL):
-    return TestClient(app, base_url=origin, client=(client_host, 12345))
+    client = TestClient(app, base_url=origin, client=(client_host, 12345))
+    assert client.post("/api/v1/demo/login", json={"user_id": "U001"}).status_code == 200
+    return client
 
 
 def probe_reply():
@@ -54,7 +55,30 @@ def probe_reply():
     }
 
 
-def test_configured_env_can_be_tested_without_sending_its_key(monkeypatch):
+def test_model_settings_require_authenticated_configuration_manager(db):
+    with TestClient(make_app(db), base_url=LOCAL, client=("127.0.0.1", 12345)) as client:
+        assert client.get(URL).status_code == 401
+        assert client.post("/api/v1/demo/login", json={"user_id": "U002"}).status_code == 200
+        assert client.get(URL).status_code == 403
+        assert client.post(URL + "/test", json=FORM, headers={"Origin": LOCAL}).status_code == 403
+
+
+def test_model_test_does_not_enable_if_manager_is_revoked_during_probe(db, admin, monkeypatch):
+    async def complete(self, payload):
+        admin.execute("DELETE FROM agent_config_managers WHERE user_id='U001'")
+        return probe_reply()
+
+    monkeypatch.setattr(HttpModel, "complete", complete)
+    app = make_app(db)
+    with browser(app) as client:
+        original = app.state.runtime._model_for()
+        result = client.post(URL + "/test", json=FORM, headers={"Origin": LOCAL})
+        assert result.status_code == 403
+        assert app.state.runtime._model_for() is original
+        assert FORM["api_key"] not in result.text
+
+
+def test_configured_env_can_be_tested_without_sending_its_key(monkeypatch, db):
     async def complete(self, payload):
         assert self.settings.model_api_key == "env-fixture-key"
         assert payload["model"] == "env-model" and payload["max_tokens"] == 128
@@ -63,7 +87,7 @@ def test_configured_env_can_be_tested_without_sending_its_key(monkeypatch):
         return probe_reply()
 
     monkeypatch.setattr(HttpModel, "complete", complete)
-    with browser(make_app()) as client:
+    with browser(make_app(db)) as client:
         assert client.get(URL).json()["test_status"] == "untested"
         result = client.post(URL + "/test", json={}, headers={"Origin": LOCAL})
         assert result.status_code == 200
@@ -76,7 +100,7 @@ def test_configured_env_can_be_tested_without_sending_its_key(monkeypatch):
         assert "env-fixture-key" not in result.text
 
 
-def test_successful_page_probe_switches_ready_and_retains_prior_snapshot(monkeypatch):
+def test_successful_page_probe_switches_ready_and_retains_prior_snapshot(monkeypatch, db):
     async def complete(self, payload):
         assert self.settings.model_api_key == FORM["api_key"]
         assert payload["model"] == "page-model"
@@ -84,7 +108,7 @@ def test_successful_page_probe_switches_ready_and_retains_prior_snapshot(monkeyp
         return probe_reply()
 
     monkeypatch.setattr(HttpModel, "complete", complete)
-    app = make_app(configured=False)
+    app = make_app(db, configured=False)
     with browser(app) as client:
         runtime = app.state.runtime
         running = SimpleNamespace(model_configuration=runtime._model_for())
@@ -101,7 +125,7 @@ def test_successful_page_probe_switches_ready_and_retains_prior_snapshot(monkeyp
         assert runtime._model_for(running)[0].model_id == ""
         assert app.state.settings.model_api_key == ""
 
-    with browser(make_app(configured=False)) as restarted:
+    with browser(make_app(db, configured=False)) as restarted:
         assert restarted.get(URL).json()["test_status"] == "unconfigured"
 
 
@@ -113,7 +137,7 @@ def test_successful_page_probe_switches_ready_and_retains_prior_snapshot(monkeyp
         ("no_tool", "MODEL_TOOL_UNSUPPORTED"),
     ],
 )
-def test_failed_probe_does_not_replace_active_configuration(monkeypatch, reason, wanted):
+def test_failed_probe_does_not_replace_active_configuration(monkeypatch, reason, wanted, db):
     async def complete(self, payload):
         if reason in ("auth", "missing"):
             raise AppError(
@@ -125,7 +149,7 @@ def test_failed_probe_does_not_replace_active_configuration(monkeypatch, reason,
         return {"message": {"content": "OK"}}
 
     monkeypatch.setattr(HttpModel, "complete", complete)
-    app = make_app()
+    app = make_app(db)
     with browser(app) as client:
         original = app.state.runtime._model_for()
         result = client.post(URL + "/test", json=FORM, headers={"Origin": LOCAL})
@@ -135,12 +159,12 @@ def test_failed_probe_does_not_replace_active_configuration(monkeypatch, reason,
         assert FORM["api_key"] not in result.text
 
 
-def test_probe_rejects_remote_cross_origin_forwarded_and_malformed_requests(monkeypatch):
+def test_probe_rejects_remote_cross_origin_forwarded_and_malformed_requests(monkeypatch, db):
     async def unexpected(*args, **kwargs):
         pytest.fail("Invalid request must not contact the model")
 
     monkeypatch.setattr(HttpModel, "complete", unexpected)
-    app = make_app()
+    app = make_app(db)
     with browser(app) as client:
         for headers in (
             {},
