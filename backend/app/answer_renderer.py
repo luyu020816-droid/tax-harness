@@ -326,6 +326,43 @@ def operation_receipt(conn, auth, row, *, historical=False):
     )
 
 
+def _cancelled_purpose_receipts(conn, auth, task):
+    assert_access(conn, auth, task["company_id"])
+    saved = conn.execute(
+        "SELECT o.* FROM write_plans p JOIN operations o ON o.operation_id=p.operation_id "
+        "WHERE p.user_id=%s AND p.company_id=%s AND p.task_id=%s AND p.task_generation=%s "
+        "AND o.user_id=p.user_id AND o.company_id=p.company_id AND o.state='committed' "
+        "ORDER BY o.committed_at,o.operation_id",
+        (auth.user_id, task["company_id"], task["task_id"], task["generation"]),
+    ).fetchall()
+    label = {"C001": "甲企业", "C002": "乙企业"}.get(task["company_id"], task["company_id"])
+    summary = f"{label} {task['period'] or '月份待补充'} 的用途补充任务及剩余待办已取消。"
+    head = conn.execute(
+        "SELECT data_revision,rules_epoch FROM company_heads WHERE company_id=%s",
+        (task["company_id"],),
+    ).fetchone()
+    if (
+        task["last_check_ref"]
+        and task["checked_data_revision"] == head["data_revision"]
+        and task["checked_rules_epoch"] == head["rules_epoch"]
+    ):
+        source = read_source(
+            conn, auth, str(task["last_check_ref"]), company_id=task["company_id"],
+            allow_suppressed=True,
+        )
+        checked = json.loads(source["content"]).get("data") or {}
+        if (checked.get("kind"), checked.get("company_id"), checked.get("period")) == (
+            "purpose_check", task["company_id"], task["period"]
+        ):
+            ids = "、".join(row["invoice_id"] for row in checked["rows"])
+            if ids:
+                summary += f"取消的待办有 {checked['missing_count']} 张，本页票号为 {ids}。"
+    receipts = [operation_receipt(conn, auth, row, historical=True) for row in saved]
+    if not receipts:
+        summary += "此任务没有已提交的发票修改。"
+    return [summary, *(text for text, _ in receipts)], [card for _, card in receipts]
+
+
 def _validate_delivery(conn, execution, plan, reply, outputs):
     """A true selected result is insufficient if other executed work is hidden.
 
@@ -351,7 +388,8 @@ def _validate_delivery(conn, execution, plan, reply, outputs):
             missing_results.add(("knowledge_draft", draft["company_id"], None))
     for row in conn.execute(
         "SELECT e.name,e.arguments FROM tool_executions e JOIN runs r USING(run_id) "
-        "WHERE r.turn_id=%s AND e.state='done' AND e.name IN ('query_month','check_purposes')",
+        "WHERE r.turn_id=%s AND e.state='done' AND e.name IN ('query_month','check_purposes') "
+        "AND e.tool_call_id NOT LIKE '%%:recheck'",
         (execution.turn_id,),
     ).fetchall():
         kind = {"query_month": "monthly_summary", "check_purposes": "purpose_check"}[row["name"]]
@@ -446,6 +484,19 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
         and str(block.result_ref) in workbook_results for block in plan.blocks
     ):
         missing("请用 workbook_result 视图及本轮工具 result_ref 交付 Excel 计算结果。")
+    task_status_results = {
+        ref for ref, value in outputs.items()
+        if value.get("ok") and (
+            (value["data"].get("status"), value["data"].get("intent")) == (
+                "cancelled", "complete_purposes"
+            ) or value["data"].get("kind") == "cancelled_purpose_task"
+        )
+    }
+    if task_status_results and not any(
+        block.type == "result" and block.view == "task"
+        and str(block.result_ref) in task_status_results for block in plan.blocks
+    ):
+        missing("请用 task 视图和本轮真实 result_ref 交付取消状态与保存回执。")
     for item in outputs.values():
         if item.get("ok"):
             d = item.get("data") or {}
@@ -540,6 +591,13 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
                         for k in ("invoice_total", "bank_income", "bank_expense")
                     },
                 }
+            if block.view == "task":
+                task = data.get("task") if data.get("kind") == "cancelled_purpose_task" else data
+                if task and task.get("status") == "cancelled" and task.get("intent") == "complete_purposes":
+                    task_texts, cards = _cancelled_purpose_receipts(conn, execution.auth, task)
+                    texts.extend(task_texts)
+                    reply.cards.extend(cards)
+                    continue
             text, card = _result_text(
                 data, block.view, today=state["request_frame"].get("current_date")
             )
@@ -576,14 +634,15 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
             reply.cards.append(card)
             for output in outputs.values():
                 child = (output.get("data") or {}).get("post_save_check")
-                if (
-                    str((output.get("data") or {}).get("operation_id")) == operation_id
-                    and child
-                    and child.get("ok")
-                ):
+                if str((output.get("data") or {}).get("operation_id")) != operation_id or not child:
+                    continue
+                if child["ok"]:
                     text, card = _result_text(child["data"], "purpose_check")
                     texts.append(text)
                     reply.cards.append(safe_json(card))
+                else:
+                    texts.append("保存后的待办需要重新检查，本轮待办状态尚未更新。")
+                break
         elif block.type == "conversation_answer":
             texts.append(_conversation_answer(conn, execution, block.topic, state["request_frame"]))
         elif block.type == "chat_answer":

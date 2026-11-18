@@ -107,6 +107,10 @@ class ReadEvidence(StrictModel):
     citation_id: UUID
 
 
+class GetTask(Scope):
+    include_cancelled: bool = False
+
+
 class ChangeTask(Scope):
     action: Literal["start", "update", "replace", "cancel", "delete"]
     intent: Literal["query_month", "explain_rules", "complete_purposes"] | None = None
@@ -473,7 +477,12 @@ TOOLS = {
         PrepareInvoiceWrite,
         "先查发票revision，再根据当前原话冻结用途/备注修改计划；同票字段合并。返回authorized才可update_invoice，needs_confirmation等待本人界面确认，prohibited不得执行。",
     ),
-    "get_task": (Scope, "精确读取当前用户在该企业的未完成任务。新会话续办仍须查询当前资料。"),
+    "get_task": (
+        GetTask,
+        "读取当前用户在该企业的未完成任务。问本次保存与待办时用include_cancelled=true核对"
+        "本会话最近取消的用途任务；返回已取消任务就用result(view=task)交付历史回执和状态。"
+        "新会话续办仍须查询当前资料。",
+    ),
     "change_task": (
         ChangeTask,
         "创建、更正、明确替换、取消或删除任务；每用户每企业最多一项未完成，不能凭口头声明完成。",

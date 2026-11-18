@@ -8,7 +8,7 @@ from test_runtime import ScriptedModel, model_settings, tool
 
 from app.agent_profiles import AgentDraft, create_draft, publish, set_enabled
 from app.errors import AppError
-from app.identity import Identity, create_session
+from app.identity import Identity, create_session, switch_company
 from app.insight_access import public_run
 from app.knowledge import Knowledge
 from app.knowledge_jobs import KnowledgeJobs
@@ -147,6 +147,9 @@ async def test_workbook_upload_agent_followup_and_evidence_revocation(db, settin
     jobs.run(jobs.claim())
     doc = store.get(auth, attached["document_id"])
     assert doc["active_version_id"] == attached["version_id"], doc["versions"]
+    reused = store.upload(auth, **{**parameters, "request_id": uid(), "name": "同内容.xlsx"})
+    assert reused["duplicate"] == {"title": "报销明细", "state": "ready", "usable": True}
+    assert reused["version_id"] == attached["version_id"]
     agent = create_draft(
         db,
         auth,
@@ -217,11 +220,29 @@ async def test_workbook_upload_agent_followup_and_evidence_revocation(db, settin
             with pytest.raises(AppError):
                 read_result(conn, Identity("U002"), result_id)
         first_id = first_id or result_id
-    new_version = store.upload(
+    failed_version = store.upload(
         auth,
-        **{**parameters, "request_id": uid(), "content": workbook(ROWS[:2])},
+        **{
+            **parameters,
+            "request_id": uid(),
+            "content": workbook(headers=("日期", "类别", "未知列")),
+        },
         document_id=attached["document_id"],
         expected_revision=doc["revision"],
+    )
+    jobs.run(jobs.claim())
+    after_failure = store.get(auth, attached["document_id"])
+    assert after_failure["active_version_id"] == attached["version_id"]
+    assert after_failure["versions"][0]["version_id"] == failed_version["version_id"]
+    assert after_failure["versions"][0]["state"] == "failed"
+    with db.transaction(readonly=True) as conn:
+        assert read_result(conn, auth, first_id)["total"] == "617.00"
+    adjusted = (*ROWS[:2], ("2026-10-08", "交通费", 179.90), *ROWS[3:])
+    new_version = store.upload(
+        auth,
+        **{**parameters, "request_id": uid(), "content": workbook(adjusted)},
+        document_id=attached["document_id"],
+        expected_revision=after_failure["revision"],
     )
     jobs.run(jobs.claim())
     updated = store.get(auth, attached["document_id"])
@@ -230,6 +251,98 @@ async def test_workbook_upload_agent_followup_and_evidence_revocation(db, settin
         read_result(conn, auth, first_id)
     run = public_run(db, auth, execution.run_id)
     assert all(item["payload"].get("redacted") for item in run["contexts"])
+
+    with pytest.raises(AppError, match="换版"):
+        accept_turn(
+            db,
+            auth,
+            session,
+            uid(),
+            "继续查这个表",
+            knowledge_upload_ids=[attached["file_id"]],
+            agent_id=agent["agent_id"],
+        )
+
+    def stale_reply(payload):
+        state = json.loads(payload["messages"][0]["content"].split("\n正式状态：\n", 1)[1])
+        assert state["workbook_followup_unavailable"]
+        assert "workbook_candidates" not in state
+        assert "query_workbook" not in {
+            tool["function"]["name"] for tool in payload.get("tools", [])
+        }
+        return {
+            "role": "assistant",
+            "content": json.dumps(
+                {
+                    "blocks": [{"type": "chat_answer", "text": "请从知识资料重新选择有效 Excel。"}],
+                }
+            ),
+        }
+
+    new_model = ScriptedModel(
+        [
+            stale_reply,
+            tool("query_workbook", {**args, "version_id": new_version["version_id"]}),
+            _sheet_reply,
+        ]
+    )
+    runtime = Runtime(db, model_settings(settings), new_model, agent_runtime_enabled=True)
+    stale = accept_turn(db, auth, session, uid(), "继续只看交通费", agent_id=agent["agent_id"])
+    await runtime.run(runtime.claim())
+    assert "重新选择有效" in read_turn(db, auth, stale["turn_id"])["final_message"]
+    current = accept_turn(
+        db,
+        auth,
+        session,
+        uid(),
+        "2026年10月实付报销合计多少，按费用类别拆开",
+        knowledge_upload_ids=[new_version["file_id"]],
+        agent_id=agent["agent_id"],
+    )
+    await runtime.run(runtime.claim())
+    returned = read_turn(db, auth, current["turn_id"])
+    result_id = next(
+        card["result_id"] for card in returned["final_cards"] if card["kind"] == "workbook_result"
+    )
+    with db.transaction(readonly=True) as conn:
+        assert read_result(conn, auth, result_id)["total"] == "717.00"
+
+    for company, next_agent in (("C002", agent["agent_id"]), ("C001", None)):
+        scoped_session = str(create_session(db, auth, "C001")["session_id"])
+        scope_model = ScriptedModel(
+            [
+                tool("query_workbook", {**args, "version_id": new_version["version_id"]}),
+                _sheet_reply,
+                stale_reply,
+            ]
+        )
+        runtime = Runtime(db, model_settings(settings), scope_model, agent_runtime_enabled=True)
+        initial = accept_turn(
+            db,
+            auth,
+            scoped_session,
+            uid(),
+            "2026年10月实付报销合计",
+            knowledge_upload_ids=[new_version["file_id"]],
+            agent_id=agent["agent_id"],
+        )
+        await runtime.run(runtime.claim())
+        assert read_turn(db, auth, initial["turn_id"])["status"] == "completed"
+        if company != "C001":
+            switch_company(db, auth, scoped_session, company)
+        followup = accept_turn(
+            db,
+            auth,
+            scoped_session,
+            uid(),
+            "继续只看交通费",
+            agent_id=next_agent,
+        )
+        await runtime.run(runtime.claim())
+        answer = read_turn(db, auth, followup["turn_id"])
+        assert "重新选择有效" in answer["final_message"]
+        assert not any(card["kind"] == "workbook_result" for card in answer["final_cards"])
+
     store.change(
         auth,
         attached["document_id"],
@@ -239,3 +352,5 @@ async def test_workbook_upload_agent_followup_and_evidence_revocation(db, settin
     )
     with pytest.raises(AppError):
         store.file(auth, attached["document_id"], new_version["version_id"])
+    with db.transaction(readonly=True) as conn, pytest.raises(AppError, match="停用"):
+        read_result(conn, auth, result_id)

@@ -25,6 +25,14 @@ export class ApiError extends Error {
   }
 }
 
+export function isUncertainRequest(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    (error.status >= 500 ||
+      ['NETWORK_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'INVALID_RESPONSE'].includes(error.code))
+  );
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   let response: Response;
   try {

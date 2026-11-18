@@ -32,6 +32,9 @@ for (const scenario of [
     await page.goto('/showcase.html');
     await page.getByRole('button', { name: /测试用户一/ }).click();
     await expect(page.getByRole('textbox', { name: '输入办理需求' })).toBeVisible();
+    const currentSession = () =>
+      page.evaluate(() => localStorage.getItem('tax-harness:session:U001'));
+    await expect.poll(currentSession).not.toBeNull();
     const created = page
       .waitForResponse(
         (response) =>
@@ -40,23 +43,30 @@ for (const scenario of [
           response.status() === 201
       )
       .then((response) => response.json() as Promise<{ session_id: string }>);
-    const loadsNewSession = page.waitForResponse(async (response) => {
-      const path = new URL(response.url()).pathname;
-      if (!/\/sessions\/[^/]+\/messages$/.test(path) || !response.ok()) return false;
-      return path === `/api/v1/sessions/${(await created).session_id}/messages`;
-    });
     await page.getByRole('button', { name: '新对话', exact: true }).click();
-    await loadsNewSession;
+    await expect.poll(currentSession).toBe((await created).session_id);
     await page.getByRole('button', { name: '知识资料', exact: true }).click();
     await page.getByRole('button', { name: '上传资料', exact: true }).click({ timeout: 12000 });
     const upload = page.getByRole('dialog', { name: '上传知识资料' });
     await upload.locator('input[type=file]').setInputFiles(scenario.file!);
     const title = `Excel 验收 ${Date.now()}`;
     await upload.getByLabel('资料标题').fill(title);
+    const accepted = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === '/api/v1/knowledge/uploads' &&
+        response.status() === 202
+    );
     await upload.getByRole('button', { name: '上传并处理' }).click();
+    const original = (await (await accepted).json()) as { document_id: string; version_id: string };
     const doc = page.locator('article').filter({ hasText: title });
     await expect(doc.getByRole('button', { name: '用于对话' })).toBeEnabled({ timeout: 25000 });
-    await doc.getByRole('button', { name: '用于对话' }).click();
+    await page.getByRole('button', { name: '上传资料', exact: true }).click();
+    await upload.locator('input[type=file]').setInputFiles(scenario.file!);
+    await upload.getByLabel('资料标题').fill(`${title} 重复上传`);
+    await upload.getByRole('button', { name: '上传并处理' }).click();
+    const duplicate = page.getByRole('dialog', { name: '资料已存在' });
+    await expect(duplicate.getByRole('status')).toContainText(title);
+    await duplicate.getByRole('button', { name: '复用已有资料' }).click();
     const agents = page.getByLabel('当前 Agent');
     await agents.selectOption({ label: '财税办理助手' });
     const input = page.getByRole('textbox', { name: '输入办理需求' });
@@ -76,5 +86,49 @@ for (const scenario of [
     await nextCard.getByText('查看原表依据').click();
     await expect(nextCard).toContainText(scenario.followupSource);
     await page.screenshot({ path: testInfo.outputPath('november.png'), fullPage: true });
+
+    const revisedFile = process.env.WORKBOOK_E2E_REVISED_FILE;
+    if (scenario.label === 'standard headers' && revisedFile) {
+      await nextCard.getByRole('button', { name: '收起原表依据' }).click();
+      const resource = `/api/v1/knowledge/documents/${original.document_id}`;
+      const previous = await (await page.request.get(resource)).json();
+      const replacement = await page.request.post(resource + '/versions', {
+        multipart: {
+          company_id: 'C001',
+          title,
+          request_id: `excel-v2-${Date.now()}`,
+          expected_document_revision: String(previous.revision),
+          file: {
+            name: 'revised.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            buffer: await (await import('node:fs/promises')).readFile(revisedFile),
+          },
+        },
+      });
+      expect(replacement.status()).toBe(202);
+      const updated = await replacement.json();
+      await expect
+        .poll(async () => (await (await page.request.get(resource)).json()).active_version_id)
+        .toBe(updated.version_id);
+      expect(updated.version_id).not.toBe(original.version_id);
+      await nextCard.getByRole('button', { name: '查看原表依据' }).click();
+      await expect(nextCard.getByRole('status')).toContainText('已换版');
+      await expect(nextCard.getByRole('link', { name: '下载当前有效原表' })).toHaveCount(0);
+      await page.getByRole('button', { name: '知识资料', exact: true }).click();
+      await doc.getByRole('button', { name: '用于对话' }).click();
+      await input.fill('2026年10月实付报销合计多少？按费用类别拆开。');
+      await page.getByRole('button', { name: '发送消息' }).click();
+      await expect(card.last()).toContainText('合计 717.00 元 · 4 行', { timeout: 50000 });
+      const current = await (await page.request.get(resource)).json();
+      const disable = await page.request.post(resource + '/disable', {
+        data: {
+          request_id: `excel-disable-${Date.now()}`,
+          expected_document_revision: current.revision,
+        },
+      });
+      expect(disable.ok()).toBe(true);
+      await card.last().getByRole('button', { name: '查看原表依据' }).click();
+      await expect(card.last().getByRole('status')).toContainText('已停用');
+    }
   });
 }

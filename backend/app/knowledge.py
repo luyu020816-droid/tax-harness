@@ -161,6 +161,33 @@ class Knowledge:
     def __init__(self, db, settings):
         self.db, self.settings = db, settings
 
+    @staticmethod
+    def _duplicate_file(conn, auth, company_id, media, sha, *, version_id=None):
+        row = conn.execute(
+            "SELECT d.document_id,d.title,v.version_id,v.file_id,j.job_id,v.state,"
+            "d.status AS document_status,(d.status='active' AND v.state='ready' "
+            "AND coalesce(d.active_version_id=v.version_id,false) AND v.effective_from<=current_date "
+            "AND (v.effective_to IS NULL OR v.effective_to>current_date)) AS usable "
+            "FROM knowledge_files f JOIN knowledge_versions v USING(file_id) "
+            "JOIN knowledge_documents d USING(document_id) JOIN retrieval_jobs j USING(version_id) "
+            "WHERE f.owner_id=%s AND f.company_id=%s AND f.media_type=%s AND f.sha256=%s "
+            "AND f.submission_kind='file' AND d.scope='user_private' "
+            "AND (%s::uuid IS NULL OR v.version_id=%s) "
+            "ORDER BY usable DESC,v.created_at DESC,v.version_id DESC LIMIT 1",
+            (auth.user_id, company_id, media, sha, version_id, version_id),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            **{key: row[key] for key in ("document_id", "version_id", "file_id", "job_id")},
+            "status": row["state"],
+            "duplicate": {
+                "title": row["title"],
+                "state": "disabled" if row["document_status"] == "disabled" else row["state"],
+                "usable": row["usable"],
+            },
+        }
+
     def upload(
         self,
         auth,
@@ -219,10 +246,22 @@ class Knowledge:
                 conn, auth, "knowledge", "upload", body, request_id, None, []
             )
             if change is None:
+                if existing.get("duplicate"):
+                    duplicate = self._duplicate_file(
+                        conn, auth, company_id, media, sha, version_id=existing["version_id"]
+                    )
+                    if not duplicate:
+                        raise AppError("RESOURCE_NOT_FOUND", "已有资料不可访问。", 404)
+                    existing = {**existing, **duplicate}
                 return safe_json(existing)
             conn.execute(
                 "SELECT 1 FROM company_heads WHERE company_id=%s FOR UPDATE", (company_id,)
             )
+            if not document_id and not maintenance and submission_kind == "file":
+                duplicate = self._duplicate_file(conn, auth, company_id, media, sha)
+                if duplicate:
+                    result = {**duplicate, "company_id": company_id, "suffix": suffix}
+                    return safe_json(finish_change(conn, auth, change, result, invalidate_memory=False))
             quota = conn.execute(
                 "SELECT coalesce(sum(byte_size),0) AS bytes,count(*) FILTER(WHERE created_at>now()-interval '1 hour') AS recent "
                 "FROM knowledge_files WHERE owner_id=%s",

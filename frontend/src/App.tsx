@@ -26,6 +26,7 @@ import {
   ApiError,
   body,
   companyName,
+  isUncertainRequest,
   requestId,
   statusName,
   taskName,
@@ -492,7 +493,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
       }
   }, [turnList]);
 
-  async function confirmWrite(plan: InvoiceWritePlan) {
+  async function confirmWrite(plan: InvoiceWritePlan, confirmationRequestId: string) {
     if (!session || activeId || sending || plan.company_id !== company)
       throw new Error('请先结束当前办理，并切换到计划所属企业。');
     const stamp = generation.current;
@@ -503,12 +504,16 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
           body: body({
             expected_revision: plan.revision,
             intent_hash: plan.intent_hash,
-            request_id: requestId(),
+            request_id: confirmationRequestId,
           }),
         });
     if (stamp !== generation.current) return;
+    if (!accepted || typeof accepted.turn_id !== 'string')
+      throw new ApiError('INVALID_RESPONSE', '暂时无法确认保存状态，请核对确认结果。', 200);
     const turn = await api<Turn>(`/turns/${accepted.turn_id}`);
     if (stamp !== generation.current) return;
+    if (turn?.turn_id !== accepted.turn_id || typeof turn.status !== 'string')
+      throw new ApiError('INVALID_RESPONSE', '暂时无法读取办理状态，请核对确认结果。', 200);
     setTurns((previous) =>
       previous.some((t) => t.turn_id === turn.turn_id)
         ? previous.map((t) => (t.turn_id === turn.turn_id ? turn : t))
@@ -638,10 +643,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
       } else changed();
     } catch (err) {
       if (stamp === generation.current) {
-        const uncertain =
-          err instanceof ApiError &&
-          (err.status >= 500 ||
-            ['NETWORK_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'INVALID_RESPONSE'].includes(err.code));
+        const uncertain = isUncertainRequest(err);
         setRequestUncertain(uncertain);
         setError(
           ((err as Error).message || '暂时无法确认请求状态。') +

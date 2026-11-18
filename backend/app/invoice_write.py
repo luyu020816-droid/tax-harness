@@ -7,7 +7,7 @@ from app.execution import guard
 from app.identity import assert_access, owned
 from app.sources import add_source, assess, next_sequence, read_source
 from app.values import digest, jsonb, safe_json, uid
-from app.write_commands import authorize_direct
+from app.write_commands import authorize_direct, excludes_invoice
 
 
 def _owned(conn, auth, plan_id, *, lock=False):
@@ -49,6 +49,30 @@ def public_plan(row):
 def get(db, auth, plan_id):
     with db.transaction(readonly=True) as conn:
         return public_plan(_owned(conn, auth, plan_id))
+
+
+def _require_current_task(conn, auth, plan):
+    if plan["status"] == "consumed" or not plan["task_id"]:
+        return
+    from app.tasks import current_in
+
+    current = current_in(conn, auth, plan["company_id"])
+    if (
+        not current
+        or current["task_id"] != plan["task_id"]
+        or current["generation"] != plan["task_generation"]
+        or current["period"] != plan["task_period"]
+        or current["intent"] != "complete_purposes"
+    ):
+        raise AppError("WRITE_PLAN_STALE", "原用途补充任务已结束或调整，请重新核对。", 409)
+
+
+def _require_plan_company(conn, auth, plan):
+    if not plan["session_id"]:
+        raise AppError("WRITE_PLAN_STALE", "原修改会话已失效，请重新核对。", 409)
+    session = owned(conn, "sessions", "session_id", str(plan["session_id"]), auth)
+    if session["selected_company_id"] != plan["company_id"]:
+        raise AppError("WRITE_PLAN_STALE", "当前企业已切换，请重新核对目标。", 409)
 
 
 def prepare(
@@ -107,6 +131,8 @@ def prepare(
             raise AppError("NEEDS_CLARIFICATION", "修改票号与用户原话不一致。", 422)
         if not ids and not selection_ref:
             raise AppError("NEEDS_CLARIFICATION", "请明确发票编号或有效清单序号。", 422)
+        if excludes_invoice(source["content"], invoice_id):
+            raise AppError("WRITE_NOT_AUTHORIZED", "本轮明确要求暂不处理这张发票。", 422)
         fingerprint = digest([auth.user_id, source_id, company_id, invoice_id, patch])
         old = conn.execute(
             "SELECT * FROM write_plans WHERE user_id=%s AND origin_source_id=%s "
@@ -135,9 +161,24 @@ def prepare(
             )
         if invoice["revision"] != expected_revision:
             raise AppError("VERSION_CONFLICT", "发票已变化，请核对当前记录。", 409)
+        from app.tasks import current_in
+
         head = conn.execute(
-            "SELECT * FROM company_heads WHERE company_id=%s", (company_id,)
+            "SELECT * FROM company_heads WHERE company_id=%s FOR UPDATE", (company_id,)
         ).fetchone()
+        task = current_in(conn, auth, company_id)
+        if task and (
+            task["intent"] != "complete_purposes"
+            or task["period"] != invoice["invoice_date"].strftime("%Y-%m")
+        ):
+            task = None
+        if "purpose" in patch or task:
+            slot = conn.execute(
+                "SELECT authority_source_seq FROM task_slots WHERE user_id=%s AND company_id=%s",
+                (auth.user_id, company_id),
+            ).fetchone()
+            if slot and source["source_seq"] < slot["authority_source_seq"]:
+                raise AppError("WRITE_PLAN_STALE", "原办理范围已变化，请按当前任务重新发起。", 409)
         aliases = conn.execute(
             "SELECT aliases FROM companies WHERE company_id=%s", (company_id,)
         ).fetchone()["aliases"]
@@ -145,8 +186,9 @@ def prepare(
         row = conn.execute(
             "INSERT INTO write_plans(plan_id,user_id,session_id,origin_source_id,origin_source_revision,"
             "authorized_source_id,company_id,invoice_id,patch,before_values,expected_invoice_revision,"
-            "selection_ref,data_revision,rules_epoch,intent_hash,status,authorization_kind) "
-            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+            "selection_ref,data_revision,rules_epoch,intent_hash,status,authorization_kind,"
+            "task_id,task_generation,task_period) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
             (
                 uid(),
                 auth.user_id,
@@ -165,6 +207,9 @@ def prepare(
                 fingerprint,
                 status,
                 "direct_command" if status == "authorized" else None,
+                task["task_id"] if task else None,
+                task["generation"] if task else None,
+                task["period"] if task else None,
             ),
         ).fetchone()
         return public_plan(row)
@@ -178,6 +223,10 @@ def validate(
     row = _owned(conn, auth, plan_id, lock=lock)
     if row["status"] not in ("authorized", "consumed"):
         raise AppError("WRITE_NOT_AUTHORIZED", "该修改未获得本人授权，未保存。", 422)
+    if lock:
+        _require_current_task(conn, auth, row)
+    if row["status"] != "consumed" and row["authorization_kind"] == "user_confirmation":
+        _require_plan_company(conn, auth, row)
     if row["status"] != "consumed" and not row["unexpired"]:
         raise AppError("WRITE_PLAN_EXPIRED", "修改计划已过期，请重新核对。", 409)
     if (
@@ -245,7 +294,12 @@ def confirm(db, auth, plan_id, *, expected_revision, intent_hash, request_id, li
         plan = _owned(conn, auth, plan_id, lock=True)
         if plan["intent_hash"] != intent_hash:
             raise AppError("VERSION_CONFLICT", "确认内容与计划不一致。", 409)
-        if plan["confirmation_turn_id"]:
+        if plan["status"] == "revoked":
+            raise AppError("WRITE_PLAN_STALE", "计划已撤销，请重新核对。", 409)
+        _require_current_task(conn, auth, plan)
+        if plan["status"] == "needs_confirmation" or plan["confirmation_turn_id"]:
+            _require_plan_company(conn, auth, plan)
+        if plan["confirmation_turn_id"] and plan["status"] in ("authorized", "consumed"):
             return {"turn_id": str(plan["confirmation_turn_id"]), "replayed": True}
         if (
             plan["status"] != "needs_confirmation"
@@ -253,9 +307,6 @@ def confirm(db, auth, plan_id, *, expected_revision, intent_hash, request_id, li
             or plan["revision"] != expected_revision
         ):
             raise AppError("WRITE_PLAN_STALE", "计划已失效，请重新核对。", 409)
-        session = owned(conn, "sessions", "session_id", str(plan["session_id"]), auth)
-        if session["selected_company_id"] != plan["company_id"]:
-            raise AppError("WRITE_PLAN_STALE", "当前企业已切换，请重新核对目标。", 409)
         invoice = conn.execute(
             "SELECT revision FROM invoices WHERE company_id=%s AND invoice_id=%s FOR UPDATE",
             (plan["company_id"], plan["invoice_id"]),

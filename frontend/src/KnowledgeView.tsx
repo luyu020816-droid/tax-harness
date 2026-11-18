@@ -25,18 +25,29 @@ export const stageName = (state: string) =>
     blocked: '等待依赖',
     failed: '接入失败',
     cancelled: '已取消',
+    disabled: '已停用',
   })[state] ?? state;
+
+type DuplicateUpload = {
+  document_id: string;
+  version_id: string;
+  duplicate: { title: string; state: string; usable: boolean };
+};
 
 function UploadKnowledge({
   company,
   target,
   onClose,
   onSaved,
+  onViewExisting,
+  onUseExisting,
 }: {
   company: string;
   target: KnowledgeDocument | null;
   onClose: () => void;
   onSaved: () => void;
+  onViewExisting: (id: string) => void;
+  onUseExisting: (id: string, version: string) => Promise<void>;
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState(target?.title ?? '');
@@ -44,6 +55,7 @@ function UploadKnowledge({
   const [to, setTo] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [existing, setExisting] = useState<DuplicateUpload | null>(null);
   const identity = useRef(requestId());
   const alive = useRef(true);
   useEffect(() => {
@@ -70,13 +82,14 @@ function UploadKnowledge({
     if (from) form.append('effective_from', from);
     if (to) form.append('effective_to', to);
     try {
-      await api(
+      const result = await api<DuplicateUpload | { duplicate?: undefined }>(
         target ? `/knowledge/documents/${target.document_id}/versions` : '/knowledge/uploads',
         { method: 'POST', body: form }
       );
       if (alive.current) {
         onSaved();
-        onClose();
+        if (result?.duplicate) setExisting(result);
+        else onClose();
       }
     } catch (err) {
       if (alive.current) setError((err as Error).message);
@@ -87,6 +100,54 @@ function UploadKnowledge({
   const edited = () => {
     identity.current = requestId();
   };
+  if (existing) {
+    const { duplicate } = existing;
+    const status =
+      duplicate.state === 'ready' && !duplicate.usable ? '当前不可用' : stageName(duplicate.state);
+    return (
+      <Modal title="资料已存在" onClose={onClose}>
+        <p role="status">
+          「{duplicate.title}」已有相同文件 · {status}
+        </p>
+        {error && (
+          <p className="error-note" role="alert">
+            {error}
+          </p>
+        )}
+        <footer className="form-actions">
+          <button
+            className="secondary"
+            onClick={() => {
+              onClose();
+              onViewExisting(existing.document_id);
+            }}
+          >
+            查看已有资料
+          </button>
+          {duplicate.usable && (
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                setError('');
+                try {
+                  await onUseExisting(existing.document_id, existing.version_id);
+                  if (alive.current) onClose();
+                } catch (err) {
+                  if (alive.current) setError((err as Error).message);
+                } finally {
+                  if (alive.current) setBusy(false);
+                }
+              }}
+            >
+              复用已有资料
+            </button>
+          )}
+        </footer>
+      </Modal>
+    );
+  }
   return (
     <Modal
       title={target ? '上传资料新版本' : '上传知识资料'}
@@ -96,7 +157,7 @@ function UploadKnowledge({
     >
       <form className="form-stack" onSubmit={submit}>
         <p className="muted">
-          {companyName(company)} · 默认仅本人可见。完成解析和索引后才可引用；新版本失败会保留旧版。
+          {companyName(company)} · 默认仅本人可见。处理完成后可引用，新版本接入失败时保留旧版。
         </p>
         <label>
           文件
@@ -153,7 +214,8 @@ function UploadKnowledge({
           </label>
         </div>
         <p className="muted small">
-          支持 XLSX、PDF、DOCX、Markdown 和 TXT。报销明细 Excel 可用于只读计算，上传资料不会变更业务规则。
+          支持 XLSX、PDF、DOCX、Markdown 和 TXT。报销明细 Excel
+          可用于只读计算，上传资料不会变更业务规则。
         </p>
         {error && (
           <p className="error-note" role="alert">
@@ -293,23 +355,33 @@ export function KnowledgeView({
       if (alive.current) setError((err as Error).message);
     }
   }
+  async function attach(documentId: string, expectedVersion?: string) {
+    const detail = await api<KnowledgeDocument>(`/knowledge/documents/${documentId}`);
+    if (!alive.current) return;
+    const version = detail.versions?.find((v) => v.version_id === detail.active_version_id);
+    if (
+      detail.status !== 'active' ||
+      !version ||
+      detail.company_id !== company ||
+      (expectedVersion && version.version_id !== expectedVersion)
+    ) {
+      throw new Error('资料当前不可用或版本已变化，请重新选择。');
+    }
+    onAttach({
+      file_id: version.file_id,
+      document_id: detail.document_id,
+      company_id: detail.company_id,
+      title: detail.title,
+      original_name: version.original_name,
+    });
+  }
   async function ask(document: KnowledgeDocument) {
     if (document.scope === 'company') {
       onDraft(`请查阅${companyName(company!)}《${document.title}》，`);
       return;
     }
     try {
-      const detail = await api<KnowledgeDocument>(`/knowledge/documents/${document.document_id}`);
-      if (!alive.current) return;
-      const version = detail.versions?.find((v) => v.version_id === detail.active_version_id);
-      if (!version) throw new Error('资料尚未完成接入。');
-      onAttach({
-        file_id: version.file_id,
-        document_id: detail.document_id,
-        company_id: company!,
-        title: detail.title,
-        original_name: version.original_name,
-      });
+      await attach(document.document_id);
     } catch (err) {
       if (alive.current) setError((err as Error).message);
     }
@@ -555,6 +627,8 @@ export function KnowledgeView({
           target={target}
           onClose={() => setUploading(false)}
           onSaved={reload}
+          onViewExisting={(id) => onDetail({ kind: 'knowledge', id })}
+          onUseExisting={attach}
         />
       )}
       {addingText && (

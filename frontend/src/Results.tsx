@@ -33,7 +33,7 @@ export function Results({
   canUpdate: boolean;
   onDraft: (text: string) => void;
   onDetail: (detail: Detail) => void;
-  onConfirm: (plan: InvoiceWritePlan) => Promise<void>;
+  onConfirm: (plan: InvoiceWritePlan, confirmationRequestId: string) => Promise<void>;
   onPlanChanged: () => Promise<void>;
 }) {
   if (card.kind === 'workbook_result') return <WorkbookResult id={card.result_id} />;

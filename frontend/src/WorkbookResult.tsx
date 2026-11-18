@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
+import { useResource } from './useResource';
 
 type WorkbookPage = {
   document_id: string;
@@ -25,16 +26,15 @@ type WorkbookPage = {
 export function WorkbookResult({ id }: { id: string }) {
   const [page, setPage] = useState<WorkbookPage | null>(null);
   const [error, setError] = useState('');
-  const [offset, setOffset] = useState(0);
   const [groupOffset, setGroupOffset] = useState(0);
+  const [showSources, setShowSources] = useState(false);
   useEffect(() => {
     const request = new AbortController();
     setError('');
     setPage(null);
-    api<WorkbookPage>(
-      `/knowledge/workbook-results/${id}?offset=${offset}&group_offset=${groupOffset}`,
-      { signal: request.signal }
-    )
+    api<WorkbookPage>(`/knowledge/workbook-results/${id}?group_offset=${groupOffset}`, {
+      signal: request.signal,
+    })
       .then((payload) => {
         if (!request.signal.aborted) setPage(payload);
       })
@@ -42,7 +42,7 @@ export function WorkbookResult({ id }: { id: string }) {
         if (!request.signal.aborted) setError(err.message);
       });
     return () => request.abort();
-  }, [id, offset, groupOffset]);
+  }, [id, groupOffset]);
   if (error)
     return (
       <p className="error-note small" role="status">
@@ -79,28 +79,55 @@ export function WorkbookResult({ id }: { id: string }) {
           />
         </div>
       )}
-      <details open={offset > 0 || undefined}>
-        <summary>查看原表依据</summary>
-        <p>
-          {page.original_name} · v{page.edition} · {query.sheet} · {page.headers.amount}（
-          {query.columns.amount} 列）
-        </p>
-        <ul>
-          {page.rows.map(([number, date, category, amount]) => (
-            <li key={number}>
-              第 {number} 行（{query.columns.amount}
-              {number}）· {date} · {category ?? '类别空白'} · {amount} 元
-            </li>
-          ))}
-        </ul>
-        <Pager offset={offset} next={page.next_offset} onPage={setOffset} label="来源行" />
-        <a
-          href={`/api/v1/knowledge/documents/${page.document_id}/file?version_id=${page.version_id}`}
-        >
-          下载当前有效原表
-        </a>
-      </details>
+      <button
+        className="text-button"
+        type="button"
+        aria-expanded={showSources}
+        onClick={() => setShowSources((visible) => !visible)}
+      >
+        {showSources ? '收起原表依据' : '查看原表依据'}
+      </button>
+      {showSources && <WorkbookSources key={id} id={id} />}
     </section>
+  );
+}
+
+function WorkbookSources({ id }: { id: string }) {
+  const [offset, setOffset] = useState(0);
+  const {
+    data: page,
+    error,
+    loading,
+  } = useResource<WorkbookPage>(`/knowledge/workbook-results/${id}?offset=${offset}`);
+  if (loading) return <p className="muted small">正在核对原表依据…</p>;
+  if (!page || error)
+    return (
+      <p className="error-note small" role="status">
+        引用当前不可用：{error}
+      </p>
+    );
+  const { query } = page;
+  return (
+    <div>
+      <p>
+        {page.original_name} · v{page.edition} · {query.sheet} · {page.headers.amount}（
+        {query.columns.amount} 列）
+      </p>
+      <ul>
+        {page.rows.map(([number, date, category, amount]) => (
+          <li key={number}>
+            第 {number} 行（{query.columns.amount}
+            {number}）· {date} · {category ?? '类别空白'} · {amount} 元
+          </li>
+        ))}
+      </ul>
+      <Pager offset={offset} next={page.next_offset} onPage={setOffset} label="来源行" />
+      <a
+        href={`/api/v1/knowledge/documents/${page.document_id}/file?version_id=${page.version_id}`}
+      >
+        下载当前有效原表
+      </a>
+    </div>
   );
 }
 

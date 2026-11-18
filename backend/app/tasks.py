@@ -29,6 +29,17 @@ def list_tasks(db, auth: Identity, company_id=None) -> list[dict]:
         ).fetchall()
 
 
+def recent_cancelled_purpose_task(conn, execution, company_id):
+    return conn.execute(
+        "SELECT t.* FROM tasks t JOIN turns u "
+        "ON u.user_id=t.user_id AND u.source_seq=t.authority_source_seq "
+        "WHERE t.user_id=%s AND t.company_id=%s AND u.session_id=%s "
+        "AND u.source_seq<%s AND t.intent='complete_purposes' AND t.status='cancelled' "
+        "ORDER BY t.authority_source_seq DESC LIMIT 1",
+        (execution.auth.user_id, company_id, execution.session_id, execution.source_seq),
+    ).fetchone()
+
+
 def _slot(conn, auth, company_id):
     conn.execute(
         "INSERT INTO task_slots(user_id,company_id) VALUES(%s,%s) ON CONFLICT DO NOTHING",
@@ -44,6 +55,14 @@ def _revision(conn, task, change_type, refs, sequence):
     conn.execute(
         "INSERT INTO task_revisions(task_id,revision,change_type,snapshot,source_refs,source_seq) VALUES(%s,%s,%s,%s,%s,%s)",
         (task["task_id"], task["revision"], change_type, jsonb(task), jsonb(refs), sequence),
+    )
+
+
+def _revoke_task_plans(conn, task):
+    conn.execute(
+        "UPDATE write_plans SET status='revoked',revision=revision+1 "
+        "WHERE task_id=%s AND task_generation=%s AND status IN ('authorized','needs_confirmation')",
+        (task["task_id"], task["generation"]),
     )
 
 
@@ -83,6 +102,7 @@ def _end(conn, task, status, sequence, refs):
         (sequence, task["user_id"], task["company_id"], task["task_id"]),
     )
     _revision(conn, row, status, refs, sequence)
+    _revoke_task_plans(conn, task)
     _close_pending(conn, task, status)
     return row
 
@@ -159,6 +179,20 @@ def change_task(
             if action in ("cancel", "delete"):
                 if old["company_id"] != company_id:
                     raise AppError("RESOURCE_NOT_FOUND", "任务不属于该企业。", 404)
+                if action == "cancel" and execution:
+                    from app.request_evidence import request_periods
+                    from app.sources import read_source
+                    from app.turns import mentioned_companies
+
+                    source = read_source(conn, auth, execution.source_id)
+                    periods = request_periods(source["content"], source["created_at"])
+                    companies = mentioned_companies(conn, source["content"])
+                    if (companies and company_id not in companies) or (
+                        periods and periods != {old["period"]}
+                    ):
+                        raise AppError(
+                            "TARGET_SCOPE_MISMATCH", "取消请求与当前任务范围不一致。", 422
+                        )
                 result = _end(
                     conn,
                     old,
@@ -166,19 +200,19 @@ def change_task(
                     change["source_seq"],
                     change["refs"],
                 )
-                if action in ("cancel", "delete"):
-                    revisions = conn.execute(
-                        "SELECT source_refs FROM task_revisions WHERE task_id=%s", (old["task_id"],)
-                    ).fetchall()
-                    for revision in revisions:
-                        suppress_old_history(
-                            conn,
-                            auth,
-                            revision["source_refs"],
-                            kind="task",
-                            target_id=old["task_id"],
-                            before_seq=change["source_seq"],
-                        )
+                revisions = conn.execute(
+                    "SELECT source_refs FROM task_revisions WHERE task_id=%s AND source_seq<%s",
+                    (old["task_id"], change["source_seq"]),
+                ).fetchall()
+                for revision in revisions:
+                    suppress_old_history(
+                        conn,
+                        auth,
+                        revision["source_refs"],
+                        kind="task",
+                        target_id=old["task_id"],
+                        before_seq=change["source_seq"],
+                    )
                 return finish_change(conn, auth, change, result)
             if old["status"] not in UNFINISHED:
                 raise AppError(
@@ -188,13 +222,16 @@ def change_task(
                 if old["company_id"] != company_id:
                     raise AppError("NEEDS_CLARIFICATION", "跨企业更换目标应使用明确替换操作。", 422)
                 new_period = period if period is not None else old["period"]
+                new_intent = intent or old["intent"]
+                if (new_period, new_intent) != (old["period"], old["intent"]):
+                    _revoke_task_plans(conn, old)
                 result = conn.execute(
                     "UPDATE tasks SET period=%s,intent=%s,status=%s,unresolved_json=%s,revision=revision+1,"
                     "authority_source_seq=%s,last_check_ref=NULL,checked_data_revision=NULL,checked_rules_epoch=NULL,updated_at=now() "
                     "WHERE task_id=%s RETURNING *",
                     (
                         new_period,
-                        intent or old["intent"],
+                        new_intent,
                         "active" if new_period else "waiting_user",
                         jsonb(unresolved or {}),
                         change["source_seq"],
@@ -325,6 +362,7 @@ def apply_result(
         )
         _revision(conn, updated, "checked", [{"source_id": result_source_id}], source_seq)
         if completed:
+            _revoke_task_plans(conn, current)
             _close_pending(conn, current, "resolved")
         epoch = conn.execute(
             "UPDATE users SET memory_epoch=memory_epoch+1 WHERE user_id=%s RETURNING memory_epoch",

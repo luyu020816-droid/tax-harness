@@ -78,15 +78,20 @@ def begin_change(
     }
 
 
-def finish_change(conn, auth: Identity, change: dict, result: dict) -> dict:
-    epoch = conn.execute(
-        "UPDATE users SET memory_epoch=memory_epoch+1 WHERE user_id=%s RETURNING memory_epoch",
-        (auth.user_id,),
-    ).fetchone()["memory_epoch"]
-    conn.execute(
-        "UPDATE summaries SET status='invalidated' WHERE user_id=%s AND status='active'",
-        (auth.user_id,),
-    )
+def finish_change(conn, auth: Identity, change: dict, result: dict, *, invalidate_memory=True) -> dict:
+    if invalidate_memory:
+        epoch = conn.execute(
+            "UPDATE users SET memory_epoch=memory_epoch+1 WHERE user_id=%s RETURNING memory_epoch",
+            (auth.user_id,),
+        ).fetchone()["memory_epoch"]
+        conn.execute(
+            "UPDATE summaries SET status='invalidated' WHERE user_id=%s AND status='active'",
+            (auth.user_id,),
+        )
+    else:
+        epoch = conn.execute(
+            "SELECT memory_epoch FROM users WHERE user_id=%s", (auth.user_id,)
+        ).fetchone()["memory_epoch"]
     result = {**result, "memory_epoch": epoch, "replayed": False}
     conn.execute(
         "UPDATE memory_change_ops SET state='committed',result_ref=%s WHERE change_id=%s",

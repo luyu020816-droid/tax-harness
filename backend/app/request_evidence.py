@@ -6,7 +6,7 @@ from datetime import timedelta, timezone
 from itertools import groupby
 
 from app.errors import AppError
-from app.identity import assert_access
+from app.identity import assert_access, owned
 from app.sources import read_source
 from app.tasks import current_in
 from app.values import digest, jsonb, uid
@@ -239,6 +239,18 @@ def _history_basis(conn, execution, company_id):
     }
 
 
+def require_task_company(conn, execution, company_id, source):
+    from app.turns import mentioned_companies
+
+    requested = mentioned_companies(conn, source["content"])
+    if not requested:
+        session = owned(conn, "sessions", "session_id", execution.session_id, execution.auth)
+        if session["selected_company_id"]:
+            requested = [session["selected_company_id"]]
+    if requested and company_id not in requested:
+        raise AppError("TARGET_SCOPE_MISMATCH", "续办企业与当前范围不一致，请先核对企业。", 422)
+
+
 def require_period(conn, execution, company_id: str, period: str) -> dict:
     """Return a verified basis or fail; a company selector supplies no month."""
     assert_access(conn, execution.auth, company_id)
@@ -262,6 +274,7 @@ def require_period(conn, execution, company_id: str, period: str) -> dict:
     previous = None
     if task and task["period"]:
         if basis := _task_period_source(conn, execution, task, company_id, task["period"]):
+            require_task_company(conn, execution, company_id, source)
             previous = (
                 task["period"],
                 {
@@ -381,16 +394,17 @@ def prepare_frame(db, execution, core):
         companies = mentioned_companies(conn, source["content"])
         origin = None
         inherited = []
-        # A bare full month immediately after a checklist clarification is a
-        # scoped continuation. Other phrasing can use the explicit resume path.
+        # An unrelated completed turn does not answer a waiting scope question.
+        # A bare month may resolve only the latest waiting turn in this session.
         if PERIOD.fullmatch(source["content"].strip().rstrip("。.!！").strip()):
             prior = conn.execute(
-                "SELECT turn_id,status,final_response_ref,final_cards FROM turns "
-                "WHERE user_id=%s AND session_id=%s AND source_seq<%s AND request_kind<>'compact' "
+                "SELECT turn_id,final_response_ref,final_cards FROM turns "
+                "WHERE user_id=%s AND session_id=%s AND source_seq<%s AND status='waiting_user' "
+                "AND pending_clarification->>'state'='waiting_user' "
                 "ORDER BY source_seq DESC LIMIT 1",
                 (execution.auth.user_id, execution.session_id, execution.source_seq),
             ).fetchone()
-            if prior and prior["status"] == "waiting_user" and prior["final_response_ref"]:
+            if prior and prior["final_response_ref"]:
                 items = waiting_items(prior)
                 if items and all(
                     i["company_id"]

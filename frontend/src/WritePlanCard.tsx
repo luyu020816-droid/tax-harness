@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CircleAlert, ShieldCheck } from 'lucide-react';
-import { api, body, companyName, dateTime, requestId } from './api';
+import { api, body, companyName, dateTime, isUncertainRequest, requestId } from './api';
 import type { InvoiceWritePlan } from './types';
 
 export function WritePlanCard({
@@ -11,12 +11,14 @@ export function WritePlanCard({
 }: {
   plan: InvoiceWritePlan;
   canConfirm: boolean;
-  onConfirm: (plan: InvoiceWritePlan) => Promise<void>;
+  onConfirm: (plan: InvoiceWritePlan, confirmationRequestId: string) => Promise<void>;
   onChanged: () => Promise<void>;
 }) {
   const [current, setCurrent] = useState(plan);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [uncertain, setUncertain] = useState(false);
+  const confirmation = useRef<{ planId: string; requestId: string } | null>(null);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const controller = new AbortController();
@@ -39,7 +41,9 @@ export function WritePlanCard({
   }, [plan.plan_id]);
   const expired = new Date(current.expires_at).getTime() <= now;
   const waiting = current.status === 'needs_confirmation' && !expired;
-  const resumable = Boolean(current.confirmation_turn_id);
+  const resumable =
+    Boolean(current.confirmation_turn_id) &&
+    (current.status === 'authorized' || current.status === 'consumed');
   const label =
     current.status === 'consumed'
       ? '该修改已执行，请核对操作回执'
@@ -57,8 +61,11 @@ export function WritePlanCard({
     setBusy(true);
     setError('');
     try {
-      if (confirm) await onConfirm(current);
-      else {
+      if (confirm) {
+        if (confirmation.current?.planId !== current.plan_id)
+          confirmation.current = { planId: current.plan_id, requestId: requestId() };
+        await onConfirm(current, confirmation.current.requestId);
+      } else {
         setCurrent(
           await api<InvoiceWritePlan>(`/write-plans/${current.plan_id}/cancel`, {
             method: 'POST',
@@ -67,7 +74,9 @@ export function WritePlanCard({
         );
         await onChanged();
       }
+      setUncertain(false);
     } catch (err) {
+      setUncertain(confirm && isUncertainRequest(err));
       setError((err as Error).message);
     } finally {
       setBusy(false);
@@ -108,7 +117,13 @@ export function WritePlanCard({
             disabled={!canConfirm || busy}
             onClick={() => void act(true)}
           >
-            {busy ? '正在核对…' : resumable ? '查看办理结果' : '确认并保存'}
+            {busy
+              ? '正在核对…'
+              : uncertain
+                ? '核对确认结果'
+                : resumable
+                  ? '查看办理结果'
+                  : '确认并保存'}
           </button>
           {waiting && (
             <button

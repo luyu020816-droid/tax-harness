@@ -20,6 +20,10 @@ DATE = re.compile(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{4}\s*年\s*\d{1,2}\s*月\s*\d
 
 def active_version(conn, auth, document_id, version_id, *, lock=False):
     document = document_in(conn, auth, document_id)
+    if document["status"] == "disabled":
+        raise AppError("WORKBOOK_UNAVAILABLE", "表格已停用，请重新选择有效资料。", 409)
+    if document["active_version_id"] and str(document["active_version_id"]) != str(version_id):
+        raise AppError("WORKBOOK_UNAVAILABLE", "表格已换版，请重新选择当前有效版本。", 409)
     row = conn.execute(
         "SELECT d.document_id,d.company_id,v.version_id,v.edition,v.parser_version,f.original_name "
         "FROM knowledge_documents d JOIN knowledge_versions v ON v.version_id=d.active_version_id "
@@ -31,7 +35,7 @@ def active_version(conn, auth, document_id, version_id, *, lock=False):
     ).fetchone()
     if not row:
         raise AppError(
-            "WORKBOOK_UNAVAILABLE", "表格尚未就绪、已换版或停用，请重新选择有效资料。", 409
+            "WORKBOOK_UNAVAILABLE", "表格尚未就绪或不在有效期内，请重新选择有效资料。", 409
         )
     return safe_json(row)
 
@@ -46,27 +50,33 @@ def validate_dependency(conn, auth, turn_id, dependency, *, lock=False):
 
 def candidates(conn, execution, company_id, knowledge_attachments):
     if not company_id:
-        return []
+        return [], False
     if knowledge_attachments:
         return [
             {key: item[key] for key in ("document_id", "version_id", "original_name", "state")}
             for item in knowledge_attachments
             if item["media_type"] == MEDIA[".xlsx"]
-        ]
+        ], False
     previous = conn.execute(
-        "SELECT t.turn_id,t.status,t.knowledge_upload_ids,b.agent_id FROM turns t "
+        "SELECT t.turn_id,t.status,t.knowledge_upload_ids,b.agent_id, "
+        """t.final_cards @> '[{"kind":"workbook_result"}]'::jsonb AS has_workbook_result, """
+        "EXISTS(SELECT 1 FROM knowledge_files f WHERE f.file_id=ANY(t.knowledge_upload_ids) "
+        "AND f.media_type=%s) AS has_workbook_attachment FROM turns t "
         "LEFT JOIN agent_turn_bindings b USING(turn_id) "
         "WHERE t.session_id=%s AND t.user_id=%s AND t.source_seq<%s AND t.request_kind<>'compact' "
         "ORDER BY t.source_seq DESC LIMIT 1",
-        (execution.session_id, execution.auth.user_id, execution.source_seq),
+        (MEDIA[".xlsx"], execution.session_id, execution.auth.user_id, execution.source_seq),
     ).fetchone()
     if not previous:
-        return []
+        return [], False
+    had_workbook = previous["has_workbook_result"] or (
+        previous["status"] == "waiting_user" and previous["has_workbook_attachment"]
+    )
     binding = conn.execute(
         "SELECT agent_id FROM agent_turn_bindings WHERE turn_id=%s", (execution.turn_id,)
     ).fetchone()
     if previous["agent_id"] != (binding or {}).get("agent_id"):
-        return []
+        return [], had_workbook
     if previous["status"] == "waiting_user" and previous["knowledge_upload_ids"]:
         from app.knowledge import upload_metadata
 
@@ -84,9 +94,12 @@ def candidates(conn, execution, company_id, knowledge_attachments):
                         "tool": "query_workbook",
                     },
                 )
-                return [{**item, "continuing_clarification": True}]
+                return [{**item, "continuing_clarification": True}], False
         except AppError:
-            return []
+            return [], had_workbook
+
+    if not previous["has_workbook_result"]:
+        return [], had_workbook
     rows = conn.execute(
         "SELECT DISTINCT d.document_id,w.version_id,f.original_name,w.query "
         "FROM runs r JOIN workbook_results w USING(run_id) JOIN knowledge_versions v USING(version_id) "
@@ -117,7 +130,7 @@ def candidates(conn, execution, company_id, knowledge_attachments):
                 "previous_query": row["query"],
             }
         )
-    return available
+    return available, not available
 
 
 def validate_request(query, snapshot, text, previous):
@@ -209,9 +222,13 @@ def dispatch(db, execution, name, args):
             upload_metadata(conn, execution.auth, value, company)
             for value in turn["knowledge_upload_ids"]
         ]
-        visible = candidates(conn, execution, company, attachments)
+        visible, unavailable = candidates(conn, execution, company, attachments)
         match = [item for item in visible if item["document_id"] == args["document_id"]]
         if len(match) != 1:
+            if unavailable:
+                raise AppError(
+                    "WORKBOOK_UNAVAILABLE", "上一轮表格当前不可用，请重新选择有效 Excel 资料。", 409
+                )
             raise AppError(
                 "NEEDS_CLARIFICATION", "请在当前企业选择并添加要查询的 Excel 资料。", 422
             )

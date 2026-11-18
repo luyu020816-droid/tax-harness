@@ -9,7 +9,7 @@ from app.errors import AppError
 from app.events import emit
 from app.execution import Execution, guard
 from app.identity import assert_access
-from app.request_evidence import bind_scope, require_period, validate_scope
+from app.request_evidence import bind_scope, require_period, require_task_company, validate_scope
 from app.sources import add_source, assess, read_source
 from app.tool_schemas import REFERENCE_MUTATIONS, TOOLS
 from app.turns import mentioned_companies
@@ -201,7 +201,10 @@ class ToolExecutor:
             child = {"ok": False, "error": exc.as_dict(), "origin": "program_after_save"}
         child, ref = self._record(execution, f"{call_id}:recheck", "check_purposes", args, child)
         if child["ok"]:
-            self._maintain_task(execution, "check_purposes", args, child["data"], ref, current)
+            try:
+                self._maintain_task(execution, "check_purposes", args, child["data"], ref, current)
+            except AppError as exc:
+                child = {"ok": False, "error": exc.as_dict()}
         output["data"]["post_save_check"] = child
         output["data"]["memory_epoch"] = execution.expected_epoch
 
@@ -260,13 +263,18 @@ class ToolExecutor:
             "get_rules",
             "check_purposes",
             "get_task",
+            "change_task",
             "search_history",
             "search_knowledge",
         ):
             with db.transaction(readonly=True) as conn:
                 source = read_source(conn, auth, execution.source_id, allow_suppressed=True)
-                requested = mentioned_companies(conn, source["content"])
-                if requested and args["company_id"] not in requested:
+                if name in ("get_task", "change_task", "check_purposes"):
+                    require_task_company(conn, execution, args["company_id"], source)
+                elif (
+                    (requested := mentioned_companies(conn, source["content"]))
+                    and args["company_id"] not in requested
+                ):
                     raise AppError(
                         "TARGET_SCOPE_MISMATCH",
                         "查询企业与本轮用户明确指定的企业不一致，不能替换为其他企业。",
@@ -434,7 +442,14 @@ class ToolExecutor:
             )
         if name == "get_task":
             with db.transaction(readonly=True) as conn:
-                return {"task": safe_json(tasks.current_in(conn, auth, args["company_id"]))}
+                company = args["company_id"]
+                task = tasks.current_in(conn, auth, company)
+                if not task and args["include_cancelled"]:
+                    task = tasks.recent_cancelled_purpose_task(conn, execution, company)
+                    if task:
+                        return {"kind": "cancelled_purpose_task", "task": safe_json(task),
+                                "company_id": company}
+                return {"task": safe_json(task)}
         if name == "change_task":
             return tasks.change_task(
                 db,

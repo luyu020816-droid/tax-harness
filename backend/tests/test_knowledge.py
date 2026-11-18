@@ -378,7 +378,7 @@ def test_shared_revocation_invalidates_in_flight_bundle(knowledge, admin, db):
         validate_retrievals(conn, Identity("U002"), [result["query_id"]], lock=True)
 
 
-def test_real_pdf_page_locator_is_preserved():
+def _text_pdf():
     from pypdf import PdfWriter
     from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
@@ -399,9 +399,52 @@ def test_real_pdf_page_locator_is_preserved():
     page[NameObject("/Contents")] = writer._add_object(stream)
     output = BytesIO()
     writer.write(output)
-    parsed = parse_isolated(output.getvalue(), ".pdf")
+    return output.getvalue()
+
+
+def test_real_pdf_page_locator_is_preserved():
+    parsed = parse_isolated(_text_pdf(), ".pdf")
     assert parsed["blocks"][0]["locator"]["page"] == 1
     assert "receipts must have a purpose" in parsed["blocks"][0]["content"]
+
+
+@pytest.mark.parametrize("extension", ["docx", "pdf"])
+def test_original_upload_and_document_citations_for_word_and_text_pdf(
+    db, settings, knowledge, extension
+):
+    from fastapi.testclient import TestClient
+
+    from app.api import create_app
+
+    store, jobs, retrieval = knowledge
+    if extension == "docx":
+        word = Document()
+        word.add_paragraph("差旅费用必须保留对应凭证，发票上必须注明实际用途。")
+        output = BytesIO()
+        word.save(output)
+        content, expected, query = output.getvalue(), "注明实际用途", "发票注明用途"
+    else:
+        content, expected, query = _text_pdf(), "receipts must have a purpose", "receipts purpose"
+    with TestClient(create_app(settings, db=db, start_workers=False)) as client:
+        client.post("/api/v1/demo/login", json={"user_id": "U001"}).raise_for_status()
+        upload_url = "/api/v1/knowledge/uploads"
+        args = {"company_id": "C001", "title": "原资料", "request_id": uid()}
+        created = client.post(upload_url, data=args, files={"file": (f"原文件.{extension}", content)})
+        assert created.status_code == 202, created.text
+        original = created.json()
+        jobs.run(jobs.claim())
+        duplicate = client.post(
+            upload_url,
+            data={**args, "title": "改名重传", "request_id": uid()},
+            files={"file": (f"改名.{extension}", content)},
+        ).raise_for_status().json()
+        assert duplicate["document_id"] == original["document_id"] and duplicate["duplicate"]["usable"]
+        bundle = retrieval.search(AUTH, company_id="C001", query=query)
+        evidence = retrieval.read(AUTH, bundle["evidence"][0]["citation_id"])
+        assert evidence["version_id"] == original["version_id"]
+        assert expected in evidence["excerpt"]
+        assert evidence["locator"][0]["type"] == ("docx_paragraph" if extension == "docx" else "pdf")
+        assert bytes(store.file(AUTH, original["document_id"])["file_bytes"]) == content
 
 
 def test_knowledge_http_upload_is_accepted_not_claimed_ready(db, settings):
@@ -715,15 +758,20 @@ def test_disable_cancels_pending_job_fences_worker_and_frees_pending_quota(knowl
         store.upload(
             AUTH,
             name="待处理.txt",
-            content="待处理的完整条款。".encode(),
+            content=f"待处理的完整条款 {index}。".encode(),
             company_id="C001",
             title="待处理",
             request_id=uid(),
         )
-        for _ in range(10)
+        for index in range(10)
     ]
     late = jobs.claim()
     target = next(r for r in queued if r["job_id"] == str(late["job_id"]))
+    duplicate = store.upload(
+        AUTH, name="重复.txt", content="待处理的完整条款 0。".encode(),
+        company_id="C001", title="重复", request_id=uid(),
+    )
+    assert duplicate["job_id"] == queued[0]["job_id"]
     with pytest.raises(AppError) as error:
         store.upload(
             AUTH,

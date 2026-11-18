@@ -9,6 +9,20 @@ ASSIGNMENT = re.compile(rf"(?P<field>{FIELD})\s*(?:{VERB})?\s*(?P<value>.+)", re
 PROHIBITED = re.compile(
     r"^(?:请)?(?:我(?:只是)?想(?:问|知道|了解)|只(?:需要)?(?:解释|说明|讨论)|仅(?:解释|讨论)|不要(?:执行|保存|修改)|别(?:执行|保存|修改)|假如|假设|如果|上次|以前|有人说)"
 )
+_DEFERRED = r"(?:先)?(?:别|不要|暂不|不)(?:动|办(?:理)?|处理|修改|保存|填(?:写)?|补(?:填)?)"
+
+
+def excludes_invoice(text, invoice_id):
+    # Strip quoted values so a literal purpose does not turn into an instruction.
+    text = re.sub(r'“[^”]*”|「[^」]*」|"[^"]*"', "", text)
+    target = rf"(?<![A-Za-z0-9]){re.escape(invoice_id)}(?![A-Za-z0-9])"
+    return bool(
+        re.search(
+            rf"{target}\s*(?:的?(?:发票|用途|备注)\s*)?{_DEFERRED}|"
+            rf"{_DEFERRED}\s*(?:发票\s*)?{target}",
+            text,
+        )
+    )
 
 
 def _value(text):
