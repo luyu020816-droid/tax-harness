@@ -8,6 +8,10 @@ export function KnowledgeDocumentDetails({ id }: { id: string }) {
   const { data, error, loading } = useResource<KnowledgeDocument>(`/knowledge/documents/${id}`);
   if (loading) return <p className="muted">正在读取资料状态…</p>;
   if (!data) return <p className="error-note">{error}</p>;
+  const workbook = data.versions?.find(
+    (version) =>
+      version.version_id === data.active_version_id && /\.xlsx$/i.test(version.original_name)
+  );
   return (
     <>
       <h3>{data.title}</h3>
@@ -15,6 +19,9 @@ export function KnowledgeDocumentDetails({ id }: { id: string }) {
         {companyName(data.company_id)} · {data.scope === 'company' ? '企业共享' : '仅本人'} ·{' '}
         {data.status === 'active' ? '可用' : '已停用'}
       </p>
+      {workbook && data.status === 'active' && (
+        <WorkbookStructure id={id} version={workbook.version_id} />
+      )}
       <div className="memory-list">
         {data.versions?.map((version) => (
           <article key={version.version_id} className="memory-row">
@@ -33,17 +40,52 @@ export function KnowledgeDocumentDetails({ id }: { id: string }) {
               )}
               {version.error && <p className="error-note">{version.error.message}</p>}
             </div>
-            <a
-              className="text-button"
-              href={`/api/v1/knowledge/documents/${id}/file?version_id=${version.version_id}`}
-              download
-            >
-              下载原文件
-            </a>
+            {(!/\.xlsx$/i.test(version.original_name) ||
+              (version.version_id === data.active_version_id && data.status === 'active')) && (
+              <a
+                className="text-button"
+                href={`/api/v1/knowledge/documents/${id}/file?version_id=${version.version_id}`}
+                download
+              >
+                下载原文件
+              </a>
+            )}
           </article>
         ))}
       </div>
     </>
+  );
+}
+
+function WorkbookStructure({ id, version }: { id: string; version: string }) {
+  const { data, error } = useResource<{
+    sheets: {
+      name: string;
+      header_row: number | null;
+      reason: string | null;
+      columns: Record<string, Record<string, string>>;
+    }[];
+  }>(`/knowledge/documents/${id}/workbook?version_id=${version}`);
+  if (error) return <p className="error-note">{error}</p>;
+  if (!data) return null;
+  return (
+    <details>
+      <summary>查看工作表和识别列</summary>
+      <ul>
+        {data.sheets.map((sheet) => (
+          <li key={sheet.name}>
+            <strong>{sheet.name}</strong>
+            {sheet.reason
+              ? ` · ${sheet.reason}`
+              : ` · 表头第 ${sheet.header_row} 行 · ${Object.values(sheet.columns)
+                  .flatMap((columns) =>
+                    Object.entries(columns).map(([col, name]) => `${col} 列 ${name}`)
+                  )
+                  .join('、')}`}
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 

@@ -31,6 +31,9 @@ def content_allowed(conn, auth, run_id):
     if not refs:
         return False
     try:
+        from app.workbook_queries import validate_dependency as validate_workbook
+
+        turn = conn.execute("SELECT turn_id FROM runs WHERE run_id=%s", (run_id,)).fetchone()
         for ref in refs:
             source = read_source(conn, auth, str(ref["source_id"]))
             if source["revision"] != ref["revision"]:
@@ -42,6 +45,8 @@ def content_allowed(conn, auth, run_id):
             from app.knowledge_retrieval import validate_retrievals
 
             validate_retrievals(conn, auth, row["manifest"].get("retrieval_refs", []))
+            for dependency in row["manifest"].get("workbook_dependencies", []):
+                validate_workbook(conn, auth, turn["turn_id"], dependency)
             for dependency in row["manifest"].get("dependencies", []):
                 if dependency.get("kind") == "preference":
                     pref = conn.execute(

@@ -25,6 +25,8 @@ def _source_bundle_id():
 SOURCE_BUNDLE_ID = _source_bundle_id()
 READ_ONLY_TOOLS = frozenset(
     {
+        "inspect_workbook",
+        "query_workbook",
         "search_conversations",
         "read_conversation",
         "read_summary_source",

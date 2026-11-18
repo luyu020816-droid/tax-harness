@@ -17,6 +17,7 @@ from app.errors import AppError
 PARSER_VERSION = "text-1"
 CHUNKER_VERSION = "structure-1"
 MEDIA = {
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".md": "text/markdown",
@@ -32,8 +33,15 @@ def inspect_file(name, content):
     suffix = Path(name).suffix.lower()
     if suffix not in MEDIA or not content:
         raise AppError(
-            "DOCUMENT_UNSUPPORTED", "请选择PDF、DOCX、UTF-8 Markdown或TXT文件。", 422
+            "DOCUMENT_UNSUPPORTED", "请选择 XLSX、PDF、DOCX、UTF-8 Markdown 或 TXT 文件。", 422
         )
+    if suffix == ".xlsx":
+        from app.xlsx_invoices import MAX_FILE_BYTES
+
+        if len(content) > MAX_FILE_BYTES:
+            raise AppError("UPLOAD_TOO_LARGE", "Excel 文件最大为 5 MiB。", 413)
+        if not content.startswith(b"PK"):
+            raise AppError("DOCUMENT_UNSUPPORTED", "文件内容不是有效 XLSX。", 422)
     if suffix == ".pdf" and not content.startswith(b"%PDF-"):
         raise AppError("DOCUMENT_UNSUPPORTED", "文件内容不是有效PDF。", 422)
     if suffix == ".docx":
@@ -66,6 +74,10 @@ def inspect_file(name, content):
 
 
 def extract(content, suffix, ocr=None):
+    if suffix == ".xlsx":
+        from app.xlsx_workbooks import parse_workbook
+
+        return parse_workbook(content)
     blocks = []
 
     def add(text, kind, heading, locator):

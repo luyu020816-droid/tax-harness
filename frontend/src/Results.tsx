@@ -3,6 +3,7 @@ import { WritePlanCard } from './WritePlanCard';
 import { KnowledgeCitation } from './KnowledgeCitation';
 import { HistoryCitation } from './HistoryCitation';
 import { KnowledgeDraftCard } from './KnowledgeText';
+import { WorkbookResult } from './WorkbookResult';
 import { ArrowUpRight, CheckCheck, ChevronRight, CircleAlert } from 'lucide-react';
 import { companyName, dateTime, money } from './api';
 import type { Detail, InvoiceWritePlan, ResultCard, Rule } from './types';
@@ -35,6 +36,7 @@ export function Results({
   onConfirm: (plan: InvoiceWritePlan) => Promise<void>;
   onPlanChanged: () => Promise<void>;
 }) {
+  if (card.kind === 'workbook_result') return <WorkbookResult id={card.result_id} />;
   if (card.kind === 'request_progress')
     return (
       <section className="result-card request-progress" aria-label="本轮事项核对">

@@ -318,6 +318,11 @@ class ToolExecutor:
             execution.reference_context = True
         if name == "read_summary_source":
             return self.history.read_summary(execution, **args)
+        if name in ("inspect_workbook", "query_workbook"):
+            from app.workbook_queries import dispatch
+
+            execution.reference_context = True
+            return dispatch(db, execution, name, args)
         if name == "read_history":
             result = self.history.read(
                 auth,

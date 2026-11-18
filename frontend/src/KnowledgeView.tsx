@@ -102,7 +102,7 @@ function UploadKnowledge({
           文件
           <input
             type="file"
-            accept=".pdf,.docx,.md,.txt"
+            accept=".xlsx,.pdf,.docx,.md,.txt"
             required
             disabled={busy}
             onChange={(event) => {
@@ -153,7 +153,7 @@ function UploadKnowledge({
           </label>
         </div>
         <p className="muted small">
-          支持PDF、DOCX、Markdown和TXT；扫描页需启用本地识别，低质量或复杂版面会提示处理失败。资料用于检索问答，不会自动变更业务规则。
+          支持 XLSX、PDF、DOCX、Markdown 和 TXT。报销明细 Excel 可用于只读计算，上传资料不会变更业务规则。
         </p>
         {error && (
           <p className="error-note" role="alert">
@@ -165,7 +165,7 @@ function UploadKnowledge({
             取消
           </button>
           <button className="primary" disabled={busy || !file || !title.trim()}>
-            {busy ? '正在受理…' : '上传并建立索引'}
+            {busy ? '正在受理…' : '上传并处理'}
           </button>
         </footer>
       </form>

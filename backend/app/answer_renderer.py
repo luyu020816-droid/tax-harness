@@ -437,6 +437,15 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
     }
     if _uncovered_public_queries(outputs, delivered_web):
         missing("答复遗漏本轮公开查询结果，请用public_web视图及其真实编号交付。")
+    workbook_results = {
+        ref for ref, value in outputs.items()
+        if value.get("ok") and (value.get("data") or {}).get("kind") == "workbook_result"
+    }
+    if workbook_results and not any(
+        block.type == "result" and block.view == "workbook_result"
+        and str(block.result_ref) in workbook_results for block in plan.blocks
+    ):
+        missing("请用 workbook_result 视图及本轮工具 result_ref 交付 Excel 计算结果。")
     for item in outputs.values():
         if item.get("ok"):
             d = item.get("data") or {}
@@ -457,6 +466,15 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
                     },
                 )
             data = output["data"]
+            if block.view == "workbook_result":
+                if data.get("kind") != "workbook_result":
+                    missing("表格结果必须来自本轮真实计算。")
+                texts.append("已按表格明细计算，可以展开结果核对来源行。")
+                reply.cards.append({
+                    "kind": "workbook_result", "result_id": data["result_id"],
+                    "company_id": data["company_id"],
+                })
+                continue
             if block.view == "public_web" and data.get("clarification_turn_id"):
                 origin = data["clarification_turn_id"]
                 if reply.resume_turn_id and str(reply.resume_turn_id) != origin:
@@ -585,6 +603,10 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
                         "其他已完成事项仍须使用对应结果块交付。",
                     },
                 )
+            if workbook_results or (
+                state.get("workbook_candidates") and re.search(r"\d[\d,.]*\s*(?:元|块|人民币|CNY)", text)
+            ):
+                missing("Excel 问数的金额只由本轮实际计算结果卡交付，答复请勿另写金额。")
             if (
                 any(ref in outputs and outputs[ref].get("ok") for ref in delivered_web)
                 and re.search(r"天气|气温|温度|体感|降雨|湿度|风速|气象|最高|最低|阴天|晴天", text)
@@ -757,6 +779,7 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
                 c.get("quote_start"),
                 c.get("quote_end"),
                 c.get("query_id"),
+                c.get("result_id"),
                 c.get("query") if c["kind"] == "public_web" else None,
                 c.get("metric") if c["kind"] == "public_web" else None,
             ): c

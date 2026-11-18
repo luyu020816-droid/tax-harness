@@ -102,6 +102,7 @@ export interface InvoiceWritePlan extends CardBase {
   confirmation_turn_id: string | null;
 }
 export type ResultCard =
+  | { kind: 'workbook_result'; result_id: string; company_id: string }
   | {
       kind: 'request_progress';
       company_id: string;

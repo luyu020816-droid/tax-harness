@@ -109,7 +109,7 @@ def _grant_runtime(conn, settings: Settings) -> None:
         )
     )
     conn.execute(
-        sql.SQL("GRANT INSERT ON agent_profile_versions,agent_config_events,agent_skill_versions,agent_capability_events,agent_turn_bindings TO {}").format(role)
+        sql.SQL("GRANT INSERT ON agent_profile_versions,agent_config_events,agent_skill_versions,agent_capability_events,agent_turn_bindings,workbook_snapshots,workbook_results TO {}").format(role)
     )
     conn.execute(
         sql.SQL("REVOKE UPDATE,DELETE ON agent_profile_versions,agent_config_events,agent_skill_versions,agent_capability_events,agent_turn_bindings FROM {}").format(
@@ -173,7 +173,10 @@ def _seed_default_agents(conn):
         if item["function"]["name"] not in ALIASES
     }
     grants = {name: sorted(ACTION_TOOLS.get(name, {"invoke"})) for name in sorted(tool_names)}
-    read_names = {"query_month", "resolve_scope", "find_invoices", "get_rules", "check_purposes", "search_knowledge", "read_evidence"}
+    read_names = {
+        "query_month", "resolve_scope", "find_invoices", "get_rules", "check_purposes",
+        "search_knowledge", "read_evidence", "inspect_workbook", "query_workbook",
+    }
     read_grants = {name: grants[name] for name in sorted(read_names & tool_names)}
     skill_id = uid()
     skill = {

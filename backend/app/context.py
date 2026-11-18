@@ -154,6 +154,11 @@ def assemble(
         knowledge_candidates = recent_knowledge_documents(
             conn, execution, core["selected_company_id"]
         )
+        from app.workbook_queries import candidates as workbook_candidates_for
+
+        workbook_candidates = workbook_candidates_for(
+            conn, execution, core["selected_company_id"], knowledge_attachments
+        )
         if agent_config and agent_config["snapshot"]["knowledge_mode"] != "authorized":
             scope = agent_config["snapshot"]
             if knowledge_attachments:
@@ -248,6 +253,7 @@ def assemble(
         "current_attachments": safe_json(attachments),
         "current_knowledge_attachments": safe_json(knowledge_attachments),
         "knowledge_candidates": knowledge_candidates,
+        **({"workbook_candidates": workbook_candidates} if workbook_candidates else {}),
         "last_visible_view": safe_json(view),
     }
     if history_navigation:
@@ -259,10 +265,18 @@ def assemble(
         if frame.get("request_items")
         else ""
     )
+    workbook_prompt = (
+        "\nworkbook_candidates 是当前唯一可信的 Excel 候选。用户问表格明细时调用 inspect_workbook 查结构，"
+        "用 query_workbook 计算。多表、多候选列、未明确时间或口径时先追问；实付仅用明确实付字段。"
+        "明确要求全部日期才能填 all_dates。续问更改条件时保留未更改的上次条件并重新计算。"
+        "成功必须交付 type=result、view=workbook_result 和本轮工具信封中的 result_ref；"
+        "精确金额和证据由程序放入结果卡。失败说明具体原因，不把缺列、无效值或拒绝当作零。"
+        if workbook_candidates else ""
+    )
     mandatory = [
         {
             "role": "system",
-            "content": SYSTEM_PROMPT + checklist_prompt + "\n正式状态：\n" + canonical(state),
+            "content": SYSTEM_PROMPT + checklist_prompt + workbook_prompt + "\n正式状态：\n" + canonical(state),
         }
     ]
     if agent_config:
@@ -289,6 +303,11 @@ def assemble(
     for i, output in zip(tool_positions, project_rule_repeats(tool_outputs), strict=True):
         extras[i] = {**extras[i], "content": canonical(output)}
     definitions = tool_definitions()
+    if not workbook_candidates:
+        definitions = [
+            d for d in definitions
+            if d["function"]["name"] not in ("inspect_workbook", "query_workbook")
+        ]
     if agent_config:
         from app.agent_capabilities import filter_definitions
 
@@ -380,6 +399,10 @@ def assemble(
     rule_refs = list(evidence["rule_refs"]) if evidence else []
     retrieval_refs = []
     knowledge_dependencies = []
+    workbook_dependencies = [
+        {**candidate, "tool": "query_workbook"} for candidate in workbook_candidates
+        if "previous_query" in candidate or candidate.get("continuing_clarification")
+    ]
     scope_refs = [
         {k: scope[k] for k in ("scope_ref", "company_id", "period")}
         for scope in frame["available_scope_refs"]
@@ -401,6 +424,8 @@ def assemble(
             data = result.get("data") or {}
             if data.get("kind") == "knowledge_search":
                 retrieval_refs.append(data["query_id"])
+            if data.get("workbook_dependency"):
+                workbook_dependencies.append(data["workbook_dependency"])
             if data.get("kind") in (
                 "history_search",
                 "history_evidence",
@@ -466,6 +491,7 @@ def assemble(
             "current_knowledge_attachments": safe_json(knowledge_attachments),
             "retrieval_refs": list(dict.fromkeys(retrieval_refs)),
             "knowledge_dependencies": knowledge_dependencies,
+            "workbook_dependencies": workbook_dependencies,
             "dependencies": core["dependencies"],
             "sources": refs,
             "heads": heads,
@@ -554,6 +580,10 @@ def validate(db, execution: Execution, payload: dict, manifest: dict, *, conn=No
         from app.knowledge_retrieval import validate_retrievals
 
         validate_retrievals(c, execution.auth, manifest["retrieval_refs"], lock=True)
+        from app.workbook_queries import validate_dependency as validate_workbook
+
+        for dependency in manifest.get("workbook_dependencies", []):
+            validate_workbook(c, execution.auth, execution.turn_id, dependency, lock=True)
         from app.knowledge_retrieval import read_evidence_in
 
         for dependency in manifest["knowledge_dependencies"]:

@@ -126,6 +126,29 @@ def knowledge_router(store, retrieval, auth_dependency, history=None):
     def document(document_id: UUID, current=auth_dependency):
         return store.get(current, str(document_id))
 
+    @router.get("/knowledge/documents/{document_id}/workbook")
+    def workbook(document_id: UUID, version_id: UUID, current=auth_dependency):
+        from app.workbook_queries import active_version
+
+        with store.db.transaction(readonly=True) as conn:
+            active_version(conn, current, document_id, version_id)
+            snapshot = conn.execute(
+                "SELECT snapshot FROM workbook_snapshots WHERE version_id=%s", (version_id,)
+            ).fetchone()["snapshot"]
+            return {"sheets": [
+                {key: value for key, value in sheet.items() if key != "rows"}
+                for sheet in snapshot["sheets"]
+            ]}
+
+    @router.get("/knowledge/workbook-results/{result_id}")
+    def workbook_result(result_id: UUID, offset: int = 0, group_offset: int = 0, current=auth_dependency):
+        from app.workbook_queries import read_result
+
+        if not 0 <= offset <= 10000 or not 0 <= group_offset <= 10000:
+            raise AppError("INVALID_ARGUMENT", "表格来源分页范围无效。", 422)
+        with store.db.transaction(readonly=True) as conn:
+            return read_result(conn, current, result_id, offset=offset, group_offset=group_offset)
+
     @router.get("/knowledge/documents/{document_id}/file")
     def file(document_id: UUID, version_id: UUID | None = None, current=auth_dependency):
         original = store.file(current, str(document_id), str(version_id) if version_id else None)

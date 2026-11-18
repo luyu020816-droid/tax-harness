@@ -84,7 +84,7 @@ def policy_for_turn(conn, turn_id):
         for name in ("search_conversations", "read_conversation", "search_history", "read_history"):
             current_grants.pop(name, None)
     if mode == "none":
-        for name in ("search_knowledge", "read_evidence"):
+        for name in ("search_knowledge", "read_evidence", "inspect_workbook", "query_workbook"):
             current_grants.pop(name, None)
     return CapabilityPolicy(
         registered=frozenset(TOOLS),

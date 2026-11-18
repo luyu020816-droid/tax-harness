@@ -68,7 +68,7 @@ def upload_access(conn, auth, company_id):
 
 def upload_metadata(conn, auth, file_id, company_id):
     row = conn.execute(
-        "SELECT f.file_id,f.original_name,f.sha256,f.company_id,v.version_id,v.state,v.edition,d.document_id,d.title "
+        "SELECT f.file_id,f.original_name,f.media_type,f.sha256,f.company_id,v.version_id,v.state,v.edition,d.document_id,d.title "
         "FROM knowledge_files f JOIN knowledge_versions v USING(file_id) JOIN knowledge_documents d USING(document_id) "
         "WHERE f.file_id=%s AND f.owner_id=%s AND f.company_id=%s",
         (file_id, auth.user_id, company_id),
@@ -76,6 +76,10 @@ def upload_metadata(conn, auth, file_id, company_id):
     if not row:
         raise AppError("RESOURCE_NOT_FOUND", "知识附件不存在或与当前企业不一致。", 404)
     assert_access(conn, auth, company_id)
+    if row["original_name"].lower().endswith(".xlsx") and row["state"] == "ready":
+        from app.workbook_queries import active_version
+
+        active_version(conn, auth, row["document_id"], row["version_id"])
     return safe_json(row)
 
 
@@ -102,6 +106,12 @@ def _in_use(conn, document_id):
 
 
 def require_ready_version(conn, version):
+    if (version["parser_version"] or "").startswith("workbook-"):
+        if version["state"] == "ready" and conn.execute(
+            "SELECT 1 FROM workbook_snapshots WHERE version_id=%s", (version["version_id"],)
+        ).fetchone():
+            return
+        raise AppError("INDEX_NOT_READY", "表格版本尚未解析完成，未发布。", 409)
     profile = conn.execute(
         "SELECT 1 FROM retrieval_profiles WHERE profile_id=%s AND status='ready' FOR SHARE",
         (version["profile_id"],),
@@ -234,6 +244,14 @@ class Knowledge:
                 )
             if document_id:
                 document = document_in(conn, auth, document_id, manage=not maintenance, lock=True)
+                previous = conn.execute(
+                    "SELECT f.media_type FROM knowledge_versions v JOIN knowledge_files f USING(file_id) "
+                    "WHERE v.document_id=%s ORDER BY v.edition DESC LIMIT 1", (document_id,)
+                ).fetchone()
+                from app.knowledge_parser import MEDIA
+
+                if previous and (previous["media_type"] == MEDIA[".xlsx"]) != (suffix == ".xlsx"):
+                    raise AppError("DOCUMENT_UNSUPPORTED", "表格与文字资料请分别上传，不能交叉替换。", 422)
                 if maintenance and (
                     document["scope"] != "company" or document["owner_id"] != auth.user_id
                 ):
@@ -349,6 +367,10 @@ class Knowledge:
             ).fetchone()
             if not row:
                 raise AppError("RESOURCE_NOT_FOUND", "资料版本不可访问。", 404)
+            if row["original_name"].lower().endswith(".xlsx"):
+                from app.workbook_queries import active_version
+
+                active_version(conn, auth, document_id, version_id)
             if hashlib.sha256(bytes(row["file_bytes"])).hexdigest() != row["sha256"]:
                 raise AppError("SOURCE_INVALIDATED", "原文件完整性校验失败，暂停读取。", 503)
             return row

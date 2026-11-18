@@ -280,14 +280,16 @@ class KnowledgeRetrieval:
                 coverage = conn.execute(
                     "SELECT count(*) AS eligible,count(*) FILTER(WHERE v.state='ready' AND v.profile_id=%s) AS ready "
                     "FROM knowledge_documents d LEFT JOIN knowledge_versions v ON v.version_id=d.active_version_id WHERE "
-                    + base,
+                    + base + " AND left(coalesce(v.parser_version,''),9)<>'workbook-'",
                     [profile_id, *params],
                 ).fetchone()
                 coverage["pending"] = conn.execute(
                     "SELECT count(*) AS n FROM knowledge_versions v JOIN knowledge_documents d USING(document_id) WHERE d.company_id=%s "
                     "AND d.status='active' AND (d.scope='company' OR d.owner_id=%s) AND v.state NOT IN ('ready','cancelled') "
                     "AND v.edition>COALESCE((SELECT a.edition FROM knowledge_versions a WHERE a.version_id=d.active_version_id),0) "
-                    "AND (%s::uuid[] IS NULL OR d.document_id=ANY(%s::uuid[]))",
+                    "AND (%s::uuid[] IS NULL OR d.document_id=ANY(%s::uuid[])) "
+                    "AND NOT EXISTS(SELECT 1 FROM knowledge_files f WHERE f.file_id=v.file_id "
+                    "AND f.media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')",
                     (company_id, auth.user_id, document_ids or None, document_ids or None),
                 ).fetchone()["n"]
                 base += " AND v.state='ready' AND v.profile_id=%s"

@@ -10,9 +10,9 @@ from io import BytesIO
 from xml.etree.ElementTree import ParseError, iterparse
 
 from openpyxl import load_workbook
+from openpyxl.utils import column_index_from_string
 
 from app.errors import AppError
-from app.values import INVOICE_ID_PATTERN
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
 PARSER_VERSION = "1"
@@ -35,7 +35,7 @@ ALIASES = {
 REQUIRED = {"invoice_id", "invoice_date", "seller", "item", "amount"}
 
 
-def validate_archive(content: bytes):
+def validate_archive(content: bytes, *, max_column=16, max_row=10000, allow_formulas=False):
     if not content or len(content) > MAX_FILE_BYTES:
         raise AppError("UPLOAD_TOO_LARGE", "文件不能为空，且最大为 5 MiB。", 413)
     try:
@@ -70,15 +70,15 @@ def validate_archive(content: bytes):
                         for _, element in iterparse(stream, events=("end",)):
                             tag = element.tag.rsplit("}", 1)[-1]
                             if (
-                                tag == "f"
+                                tag == "f" and not allow_formulas
                                 or element.attrib.get("TargetMode") == "External"
                                 or tag == "row"
-                                and int(element.attrib.get("r", "0")) > 10000
+                                and int(element.attrib.get("r", "0")) > max_row
                             ):
                                 raise ValueError
                             if tag == "c":
                                 column = re.match("[A-Z]+", element.attrib.get("r", ""))
-                                if column and (len(column[0]) > 1 or column[0] > "P"):
+                                if column and column_index_from_string(column[0]) > max_column:
                                     raise ValueError
                             element.clear()
     except (ValueError, ParseError, zipfile.BadZipFile, RuntimeError) as exc:
@@ -96,6 +96,8 @@ def _text(value, limit, *, required=False):
 
 
 def _normalize(values, company_id):
+    from app.values import INVOICE_ID_PATTERN
+
     if values.get("company_id") != company_id:
         raise AppError(
             "IMPORT_VALIDATION_FAILED", "文件企业编号必须与当前选择的企业一致，整批未处理。", 422

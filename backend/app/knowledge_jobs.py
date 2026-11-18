@@ -126,14 +126,22 @@ class KnowledgeJobs:
                 vector_ready = conn.execute(
                     "SELECT to_regclass('public.retrieval_embeddings') AS t"
                 ).fetchone()["t"]
-            if not vector_ready:
-                raise AppError(
-                    "DEPENDENCY_UNAVAILABLE", "pgvector尚未安装，保留原文件并等待索引重试。", 503
-                )
             content = bytes(version["file_bytes"])
             if hashlib.sha256(content).hexdigest() != version["sha256"]:
                 raise AppError("SOURCE_INVALIDATED", "原文件校验失败，未发布。", 503)
             suffix, _ = inspect_file(version["original_name"], content)
+            if suffix == ".xlsx":
+                self.stage(job, "parsing")
+                parsed = parse_isolated(content, suffix, self.settings.knowledge_parser_timeout)
+                if not any(not sheet["reason"] for sheet in parsed["sheets"]):
+                    reasons = "；".join(f"{s['name']}：{s['reason']}" for s in parsed["sheets"][:4])
+                    raise AppError("WORKBOOK_SHEET_UNAVAILABLE", reasons or "没有可查询的可见工作表。", 422)
+                self.publish_workbook(job, parsed)
+                return
+            if not vector_ready:
+                raise AppError(
+                    "DEPENDENCY_UNAVAILABLE", "pgvector尚未安装，保留原文件并等待索引重试。", 503
+                )
             self.stage(job, "parsing")
             from app.ocr_status import options
 
@@ -191,6 +199,41 @@ class KnowledgeJobs:
             conn.execute(
                 "UPDATE knowledge_versions SET state=%s,error=%s WHERE version_id=%s",
                 (state, jsonb(error.as_dict()), job["version_id"]),
+            )
+
+    def publish_workbook(self, job, parsed):
+        auth = Identity(job["user_id"])
+        with self.db.transaction() as conn:
+            conn.execute("SELECT 1 FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,))
+            version = conn.execute(
+                "SELECT * FROM knowledge_versions WHERE version_id=%s", (job["version_id"],)
+            ).fetchone()
+            conn.execute(
+                "SELECT 1 FROM company_heads WHERE company_id=%s FOR UPDATE", (version["company_id"],)
+            )
+            document = document_in(conn, auth, version["document_id"], lock=True)
+            upload_access(conn, auth, document["company_id"])
+            self._guard(conn, job)
+            conn.execute(
+                "INSERT INTO workbook_snapshots(version_id,snapshot) VALUES(%s,%s)",
+                (version["version_id"], jsonb(parsed)),
+            )
+            version = conn.execute(
+                "UPDATE knowledge_versions SET state='ready',error=NULL,parser_version=%s,content_hash=%s "
+                "WHERE version_id=%s RETURNING *",
+                (parsed["parser_version"], digest(parsed), version["version_id"]),
+            ).fetchone()
+            published = (
+                document["scope"] == "user_private"
+                and document["status"] == "active"
+                and document["revision"] == version["expected_document_revision"]
+                and not _in_use(conn, document["document_id"])
+            )
+            if published:
+                publish_in(conn, document, version, version["expected_document_revision"])
+            conn.execute(
+                "UPDATE retrieval_jobs SET state='done',stage='ready',lease_until=NULL,error=NULL,progress=%s WHERE job_id=%s",
+                (jsonb({"sheets": len(parsed["sheets"]), "published": bool(published)}), job["job_id"]),
             )
 
     def publish(self, job, parsed, chunks, vectors, profile_id, manifest):

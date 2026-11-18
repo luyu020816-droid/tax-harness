@@ -210,6 +210,7 @@ class ResultBlock(StrictModel):
         "invoice_import_batch",
         "knowledge_draft",
         "public_web",
+        "workbook_result",
     ]
 
 
@@ -357,6 +358,36 @@ class PrepareInvoiceImport(Scope):
 
 class GetInvoiceImport(StrictModel):
     batch_id: UUID
+
+
+class InspectWorkbook(StrictModel):
+    document_id: UUID
+
+
+class WorkbookColumns(StrictModel):
+    date: str = Field(pattern=r"^[A-Z]{1,2}$")
+    category: str = Field(pattern=r"^[A-Z]{1,2}$")
+    amount: str = Field(pattern=r"^[A-Z]{1,2}$")
+
+
+class QueryWorkbook(InspectWorkbook):
+    version_id: UUID
+    sheet: str = Field(min_length=1, max_length=31)
+    columns: WorkbookColumns
+    date_from: date | None = None
+    date_to_exclusive: date | None = None
+    all_dates: bool = False
+    category: str | None = Field(default=None, min_length=1, max_length=500)
+    group_by: Literal["none", "category"] = "none"
+
+    @model_validator(mode="after")
+    def valid_range(self):
+        if self.all_dates:
+            if self.date_from is not None or self.date_to_exclusive is not None:
+                raise ValueError("全表和日期区间互斥")
+        elif not self.date_from or not self.date_to_exclusive or self.date_from >= self.date_to_exclusive:
+            raise ValueError("必须提供有效的起止日期或用户明确要求的全表范围")
+        return self
     cursor: int = Field(default=0, ge=0)
 
 
@@ -371,6 +402,11 @@ class PublicWebQuery(StrictModel):
 
 
 TOOLS = {
+    "inspect_workbook": (InspectWorkbook, "查看当前 Excel 附件或上轮同一 Agent 的有效表格结构和候选列。"),
+    "query_workbook": (
+        QueryWorkbook,
+        "按日期和费用类别在当前 Excel 明细精确汇总人民币元。先查看结构，工作表或列有歧义时先确认。",
+    ),
     "search_public_web": (
         PublicWebQuery,
         "查用户所问的公开实时信息。天气用weather，question逐字引用本轮天气问句，city用本轮地点或上一次天气结果中的城市，days_ahead按今天=0、明天=1、后天=2，metric按所问字段；缺城市可省略。公开搜索用search，question逐字引用本轮明确要求联网的公开问句。不可传企业资料、附件或历史正文。",
