@@ -23,9 +23,14 @@ def model_fingerprint(settings):
     )
 
 
-def accept(db, auth, session_id, request_id, settings):
-    fingerprint = digest(["compact", session_id])
+def accept(db, auth, session_id, request_id, settings, agent_id=None):
+    fingerprint = (
+        digest(["compact", session_id, agent_id]) if agent_id else digest(["compact", session_id])
+    )
     with db.transaction() as conn:
+        from app.agent_authority import LOCK_ID
+
+        conn.execute("SELECT pg_advisory_xact_lock_shared(%s)", (LOCK_ID,))
         conn.execute("SELECT 1 FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,))
         session = owned(conn, "sessions", "session_id", session_id, auth, lock=True)
         if session["archived_at"]:
@@ -40,8 +45,8 @@ def accept(db, auth, session_id, request_id, settings):
             return safe_json(existing)
         existing = conn.execute(
             "SELECT * FROM turns WHERE session_id=%s AND user_id=%s "
-            "AND request_kind='compact' AND status IN ('queued','running') ORDER BY source_seq LIMIT 1",
-            (session_id, auth.user_id),
+            "AND request_kind='compact' AND request_hash=%s AND status IN ('queued','running') ORDER BY source_seq LIMIT 1",
+            (session_id, auth.user_id, fingerprint),
         ).fetchone()
         if existing:
             return safe_json(existing)
@@ -77,6 +82,10 @@ def accept(db, auth, session_id, request_id, settings):
                 model_fingerprint(settings),
             ),
         )
+        if agent_id:
+            from app.agent_authority import bind_turn
+
+            bind_turn(conn, auth, turn_id, agent_id)
         # This control source is never a user preference or conversation message.
         assess(conn, str(source["source_id"]), "no_change")
         advance_progress(conn, auth)

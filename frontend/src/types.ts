@@ -207,7 +207,16 @@ export interface RunDetail {
     context_id: string;
     model_step: number;
     payload: unknown;
-    manifest: { kind?: string; [key: string]: unknown };
+    manifest: {
+      kind?: string;
+      runtime_provenance?: {
+        source_bundle_id: string;
+        python_version: string;
+        packages: { name: string; version: string }[];
+        tool_contracts: Record<string, string>;
+      };
+      [key: string]: unknown;
+    };
     token_count: number;
     count_kind: string;
     duration_ms: number | null;

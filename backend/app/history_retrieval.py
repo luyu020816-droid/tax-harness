@@ -329,15 +329,8 @@ class HistoryRetrieval:
                 raise AppError(
                     "TARGET_SCOPE_MISMATCH", "摘要范围与当前明确企业不一致，请重新检索。", 422
                 )
-            row = conn.execute(
-                "SELECT * FROM summaries WHERE user_id=%s AND session_id=%s AND scope=%s AND memory_epoch=%s AND status='active' ORDER BY generation DESC LIMIT 1",
-                (
-                    execution.auth.user_id,
-                    execution.session_id,
-                    company or "@user",
-                    execution.expected_epoch,
-                ),
-            ).fetchone()
+            from app.context_scope import find_summary
+            row = find_summary(conn, execution, company or "@user", execution.expected_epoch)
             if not row:
                 raise AppError("SOURCE_INVALIDATED", "当前没有可用摘要。", 409)
             packet = validate(conn, execution, row["content"], row["covered_sources"])

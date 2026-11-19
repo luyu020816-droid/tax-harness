@@ -102,6 +102,7 @@ def _grant_runtime(conn, settings: Settings) -> None:
         "agent_model_profiles",
         "agent_skills",
         "agent_tool_states",
+        "knowledge_strategies",
     ]
     conn.execute(
         sql.SQL("GRANT INSERT,UPDATE ON {} TO {}").format(
@@ -109,12 +110,18 @@ def _grant_runtime(conn, settings: Settings) -> None:
         )
     )
     conn.execute(
-        sql.SQL("GRANT INSERT ON agent_profile_versions,agent_config_events,agent_skill_versions,agent_capability_events,agent_turn_bindings TO {}").format(role)
+        sql.SQL(
+            "GRANT INSERT ON agent_profile_versions,agent_config_events,agent_skill_versions,agent_capability_events,agent_turn_bindings TO {}"
+        ).format(role)
+    )
+    conn.execute(sql.SQL("GRANT INSERT ON knowledge_strategy_versions TO {}").format(role))
+    conn.execute(
+        sql.SQL("REVOKE UPDATE,DELETE ON knowledge_strategy_versions FROM {}").format(role)
     )
     conn.execute(
-        sql.SQL("REVOKE UPDATE,DELETE ON agent_profile_versions,agent_config_events,agent_skill_versions,agent_capability_events,agent_turn_bindings FROM {}").format(
-            role
-        )
+        sql.SQL(
+            "REVOKE UPDATE,DELETE ON agent_profile_versions,agent_config_events,agent_skill_versions,agent_capability_events,agent_turn_bindings FROM {}"
+        ).format(role)
     )
     if conn.execute("SELECT to_regclass('public.conversation_passages') t").fetchone()["t"]:
         conn.execute(
@@ -153,6 +160,7 @@ def _grant_runtime(conn, settings: Settings) -> None:
         sql.SQL("GRANT UPDATE(next_source_seq,memory_epoch,auth_epoch) ON users TO {}").format(role)
     )
     conn.execute(sql.SQL("GRANT UPDATE(data_revision) ON company_heads TO {}").format(role))
+    conn.execute(sql.SQL("GRANT UPDATE(knowledge_epoch) ON company_heads TO {}").format(role))
     conn.execute(sql.SQL("GRANT UPDATE(purpose,note,revision) ON invoices TO {}").format(role))
 
 
@@ -169,15 +177,25 @@ def _seed_default_agents(conn):
     ):
         return
     tool_names = {
-        item["function"]["name"] for item in tool_definitions()
+        item["function"]["name"]
+        for item in tool_definitions()
         if item["function"]["name"] not in ALIASES
     }
     grants = {name: sorted(ACTION_TOOLS.get(name, {"invoke"})) for name in sorted(tool_names)}
-    read_names = {"query_month", "resolve_scope", "find_invoices", "get_rules", "check_purposes", "search_knowledge", "read_evidence"}
+    read_names = {
+        "query_month",
+        "resolve_scope",
+        "find_invoices",
+        "get_rules",
+        "check_purposes",
+        "search_knowledge",
+        "read_evidence",
+    }
     read_grants = {name: grants[name] for name in sorted(read_names & tool_names)}
     skill_id = uid()
     skill = {
-        "name": "发票与规则核对", "description": "查询发票并核对适用规则",
+        "name": "发票与规则核对",
+        "description": "查询发票并核对适用规则",
         "instructions": "根据用户指定范围查询发票与正式规则，不猜测事实。",
         "tool_grants": {"find_invoices": ["invoke"], "get_rules": ["invoke"]},
         "requires_knowledge": False,
@@ -192,22 +210,43 @@ def _seed_default_agents(conn):
     )
     conn.execute(
         "INSERT INTO agent_capability_events(event_id,actor_id,kind,capability_id,action,revision) "
-        "VALUES(%s,'U001','skill',%s,'publish',1)", (uid(), skill_id),
+        "VALUES(%s,'U001','skill',%s,'publish',1)",
+        (uid(), skill_id),
     )
     for name, description, prompt, allowed in (
-        ("财税办理助手", "查询财税资料并按授权办理发票", "按用户要求办理财税事项，写入前核对授权。", grants),
-        ("知识查阅助手", "只读查询资料、发票和规则", "仅查询和解释有权访问的资料，不修改业务数据。", read_grants),
+        (
+            "财税办理助手",
+            "查询财税资料并按授权办理发票",
+            "按用户要求办理财税事项，写入前核对授权。",
+            grants,
+        ),
+        (
+            "知识查阅助手",
+            "只读查询资料、发票和规则",
+            "仅查询和解释有权访问的资料，不修改业务数据。",
+            read_grants,
+        ),
     ):
         agent_id = uid()
         draft = {
-            "name": name, "description": description, "prompt": prompt,
-            "model_profile_id": "default", "tool_grants": allowed, "skill_ids": [skill_id],
-            "knowledge_mode": "authorized", "knowledge_document_ids": [],
+            "name": name,
+            "description": description,
+            "prompt": prompt,
+            "model_profile_id": "default",
+            "tool_grants": allowed,
+            "skill_ids": [skill_id],
+            "knowledge_mode": "authorized",
+            "knowledge_document_ids": [],
         }
-        config = {**draft, "skill_versions": [{"skill_id": skill_id, "version": 1}], "model_profile_version": None}
+        config = {
+            **draft,
+            "skill_versions": [{"skill_id": skill_id, "version": 1}],
+            "model_profile_version": None,
+        }
         conn.execute(
             "INSERT INTO agent_profiles(agent_id,name,enabled,revision,draft,current_version) "
-            "VALUES(%s,%s,true,3,%s,1)", (agent_id, name, jsonb(draft)),
+            "VALUES(%s,%s,true,3,%s,1)",
+            (agent_id, name, jsonb(draft)),
         )
         conn.execute(
             "INSERT INTO agent_profile_versions(agent_id,version,config,published_by) VALUES(%s,1,%s,'U001')",

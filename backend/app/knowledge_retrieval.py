@@ -40,6 +40,15 @@ def read_evidence_in(conn, auth, citation_id, *, lock=False):
     if not evidence:
         raise AppError("RESOURCE_NOT_FOUND", "引用不存在或不可访问。", 404)
     document_in(conn, auth, str(evidence["document_id"]))
+    from app.knowledge_strategy import read_in
+
+    current_strategy = read_in(conn, auth, evidence["company_id"])
+    bound_strategy = evidence["scope_snapshot"].get("strategy", {"revision": 0})
+    if (
+        current_strategy["revision"] != bound_strategy["revision"]
+        or not current_strategy["config"]["enabled"]
+    ):
+        raise AppError("SOURCE_INVALIDATED", "知识检索策略已变化，请重新检索引用。", 409)
     if (
         evidence["status"] != "active"
         or evidence["state"] != "ready"
@@ -225,11 +234,15 @@ class KnowledgeRetrieval:
         timings = {}
         with self.db.transaction(readonly=True) as conn:
             assert_access(conn, auth, company_id)
+            from app.knowledge_strategy import read_in
+
+            strategy = read_in(conn, auth, company_id)
             if session_id:
                 owned(conn, "sessions", "session_id", session_id, auth)
             if turn_id:
                 owned(conn, "turns", "turn_id", turn_id, auth)
             snapshot = {
+                "strategy": strategy,
                 "company_id": company_id,
                 "start": str(start),
                 "end": str(end),
@@ -245,7 +258,7 @@ class KnowledgeRetrieval:
         candidates, selected = [], []
         status, coverage = "unavailable", {"eligible": 0, "ready": 0, "pending": 0}
         try:
-            if not self.settings.knowledge_enabled:
+            if not self.settings.knowledge_enabled or not strategy["config"]["enabled"]:
                 raise AppError("DEPENDENCY_UNAVAILABLE", "知识检索未启用。", 503)
             profile_id, _ = self.engine.profile()
             with self.db.transaction(readonly=True) as conn:
@@ -344,7 +357,7 @@ class KnowledgeRetrieval:
                 mode = "hybrid_unranked" if dense_vector else "lexical_only"
             timings["candidate_sql_ms"] = round((time.monotonic() - stage_started) * 1000)
             stage_started = time.monotonic()
-            if candidates and rerank and dense_vector:
+            if candidates and rerank and strategy["config"]["rerank"] and dense_vector:
                 try:
                     scores = self.engine.rerank(query, [c["retrieval_text"] for c in candidates])
                     candidates = sorted(
@@ -372,9 +385,26 @@ class KnowledgeRetrieval:
                         (version,),
                     ).fetchall()
                 selected_ids, selection = choose_groups(
-                    candidates, blocks_by_version, chunks_by_version, policy=policy, mode=mode
+                    candidates,
+                    blocks_by_version,
+                    chunks_by_version,
+                    policy=policy,
+                    mode=mode,
+                    budget=strategy["config"]["evidence_budget"],
+                    max_groups=strategy["config"]["max_groups"],
                 )
                 coverage.update(selection)
+                if (
+                    strategy["config"]["require_calibrated"]
+                    and not selection["selection_calibrated"]
+                ):
+                    selected_ids = []
+                    for group in coverage["evidence_groups"]:
+                        group["selected"] = False
+                    coverage["evidence_tokens"] = 0
+                    raise AppError(
+                        "SELECTION_POLICY_NOT_CALIBRATED", "当前策略要求已校准的检索结果。", 503
+                    )
                 if selected_ids:
                     rows = conn.execute(
                         "SELECT c.*,v.document_id,v.edition,d.revision AS document_revision,d.title,d.scope,d.company_id FROM knowledge_chunks c JOIN knowledge_versions v USING(version_id) JOIN knowledge_documents d USING(document_id) WHERE c.chunk_id=ANY(%s::uuid[])",

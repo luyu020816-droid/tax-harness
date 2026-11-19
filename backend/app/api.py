@@ -65,10 +65,12 @@ class TurnBody(StrictModel):
 
 class CompactionBody(StrictModel):
     client_request_id: str = Field(min_length=1, max_length=200)
+    agent_id: UUID | None = None
 
 
 class ContextPreviewBody(StrictModel):
     draft: str = Field(default="", max_length=16000)
+    agent_id: UUID | None = None
 
 
 class ControlBody(StrictModel):
@@ -129,7 +131,11 @@ def create_app(
 
     agent_models = PersistentAgentModels(db, settings)
     runtime = Runtime(
-        db, settings, model, model_connection=model_connection, agent_models=agent_models,
+        db,
+        settings,
+        model,
+        model_connection=model_connection,
+        agent_models=agent_models,
         agent_runtime_enabled=True,
     )
 
@@ -372,14 +378,21 @@ def create_app(
                 ready = model_ready()
             else:
                 try:
-                    agent_models.resolve(config["model_profile_id"], config["model_profile_version"])
+                    agent_models.resolve(
+                        config["model_profile_id"], config["model_profile_version"]
+                    )
                     ready = True
                 except AppError:
                     ready = False
-            result.append({
-                "agent_id": str(row["agent_id"]), "version": row["current_version"],
-                "name": config["name"], "description": config["description"], "model_ready": ready,
-            })
+            result.append(
+                {
+                    "agent_id": str(row["agent_id"]),
+                    "version": row["current_version"],
+                    "name": config["name"],
+                    "description": config["description"],
+                    "model_ready": ready,
+                }
+            )
         return result
 
     @app.get("/api/v1/sessions")
@@ -425,10 +438,26 @@ def create_app(
         from app import compaction_requests
 
         actual_settings, _ = runtime._model_for()
+        with db.transaction(readonly=True) as conn:
+            identity.owned(conn, "sessions", "session_id", str(session_id), current)
+            if body.agent_id:
+                from app.agent_preview import configuration
+
+                binding = configuration(conn, str(body.agent_id))
+                if binding["snapshot"]["model_profile_id"] != "default":
+                    actual_settings, _ = agent_models.resolve(
+                        binding["snapshot"]["model_profile_id"],
+                        binding["snapshot"]["model_profile_version"],
+                    )
         if not actual_settings.model_configured:
             raise AppError("MODEL_UNAVAILABLE", "请先配置模型，再压缩会话。", 503)
         task = compaction_requests.accept(
-            db, current, str(session_id), body.client_request_id, actual_settings
+            db,
+            current,
+            str(session_id),
+            body.client_request_id,
+            actual_settings,
+            agent_id=str(body.agent_id) if body.agent_id else None,
         )
         return {"operation_id": task["turn_id"], "status": task["status"]}
 
@@ -437,7 +466,19 @@ def create_app(
         from app.context_preview import preview
 
         actual_settings, _ = runtime._model_for()
-        return preview(db, actual_settings, current, str(session_id), body.draft)
+        binding = None
+        with db.transaction(readonly=True) as conn:
+            identity.owned(conn, "sessions", "session_id", str(session_id), current)
+            if body.agent_id:
+                from app.agent_preview import configuration
+
+                binding = configuration(conn, str(body.agent_id))
+                if binding["snapshot"]["model_profile_id"] != "default":
+                    actual_settings, _ = agent_models.resolve(
+                        binding["snapshot"]["model_profile_id"],
+                        binding["snapshot"]["model_profile_version"],
+                    )
+        return preview(db, actual_settings, current, str(session_id), body.draft, binding=binding)
 
     @app.get("/api/v1/sessions/{session_id}/context-usage")
     def context_usage(session_id: UUID, current=auth_dependency):
@@ -578,6 +619,34 @@ def create_app(
     @app.get("/api/v1/preferences")
     def preference_list(company_id: str | None = None, current=auth_dependency):
         return safe_json(preferences.list_preferences(db, current, company_id))
+
+    @app.get("/api/v1/memory/preferences")
+    def memory_history_list(
+        company_id: str | None = None, before_id: UUID | None = None, current=auth_dependency
+    ):
+        with db.transaction(readonly=True) as conn:
+            if company_id:
+                identity.assert_access(conn, current, company_id)
+            rows = conn.execute(
+                "SELECT preference_id,scope_key,stable_key,status,revision,generation FROM preferences p "
+                "WHERE p.user_id=%s AND (p.scope_key='@user' OR (p.scope_key=%s AND EXISTS(SELECT 1 FROM user_company_grants g WHERE g.user_id=p.user_id AND g.company_id=p.scope_key AND g.can_read))) "
+                "AND (%s::uuid IS NULL OR preference_id<%s) ORDER BY preference_id DESC LIMIT 21",
+                (current.user_id, company_id, before_id, before_id),
+            ).fetchall()
+            return safe_json(
+                {
+                    "items": rows[:20],
+                    "next_id": str(rows[19]["preference_id"]) if len(rows) > 20 else None,
+                }
+            )
+
+    @app.get("/api/v1/preferences/{preference_id}/history")
+    def preference_history(
+        preference_id: UUID, before_revision: int | None = None, current=auth_dependency
+    ):
+        if before_revision is not None and not 1 <= before_revision <= 2147483647:
+            raise AppError("INVALID_ARGUMENT", "修订游标无效。", 422)
+        return preferences.history(db, current, str(preference_id), before_revision=before_revision)
 
     @app.post("/api/v1/preferences", status_code=201)
     def new_preference(body: PreferenceBody, current=auth_dependency):

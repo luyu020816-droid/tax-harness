@@ -9,7 +9,13 @@ from pydantic import Field, ValidationError
 from starlette.datastructures import UploadFile
 
 from app.errors import AppError
+from app.knowledge_strategy import Strategy
 from app.tool_schemas import SearchHistory, StrictModel
+
+
+class StrategyPublication(StrictModel):
+    expected_revision: int = Field(ge=0)
+    config: Strategy
 
 
 class UploadKnowledge(StrictModel):
@@ -56,6 +62,35 @@ class HistoryQuery(SearchHistory):
 
 def knowledge_router(store, retrieval, auth_dependency, history=None):
     router = APIRouter(prefix="/api/v1")
+
+    @router.get("/knowledge/strategies/{company_id}")
+    def strategy(company_id: str, current=auth_dependency):
+        from app.knowledge_strategy import read_in
+
+        with store.db.transaction(readonly=True) as conn:
+            result = read_in(conn, current, company_id)
+            result["can_manage"] = bool(
+                conn.execute(
+                    "SELECT 1 FROM agent_config_managers WHERE user_id=%s", (current.user_id,)
+                ).fetchone()
+            )
+            result["versions"] = conn.execute(
+                "SELECT version,config,created_at FROM knowledge_strategy_versions WHERE company_id=%s ORDER BY version DESC LIMIT 20",
+                (company_id,),
+            ).fetchall()
+        from app.values import safe_json
+
+        return safe_json(result)
+
+    @router.put("/knowledge/strategies/{company_id}")
+    def publish_strategy(
+        company_id: str, body: StrategyPublication, request: Request, current=auth_dependency
+    ):
+        from app.knowledge_strategy import publish
+        from app.model_connection import _check_local
+
+        _check_local(request, writing=True)
+        return publish(store.db, current, company_id, body.expected_revision, body.config)
 
     async def receive_upload(request, current, document_id=None):
         async with request.form(

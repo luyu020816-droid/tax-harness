@@ -31,4 +31,10 @@ test('agent is configured and used against the real program-test backend', async
   await page.getByRole('textbox', { name: '输入办理需求' }).fill('查询甲企业2026-09月度资料');
   await page.getByRole('button', { name: '发送消息' }).click();
   await expect(page.locator('body')).toContainText('9,622.06', { timeout: 30000 });
+  await page.getByRole('button', { name: '查看办理记录', exact: true }).last().click();
+  const record = page.getByRole('dialog', { name: '办理记录', exact: true });
+  await expect(record).toContainText('Agent：实测账务助手');
+  await record.getByText('运行实现与依赖版本', { exact: true }).click();
+  await expect(record).toContainText('source_bundle_id');
+  await expect(record).toContainText('python_version');
 });

@@ -47,8 +47,15 @@ def _scope_clarification_needs_review(reply, groups):
 
 class Runtime:
     def __init__(
-        self, db, settings: Settings, model: ModelAdapter, *, retrieval=None, model_connection=None,
-        agent_models=None, agent_runtime_enabled=False,
+        self,
+        db,
+        settings: Settings,
+        model: ModelAdapter,
+        *,
+        retrieval=None,
+        model_connection=None,
+        agent_models=None,
+        agent_runtime_enabled=False,
     ):
         self.db, self.settings, self.model = db, settings, model
         self.model_connection = model_connection
@@ -124,9 +131,12 @@ class Runtime:
             work = conn.execute(
                 "SELECT * FROM work_items WHERE work_id=%s FOR UPDATE", (candidate["work_id"],)
             ).fetchone()
-            if not self.agent_runtime_enabled and conn.execute(
-                "SELECT 1 FROM agent_turn_bindings WHERE turn_id=%s", (turn["turn_id"],)
-            ).fetchone():
+            if (
+                not self.agent_runtime_enabled
+                and conn.execute(
+                    "SELECT 1 FROM agent_turn_bindings WHERE turn_id=%s", (turn["turn_id"],)
+                ).fetchone()
+            ):
                 error = {
                     "code": "AGENT_RUNTIME_NOT_READY",
                     "message": "Agent 运行时尚未完成验证，未执行本轮请求。",
@@ -199,13 +209,11 @@ class Runtime:
                     config = binding["snapshot"]
                     if config["model_profile_id"] != "default":
                         if not self.agent_models:
-                            raise AppError("MODEL_CONFIG_UNAVAILABLE", "Agent 模型配置不可用。", 503)
+                            raise AppError(
+                                "MODEL_CONFIG_UNAVAILABLE", "Agent 模型配置不可用。", 503
+                            )
                         model_settings, model = self.agent_models.resolve(
                             config["model_profile_id"], config["model_profile_version"]
-                        )
-                    if config["knowledge_mode"] != "authorized":
-                        model_settings = model_settings.model_copy(
-                            update={"context_use_summary": False, "context_auto_compact": False}
                         )
                 except AppError as exc:
                     error = exc.as_dict()
@@ -263,7 +271,9 @@ class Runtime:
                 generation,
                 token,
                 user["memory_epoch"],
-                model_configuration=(model_settings, model) if self.model_connection or binding else None,
+                model_configuration=(model_settings, model)
+                if self.model_connection or binding
+                else None,
             )
 
     async def _worker(self):
@@ -356,16 +366,20 @@ class Runtime:
             if request["selected_company_id"] != session["selected_company_id"]:
                 raise AppError("STALE_CONTEXT", "企业范围已变化，请重新发起压缩。", 409)
             scope = session["selected_company_id"] or "@user"
-            summary = conn.execute(
-                "SELECT * FROM summaries WHERE user_id=%s AND session_id=%s AND scope=%s "
-                "AND memory_epoch=%s AND status='active' ORDER BY generation DESC LIMIT 1",
-                (execution.auth.user_id, execution.session_id, scope, execution.expected_epoch),
-            ).fetchone()
+            from app.context_scope import find_summary
+
+            summary = find_summary(conn, execution, scope, execution.expected_epoch)
             if summary:
                 validate_summary(conn, execution, summary["content"], summary["covered_sources"])
         history = conversation_groups(
             self.db, execution, summary["covered_sources"] if summary else [], preserve_recent=5
         )
+        from app.agent_authority import context_configuration
+        from app.context_scope import filter_history
+
+        with self.db.transaction(readonly=True) as conn:
+            config = context_configuration(conn, execution.turn_id)
+            history = filter_history(conn, config["snapshot"] if config else None, history)
         candidates = [group for group in history[:-5] if not group["covered"]]
         if not candidates:
             with self.db.transaction() as conn:

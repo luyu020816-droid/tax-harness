@@ -21,6 +21,7 @@ type Agent = {
   current_version: number | null;
   enabled: boolean;
   draft: Draft;
+  published_config?: Draft | null;
 };
 type Tool = {
   name: string;
@@ -223,6 +224,17 @@ export function AgentAdmin({ company, onClose }: { company: string | null; onClo
       '模型连接测试通过。重启后需要重新输入密钥。'
     );
   }
+  const agentDirty = !!selected && JSON.stringify(draft) !== JSON.stringify(selected.draft);
+  function affectedAgents(references: (config: Draft) => boolean) {
+    return (
+      agents
+        .filter(
+          (a) => references(a.draft) || (!!a.published_config && references(a.published_config))
+        )
+        .map((a) => `${a.name}（${a.enabled ? '启用' : '停用'}）`)
+        .join('、') || '无'
+    );
+  }
   return (
     <Modal title="Agent 与能力管理" onClose={onClose} drawer>
       <p className="notice">配置由本机模拟管理员管理。Agent 只在当前用户和企业授权范围内工作。</p>
@@ -267,14 +279,19 @@ export function AgentAdmin({ company, onClose }: { company: string | null; onClo
               className="text-button"
               disabled={busy || !a.current_version}
               onClick={() =>
-                void run(
-                  () =>
-                    api(`/agent-admin/agents/${a.agent_id}/enabled`, {
-                      method: 'POST',
-                      body: body({ expected_revision: a.revision, enabled: !a.enabled }),
-                    }),
-                  'Agent 状态已更新。'
-                )
+                void run(async () => {
+                  const updated = await api<Agent>(`/agent-admin/agents/${a.agent_id}/enabled`, {
+                    method: 'POST',
+                    body: body({ expected_revision: a.revision, enabled: !a.enabled }),
+                  });
+                  // Advance only the version this editor actually loaded. A list refresh
+                  // may contain another manager's edits that are absent from this form.
+                  setSelected((current) =>
+                    current?.agent_id === a.agent_id && current.revision === a.revision
+                      ? updated
+                      : current
+                  );
+                }, 'Agent 状态已更新。')
               }
             >
               {a.enabled ? '停用' : '启用'}
@@ -411,6 +428,12 @@ export function AgentAdmin({ company, onClose }: { company: string | null; onClo
             ))}
           </fieldset>
           <div>
+            {agentDirty && <p className="notice">有未保存修改，请先保存草稿再发布。</p>}
+            {selected && (
+              <p className="muted small">
+                发布仅更新当前 Agent；新请求使用新版本，撤权会阻止旧请求继续执行。
+              </p>
+            )}
             <button className="primary" disabled={busy}>
               保存草稿
             </button>{' '}
@@ -418,7 +441,7 @@ export function AgentAdmin({ company, onClose }: { company: string | null; onClo
               <button
                 type="button"
                 className="secondary"
-                disabled={busy}
+                disabled={busy || agentDirty}
                 onClick={() =>
                   void run(async () => {
                     const a = await api<Agent>(`/agent-admin/agents/${selected.agent_id}/publish`, {
@@ -452,6 +475,11 @@ export function AgentAdmin({ company, onClose }: { company: string | null; onClo
         {skills.map((s) => (
           <p key={s.skill_id}>
             {s.name} · v{s.current_version} · {s.enabled ? '启用' : '停用'}{' '}
+            <span className="muted small">
+              引用此 Skill 的 Agent（含草稿）：
+              {affectedAgents((c) => c.skill_ids.includes(s.skill_id))}。新版本需重新发布 Agent
+              后使用；停用会中止仍依赖它的旧请求。{' '}
+            </span>
             <button
               className="text-button"
               onClick={() => {
@@ -465,14 +493,17 @@ export function AgentAdmin({ company, onClose }: { company: string | null; onClo
               className="text-button"
               disabled={busy}
               onClick={() =>
-                void run(
-                  () =>
-                    api(`/agent-admin/skills/${s.skill_id}/enabled`, {
-                      method: 'POST',
-                      body: body({ expected_revision: s.revision, enabled: !s.enabled }),
-                    }),
-                  'Skill 状态已更新。'
-                )
+                void run(async () => {
+                  const updated = await api<Skill>(`/agent-admin/skills/${s.skill_id}/enabled`, {
+                    method: 'POST',
+                    body: body({ expected_revision: s.revision, enabled: !s.enabled }),
+                  });
+                  setSelectedSkill((current) =>
+                    current?.skill_id === s.skill_id && current.revision === s.revision
+                      ? { ...current, ...updated, config: current.config }
+                      : current
+                  );
+                }, 'Skill 状态已更新。')
               }
             >
               {s.enabled ? '停用' : '启用'}
@@ -480,6 +511,13 @@ export function AgentAdmin({ company, onClose }: { company: string | null; onClo
           </p>
         ))}
         <form className="form-stack" onSubmit={saveSkill}>
+          {selectedSkill && (
+            <p className="notice">
+              本次发布关联 Agent：
+              {affectedAgents((c) => c.skill_ids.includes(selectedSkill.skill_id))}。现有 Agent
+              保留已绑定版本。
+            </p>
+          )}
           <label>
             Skill 名称
             <input
@@ -529,6 +567,10 @@ export function AgentAdmin({ company, onClose }: { company: string | null; onClo
         {models.map((m) => (
           <p key={m.profile_id}>
             {m.name} · {m.model_id} · {m.configured ? '就绪' : '待配置'}{' '}
+            <span className="muted small">
+              引用此模型的 Agent（含草稿）：
+              {affectedAgents((c) => c.model_profile_id === m.profile_id)}。{' '}
+            </span>
             <button
               className="text-button"
               onClick={() => {
@@ -596,6 +638,10 @@ export function AgentAdmin({ company, onClose }: { company: string | null; onClo
             {t.risk_type === 'read_only' ? '只读业务数据' : '可能产生副作用'} · 源码标识{' '}
             {t.implementation_version?.slice(0, 12)} · 契约标识 {t.contract_version?.slice(0, 12)}{' '}
             <span className="muted small">{t.description} </span>
+            <span className="muted small">
+              引用此工具的 Agent（含草稿）：{affectedAgents((c) => !!c.tool_grants[t.name]?.length)}
+              。停用同时约束原助手。{' '}
+            </span>
             <button
               className="text-button"
               disabled={busy}

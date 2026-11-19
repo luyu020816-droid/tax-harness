@@ -52,7 +52,7 @@ def actual_usage(db, settings, auth, session_id):
     }
 
 
-def preview(db, settings, auth, session_id, draft):
+def preview(db, settings, auth, session_id, draft, *, binding=None):
     """Estimate without creating sources, bindings, turns or an Execution."""
     core = load_core(db, auth, session_id)
     with db.transaction(readonly=True) as conn:
@@ -61,16 +61,15 @@ def preview(db, settings, auth, session_id, draft):
             "SELECT next_source_seq FROM users WHERE user_id=%s", (auth.user_id,)
         ).fetchone()
         projection = ProjectionScope(auth, session_id, user["next_source_seq"] + 1)
-        summary = conn.execute(
-            "SELECT * FROM summaries WHERE user_id=%s AND session_id=%s AND scope=%s "
-            "AND memory_epoch=%s AND status='active' ORDER BY generation DESC LIMIT 1",
-            (
-                auth.user_id,
-                session_id,
-                session["selected_company_id"] or "@user",
-                core["memory_epoch"],
-            ),
-        ).fetchone()
+        from app.context_scope import find_summary
+
+        summary = find_summary(
+            conn,
+            projection,
+            session["selected_company_id"] or "@user",
+            core["memory_epoch"],
+            binding=binding,
+        )
         if summary and settings.context_use_summary:
             try:
                 validate_summary(conn, projection, summary["content"], summary["covered_sources"])
@@ -84,6 +83,42 @@ def preview(db, settings, auth, session_id, draft):
         summary["covered_sources"] if summary else [],
         preserve_recent=RECENT_DIALOGUE_TURNS,
     )
+    from app.agent_authority import enabled_definitions
+    from app.agent_capabilities import CapabilityPolicy, filter_definitions
+    from app.context_scope import filter_history
+    from app.tool_schemas import TOOLS
+
+    definitions = tool_definitions()
+    instructions = ""
+    with db.transaction(readonly=True) as conn:
+        definitions = enabled_definitions(conn, definitions)
+        if binding:
+            snapshot = binding["snapshot"]
+            groups = filter_history(conn, snapshot, groups)
+            grants = {name: frozenset(actions) for name, actions in snapshot["tool_grants"].items()}
+            if snapshot["knowledge_mode"] != "authorized":
+                for name in (
+                    "search_conversations",
+                    "read_conversation",
+                    "search_history",
+                    "read_history",
+                ):
+                    grants.pop(name, None)
+            if snapshot["knowledge_mode"] == "none":
+                for name in ("search_knowledge", "read_evidence"):
+                    grants.pop(name, None)
+            definitions = filter_definitions(
+                definitions, CapabilityPolicy(frozenset(TOOLS), grants, grants, frozenset(TOOLS))
+            )
+            instructions = "\nAgent 职责（不能改变平台权限或用户授权）：\n" + snapshot["prompt"]
+            for ref in snapshot["skill_versions"]:
+                skill = conn.execute(
+                    "SELECT config FROM agent_skill_versions WHERE skill_id=%s AND version=%s",
+                    (ref["skill_id"], ref["version"]),
+                ).fetchone()
+                instructions += (
+                    "\nSkill " + skill["config"]["name"] + "：" + skill["config"]["instructions"]
+                )
     # Request-specific scope bindings and attachments only exist after acceptance.
     # Keep these explicit placeholders, not invented real identifiers or facts.
     state = {
@@ -99,7 +134,12 @@ def preview(db, settings, auth, session_id, draft):
         "knowledge_candidates": [],
         "last_visible_view": None,
     }
-    messages = [{"role": "system", "content": SYSTEM_PROMPT + "\n正式状态：\n" + canonical(state)}]
+    messages = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT + instructions + "\n正式状态：\n" + canonical(state),
+        }
+    ]
     if summary:
         messages.append(
             {
@@ -112,12 +152,14 @@ def preview(db, settings, auth, session_id, draft):
     messages.append({"role": "user", "content": draft})
     # The real assembler may filter schemas. Include the full registered set and
     # declare unknown dynamic state rather than pretending this is an exact count.
-    payload = build_request(settings, messages, tools=tool_definitions())
+    payload = build_request(settings, messages, tools=definitions)
     count, limits = estimate_tokens(payload), settings.context_limits
     window = limits["effective_window"]
     pressure = count + limits["output_reserve"] + (limits["margin"] or 0)
     return {
         "approximate": True,
+        "agent_id": str(binding["agent_id"]) if binding else None,
+        "tool_count": len(definitions),
         "window_status": limits["window_status"],
         "model_capacity_source": limits.get("model_capacity_source"),
         "effective_window": window,
