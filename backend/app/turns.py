@@ -46,10 +46,10 @@ def accept_turn(
     if agent_id is not None:
         fingerprint = digest([fingerprint, agent_id])
     with db.transaction() as conn:
-        if agent_id is not None:
-            from app.agent_authority import LOCK_ID
+        from app.agent_authority import LOCK_ID, bind_turn
+        from app.model_connection import bind_default_in
 
-            conn.execute("SELECT pg_advisory_xact_lock_shared(%s)", (LOCK_ID,))
+        conn.execute("SELECT pg_advisory_xact_lock_shared(%s)", (LOCK_ID,))
         conn.execute("SELECT * FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,))
         session = owned(conn, "sessions", "session_id", session_id, auth)
         if check_expected_company and session["selected_company_id"] != expected_company_id:
@@ -100,10 +100,8 @@ def accept_turn(
             "INSERT INTO turns(turn_id,session_id,user_id,client_request_id,request_hash,source_seq,text) VALUES(%s,%s,%s,%s,%s,%s,%s)",
             (turn_id, session_id, auth.user_id, client_request_id, fingerprint, sequence, text),
         )
-        if agent_id is not None:
-            from app.agent_authority import bind_turn
-
-            bind_turn(conn, auth, turn_id, agent_id)
+        agent_binding = bind_turn(conn, auth, turn_id, agent_id) if agent_id is not None else None
+        bind_default_in(conn, turn_id, agent_binding)
         conn.execute("UPDATE turns SET upload_ids=%s WHERE turn_id=%s", (upload_ids, turn_id))
         conn.execute(
             "UPDATE turns SET knowledge_upload_ids=%s WHERE turn_id=%s",

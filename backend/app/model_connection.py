@@ -109,13 +109,17 @@ class ModelConnection:
             "test_status": self.test_status,
         }
 
+    def _probe_configuration(self):
+        return self.current
+
     async def test_and_enable(self, form: ConnectionInput | None, *, enable_guard=None):
         if self.testing.locked():
             raise AppError("MODEL_TEST_BUSY", "已有连接测试在进行，请稍后再试。", 409)
         async with self.testing:
             try:
-                settings, candidate = self.current
-                if form is not None:
+                if form is None:
+                    settings, candidate = self._probe_configuration()
+                else:
                     settings = _candidate(self.base, form)
                     candidate = HttpModel(settings)
                 if not settings.model_configured:
@@ -182,13 +186,156 @@ class ModelConnection:
                 ) from exc
             previous, prior_status = self.current, self.test_status
             try:
-                with enable_guard() if enable_guard else nullcontext():
+                with enable_guard(settings, candidate) if enable_guard else nullcontext():
                     self.current = (settings, candidate)
                     self.test_status = "success"
             except Exception:
                 self.current, self.test_status = previous, prior_status
                 raise
             return self.status()
+
+
+def default_version_in(conn, version=None):
+    columns = "version,source,model_id,config_fingerprint"
+    if version is not None:
+        return conn.execute(
+            f"SELECT {columns} FROM default_model_versions WHERE version=%s", (version,)
+        ).fetchone()
+    return conn.execute(
+        f"SELECT {columns} FROM default_model_versions ORDER BY version DESC LIMIT 1"
+    ).fetchone()
+
+
+def bind_default_in(conn, turn_id, agent_binding):
+    """The caller holds the configuration lock until its acceptance commits."""
+    if agent_binding and agent_binding["snapshot"]["model_profile_id"] != "default":
+        return None
+    active = default_version_in(conn)
+    if active:
+        conn.execute(
+            "UPDATE turns SET default_model_version=%s WHERE turn_id=%s",
+            (active["version"], turn_id),
+        )
+        return active["version"]
+    return None
+
+
+class DefaultModelConnection(ModelConnection):
+    """Database orders activations. Page credentials live only in the activating process."""
+
+    def __init__(self, db, settings):
+        super().__init__(settings)
+        self.db = db
+        self.env = self.current
+        unavailable = settings.model_copy(update={"model_api_key": ""})
+        self.unavailable = (unavailable, HttpModel(unavailable))
+        self.versions = {}
+        self.tested_version = None
+
+    def initialize(self):
+        from app.agent_authority import LOCK_ID
+
+        with self.db.transaction() as conn:
+            if not conn.execute(
+                "SELECT to_regclass('public.default_model_versions') AS t"
+            ).fetchone()["t"]:
+                return
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (LOCK_ID,))
+            if self.base.model_configured and not default_version_in(conn):
+                self._insert_in(conn, self.base)
+
+    def _insert_in(self, conn, settings):
+        from app.compaction_requests import model_fingerprint
+
+        latest = default_version_in(conn)
+        version = latest["version"] + 1 if latest else 1
+        conn.execute(
+            "INSERT INTO default_model_versions(version,source,model_id,config_fingerprint) VALUES(%s,%s,%s,%s)",
+            (
+                version,
+                "env" if settings is self.base else "page",
+                settings.model_id,
+                model_fingerprint(settings),
+            ),
+        )
+        return version
+
+    @contextmanager
+    def activation(self, auth, settings, candidate):
+        from app.agent_authority import LOCK_ID
+        from app.agent_profiles import _require_manager
+        from app.agent_skills import record_event
+
+        version = None
+        try:
+            with self.db.transaction() as conn:
+                conn.execute("SELECT pg_advisory_xact_lock(%s)", (LOCK_ID,))
+                _require_manager(conn, auth, lock=True)
+                version = self._insert_in(conn, settings)
+                record_event(conn, auth, "model", "default", "publish", version)
+                self.versions[version] = (settings, candidate)
+                yield
+        except BaseException:
+            self.versions.pop(version, None)
+            raise
+        self.tested_version = version
+
+    def _connection_for(self, row):
+        from app.compaction_requests import model_fingerprint
+
+        if not row:
+            return None
+        if row["version"] in self.versions:
+            return self.versions[row["version"]]
+        if (
+            row["source"] == "env"
+            and self.base.model_configured
+            and (row["config_fingerprint"] == model_fingerprint(self.base))
+        ):
+            return self.env
+        return None
+
+    def resolve(self, conn, version):
+        if version is None:
+            raise AppError(
+                "DEFAULT_MODEL_UNBOUND", "原请求没有可证明的默认模型版本，请配置后重新发起。", 409
+            )
+        connection = self._connection_for(default_version_in(conn, version))
+        if connection is None:
+            raise AppError(
+                "DEFAULT_MODEL_VERSION_UNAVAILABLE",
+                "原连接不可用，请重新配置模型并重新发起请求。",
+                503,
+                details={"model_profile_id": "default", "model_profile_version": version},
+            )
+        return connection
+
+    def active_configuration(self):
+        with self.db.transaction(readonly=True) as conn:
+            return self._connection_for(default_version_in(conn)) or self.unavailable
+
+    def _probe_configuration(self):
+        active = self.active_configuration()
+        return active if active[0].model_configured else self.env
+
+    def status(self):
+        with self.db.transaction(readonly=True) as conn:
+            row = default_version_in(conn)
+            configured = self._connection_for(row) is not None
+        version = row["version"] if row else None
+        status = "unconfigured"
+        if self.test_status == "failed":
+            status = "failed"
+        elif configured:
+            status = "success" if version == self.tested_version else "untested"
+        return {
+            "configured": configured,
+            "source": row["source"] if row else "none",
+            "model_id": row["model_id"] if row else None,
+            "version": version,
+            "env_available": self.base.model_configured,
+            "test_status": status,
+        }
 
 
 def model_connection_router(connection: ModelConnection, db, auth_dependency):
@@ -220,9 +367,15 @@ def model_connection_router(connection: ModelConnection, db, auth_dependency):
             ) from exc
 
         @contextmanager
-        def enable_guard():
+        def enable_guard(settings, candidate):
+            if isinstance(connection, DefaultModelConnection):
+                with connection.activation(current, settings, candidate):
+                    yield
+                return
             with db.transaction() as conn:
-                conn.execute("SELECT pg_advisory_xact_lock(8123419417)")
+                from app.agent_authority import LOCK_ID
+
+                conn.execute("SELECT pg_advisory_xact_lock(%s)", (LOCK_ID,))
                 _require_manager(conn, current, lock=True)
                 yield
 

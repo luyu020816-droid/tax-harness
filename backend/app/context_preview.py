@@ -83,42 +83,50 @@ def preview(db, settings, auth, session_id, draft, *, binding=None):
         summary["covered_sources"] if summary else [],
         preserve_recent=RECENT_DIALOGUE_TURNS,
     )
-    from app.agent_authority import enabled_definitions
-    from app.agent_capabilities import CapabilityPolicy, filter_definitions
+    from app.agent_authority import (
+        _disabled_tools,
+        capability_policy,
+        enabled_definitions,
+        skill_availability,
+    )
+    from app.agent_capabilities import filter_definitions, missing_actions, offered_actions
     from app.context_scope import filter_history
-    from app.tool_schemas import TOOLS
 
-    definitions = tool_definitions()
+    unavailable = {"inspect_workbook", "query_workbook", "search_history", "read_history"}
+    if not summary:
+        unavailable.add("read_summary_source")
+    definitions = [
+        item for item in tool_definitions() if item["function"]["name"] not in unavailable
+    ]
     instructions = ""
+    active, inactive = [], []
     with db.transaction(readonly=True) as conn:
         definitions = enabled_definitions(conn, definitions)
         if binding:
             snapshot = binding["snapshot"]
             groups = filter_history(conn, snapshot, groups)
-            grants = {name: frozenset(actions) for name, actions in snapshot["tool_grants"].items()}
-            if snapshot["knowledge_mode"] != "authorized":
-                for name in (
-                    "search_conversations",
-                    "read_conversation",
-                    "search_history",
-                    "read_history",
-                ):
-                    grants.pop(name, None)
-            if snapshot["knowledge_mode"] == "none":
-                for name in ("search_knowledge", "read_evidence"):
-                    grants.pop(name, None)
-            definitions = filter_definitions(
-                definitions, CapabilityPolicy(frozenset(TOOLS), grants, grants, frozenset(TOOLS))
-            )
+            policy = capability_policy(snapshot, snapshot, _disabled_tools(conn))
+            definitions = filter_definitions(definitions, policy)
             instructions = "\nAgent 职责（不能改变平台权限或用户授权）：\n" + snapshot["prompt"]
-            for ref in snapshot["skill_versions"]:
-                skill = conn.execute(
-                    "SELECT config FROM agent_skill_versions WHERE skill_id=%s AND version=%s",
-                    (ref["skill_id"], ref["version"]),
-                ).fetchone()
-                instructions += (
-                    "\nSkill " + skill["config"]["name"] + "：" + skill["config"]["instructions"]
+            eligible, excluded = skill_availability(conn, snapshot, policy)
+            inactive = [*snapshot.get("inactive_skills", []), *excluded]
+            available = offered_actions(definitions)
+            for ref, skill in eligible:
+                missing = missing_actions(
+                    skill["tool_grants"], lambda name: available.get(name, frozenset())
                 )
+                if missing:
+                    inactive.append(
+                        {
+                            **ref,
+                            "name": skill["name"],
+                            "reason": "当前预估未装配所需工具动作",
+                            "missing_tools": missing,
+                        }
+                    )
+                else:
+                    active.append((ref, skill))
+                    instructions += "\nSkill " + skill["name"] + "：" + skill["instructions"]
     # Request-specific scope bindings and attachments only exist after acceptance.
     # Keep these explicit placeholders, not invented real identifiers or facts.
     state = {
@@ -160,6 +168,9 @@ def preview(db, settings, auth, session_id, draft, *, binding=None):
         "approximate": True,
         "agent_id": str(binding["agent_id"]) if binding else None,
         "tool_count": len(definitions),
+        "tool_names": [item["function"]["name"] for item in definitions],
+        "skill_versions": [ref for ref, _ in active],
+        "inactive_skills": inactive,
         "window_status": limits["window_status"],
         "model_capacity_source": limits.get("model_capacity_source"),
         "effective_window": window,

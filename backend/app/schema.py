@@ -3,7 +3,29 @@
 SCHEMA_LOCK = 8123419426
 SEMIFINAL_VERSION = 26
 SEMIFINAL_SCRIPT = "026_semifinal_schema.sql"
-REQUIRED_VERSIONS = {5, 7, 8, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27}
+REQUIRED_VERSIONS = {
+    5,
+    7,
+    8,
+    10,
+    11,
+    12,
+    13,
+    14,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+}
 
 _COLUMNS = {
     "workbook_snapshots": {"version_id": "uuid", "snapshot": "jsonb"},
@@ -25,6 +47,13 @@ _COLUMNS = {
     "write_plans": {"task_id": "uuid", "task_generation": "bigint", "task_period": "text"},
     "summaries": {"agent_scope": "text"},
     "schema_migrations": {"script_name": "text"},
+    "default_model_versions": {
+        "version": "bigint",
+        "source": "text",
+        "model_id": "text",
+        "config_fingerprint": "text",
+    },
+    "turns": {"default_model_version": "bigint"},
 }
 
 _CONSTRAINTS = {
@@ -71,6 +100,11 @@ _CONSTRAINTS = {
         "((task_id IS NOT NULL) AND (task_generation IS NOT NULL) AND (task_period IS NOT NULL))))",
     ),
     "schema_migrations_script_name_key": ("schema_migrations", "UNIQUE (script_name)"),
+    "default_model_versions_pkey": ("default_model_versions", "PRIMARY KEY (version)"),
+    "turns_default_model_version_fkey": (
+        "turns",
+        "FOREIGN KEY (default_model_version) REFERENCES default_model_versions(version)",
+    ),
 }
 
 _INDEXES = {
@@ -121,7 +155,7 @@ def semifinal_schema_issues(conn):
     issues = []
     for table, fields in _COLUMNS.items():
         for field, data_type in fields.items():
-            required = table not in ("write_plans", "schema_migrations")
+            required = table not in ("write_plans", "schema_migrations", "turns")
             default = {"agent_scope": "''::text", "created_at": "clock_timestamp()"}.get(field)
             if columns.get((table, field)) != (data_type, required, default):
                 issues.append(f"{table}.{field}")

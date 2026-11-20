@@ -95,6 +95,8 @@ def test_configured_env_can_be_tested_without_sending_its_key(monkeypatch, db):
             "configured": True,
             "source": "env",
             "model_id": "env-model",
+            "version": 2,
+            "env_available": True,
             "test_status": "success",
         }
         assert "env-fixture-key" not in result.text
@@ -152,9 +154,11 @@ def test_failed_probe_does_not_replace_active_configuration(monkeypatch, reason,
     app = make_app(db)
     with browser(app) as client:
         original = app.state.runtime._model_for()
+        version = client.get(URL).json()["version"]
         result = client.post(URL + "/test", json=FORM, headers={"Origin": LOCAL})
         assert result.status_code == 422 and result.json()["code"] == wanted
         assert client.get(URL).json()["test_status"] == "failed"
+        assert client.get(URL).json()["version"] == version
         assert app.state.runtime._model_for() is original
         assert FORM["api_key"] not in result.text
 

@@ -1,6 +1,7 @@
 import pytest
 from test_conversation_context import settled
-from test_runtime import model_settings
+from test_model_connection import browser, make_app
+from test_runtime import model_settings, tool
 
 from app import context
 from app.agent_authority import bind_turn
@@ -11,6 +12,7 @@ from app.agent_tools import set_enabled as set_tool
 from app.errors import AppError
 from app.identity import Identity
 from app.preferences import change_preference
+from app.tools import ToolExecutor
 from app.values import uid
 
 
@@ -134,3 +136,124 @@ def test_restricted_agent_context_excludes_unbound_prior_assistant_text(
     payload, manifest, _ = context.assemble(db, model_settings(settings), execution, [])
     assert "SECRET-DOCUMENT-419" not in str(payload)
     assert any(item["reason"] == "AGENT_KNOWLEDGE_SCOPE" for item in manifest["excluded_history"])
+
+
+def test_cap01_shared_skill_is_removed_when_required_tool_is_disabled(
+    db, settings, execution_factory
+):
+    auth = Identity("U001")
+    marker = "通过票号核对的共享指引"
+    skill = publish_skill(
+        db,
+        auth,
+        SkillDraft(
+            name="发票核对共享能力", instructions=marker, tool_grants={"find_invoices": ["invoke"]}
+        ),
+    )
+    other = publish_skill(
+        db,
+        auth,
+        SkillDraft(
+            name="保留规则指引", instructions="核对适用版本", tool_grants={"get_rules": ["invoke"]}
+        ),
+    )
+    agents = []
+    for name in ("只读核对", "办理核对"):
+        agent = create_draft(
+            db,
+            auth,
+            AgentDraft(
+                name=name,
+                model_profile_id="default",
+                skill_ids=[skill["skill_id"], other["skill_id"]],
+                tool_grants={"find_invoices": ["invoke"], "get_rules": ["invoke"]},
+            ),
+        )
+        agent = publish(db, auth, agent["agent_id"], agent["revision"])
+        agents.append(set_enabled(db, auth, agent["agent_id"], agent["revision"], True))
+
+    def bound(agent):
+        ex = execution_factory("查询甲企业发票")
+        with db.transaction() as conn:
+            conn.execute("UPDATE turns SET status='queued' WHERE turn_id=%s", (ex.turn_id,))
+            bind_turn(conn, auth, ex.turn_id, agent["agent_id"])
+            conn.execute("UPDATE turns SET status='running' WHERE turn_id=%s", (ex.turn_id,))
+        return ex
+
+    config = model_settings(settings)
+    old = bound(agents[0])
+    prior, manifest, _ = context.assemble(db, config, old, [])
+    assert marker in prior["messages"][0]["content"]
+    set_tool(db, auth, "find_invoices", 0, False)
+    during = []
+    with browser(make_app(db)) as client:
+        managed = client.get("/api/v1/agent-admin/agents").json()["agents"]
+        for agent in agents:
+            ex = bound(agent)
+            during.append(ex)
+            payload, _, _ = context.assemble(db, config, ex, [])
+            names = {spec["function"]["name"] for spec in payload["tools"]}
+            assert names == {"get_rules"}
+            assert marker not in payload["messages"][0]["content"]
+            assert "核对适用版本" in payload["messages"][0]["content"]
+            preview = client.post(
+                f"/api/v1/sessions/{ex.session_id}/context-preview",
+                json={"agent_id": agent["agent_id"], "draft": "查询甲企业发票"},
+            ).json()
+            assert set(preview["tool_names"]) == names
+            assert [ref["skill_id"] for ref in preview["skill_versions"]] == [other["skill_id"]]
+            [inactive] = preview["inactive_skills"]
+            assert inactive["skill_id"] == skill["skill_id"]
+            assert inactive["missing_tools"] == {"find_invoices": ["invoke"]}
+            record = next(row for row in managed if row["agent_id"] == agent["agent_id"])
+            assert record["inactive_skills"] == preview["inactive_skills"]
+            denied, _ = ToolExecutor(db).execute(
+                ex, tool("find_invoices", {"company_id": "C001"})["tool_calls"][0]
+            )
+            assert denied["error"]["code"] == "AGENT_CAPABILITY_DENIED"
+        set_tool(db, auth, "find_invoices", 1, True)
+        managed = client.get("/api/v1/agent-admin/agents").json()["agents"]
+        for agent in agents:
+            payload, _, _ = context.assemble(db, config, bound(agent), [])
+            assert marker in payload["messages"][0]["content"]
+            assert "find_invoices" in {spec["function"]["name"] for spec in payload["tools"]}
+            assert not next(row for row in managed if row["agent_id"] == agent["agent_id"])[
+                "inactive_skills"
+            ]
+    for ex in during:
+        payload, _, _ = context.assemble(db, config, ex, [])
+        assert marker not in payload["messages"][0]["content"]
+        assert "find_invoices" not in {spec["function"]["name"] for spec in payload["tools"]}
+    with pytest.raises(AppError, match="停用"):
+        context.validate(db, old, prior, manifest)
+
+
+def test_cap01_skill_requires_tool_in_the_actual_request_schema(db, settings, execution_factory):
+    auth = Identity("U001")
+    marker = "先读取工作簿结构，再核对金额列"
+    skill = publish_skill(
+        db,
+        auth,
+        SkillDraft(
+            name="工作簿指引", instructions=marker, tool_grants={"inspect_workbook": ["invoke"]}
+        ),
+    )
+    draft = AgentDraft(
+        name="工作簿助手",
+        model_profile_id="default",
+        skill_ids=[skill["skill_id"]],
+        tool_grants={"inspect_workbook": ["invoke"]},
+        knowledge_mode="authorized",
+    )
+    agent = create_draft(db, auth, draft)
+    agent = publish(db, auth, agent["agent_id"], agent["revision"])
+    agent = set_enabled(db, auth, agent["agent_id"], agent["revision"], True)
+    ex = execution_factory("你好。")
+    with db.transaction() as conn:
+        conn.execute("UPDATE turns SET status='queued' WHERE turn_id=%s", (ex.turn_id,))
+        binding = bind_turn(conn, auth, ex.turn_id, agent["agent_id"])
+        conn.execute("UPDATE turns SET status='running' WHERE turn_id=%s", (ex.turn_id,))
+    assert binding["snapshot"]["skill_versions"]
+    payload, _, _ = context.assemble(db, model_settings(settings), ex, [])
+    assert "inspect_workbook" not in {spec["function"]["name"] for spec in payload.get("tools", [])}
+    assert marker not in payload["messages"][0]["content"]

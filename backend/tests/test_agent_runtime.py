@@ -1,13 +1,77 @@
 import pytest
 from test_judge_boundaries import raw_final
+from test_model_connection import FORM, LOCAL, URL, browser, make_app, probe_reply
 from test_runtime import ScriptedModel, final, model_settings, tool
 
 from app.agent_profiles import AgentDraft, create_draft, publish, set_enabled
 from app.identity import Identity, create_session
+from app.model import HttpModel
 from app.runtime import Runtime
 from app.trace import read_run
 from app.turns import accept_turn, read_turn
 from app.values import uid
+
+
+@pytest.mark.asyncio
+async def test_ag01_default_model_is_bound_when_request_is_accepted(db, admin, monkeypatch):
+    seen = []
+
+    async def complete(self, payload):
+        if any(item["function"]["name"] == "connection_probe" for item in payload.get("tools", [])):
+            return probe_reply()
+        seen.append(payload["model"])
+        return {"message": raw_final([{"type": "chat_answer", "text": "问候已送达。"}])}
+
+    monkeypatch.setattr(HttpModel, "complete", complete)
+    app = make_app(db)
+    auth = Identity("U001")
+    session = str(create_session(db, auth, "C001")["session_id"])
+    agent = create_draft(db, auth, AgentDraft(name="默认连接 Agent", model_profile_id="default"))
+    agent = publish(db, auth, agent["agent_id"], agent["revision"])
+    set_enabled(db, auth, agent["agent_id"], agent["revision"], True)
+    with browser(app) as client:
+
+        def queue():
+            reply = client.post(
+                f"/api/v1/sessions/{session}/turns",
+                json={
+                    "client_request_id": uid(),
+                    "text": "请写一句简短的问候。",
+                    "agent_id": agent["agent_id"],
+                },
+            )
+            assert reply.status_code == 202, reply.text
+            return reply.json()
+
+        first = queue()
+        switched = client.post(URL + "/test", json=FORM, headers={"Origin": LOCAL})
+        assert switched.status_code == 200
+        second = queue()
+        runtime = app.state.runtime
+        assert first["default_model_version"] < second["default_model_version"]
+        # The first worker is claimed, but never gets to send. A reclaim after
+        # activation still resolves the first request's immutable version.
+        leased = runtime.claim()
+        assert leased.turn_id == first["turn_id"]
+        assert runtime._model_for(leased)[0].model_id == "env-model"
+        admin.execute(
+            "UPDATE work_items SET lease_until=now()-interval '1 second' WHERE work_id=%s",
+            (leased.work_id,),
+        )
+        for turn, model_name in ((first, "env-model"), (second, FORM["model_id"])):
+            execution = runtime.claim()
+            assert execution.turn_id == turn["turn_id"]
+            await runtime.run(execution)
+            assert read_turn(db, auth, execution.turn_id)["status"] == "completed"
+            trace = read_run(db, auth, execution.run_id)
+            assert trace["model_binding"] == {
+                "profile_id": "default",
+                "version": turn["default_model_version"],
+                "model_id": model_name,
+            }
+            assert FORM["api_key"] not in str(trace) and "env-fixture-key" not in str(trace)
+        assert read_turn(db, auth, first["turn_id"])["active_run_generation"] == 2
+    assert seen == ["env-model", FORM["model_id"]]
 
 
 def test_agent_runtime_stays_disabled_by_default_until_verified(db, settings):

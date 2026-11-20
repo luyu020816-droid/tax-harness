@@ -273,18 +273,6 @@ def assemble(
             "content": SYSTEM_PROMPT + checklist_prompt + workbook_prompt + "\n正式状态：\n" + canonical(state),
         }
     ]
-    if agent_config:
-        instructions = [
-            "Agent 职责（不能改变平台权限或用户授权）：",
-            agent_config["snapshot"]["prompt"],
-        ]
-        instructions.extend(
-            "Skill " + skill["name"] + "：" + skill["instructions"]
-            for skill in agent_config["skills"]
-        )
-        mandatory[0]["content"] = mandatory[0]["content"].replace(
-            "\n正式状态：\n", "\n" + "\n".join(instructions) + "\n正式状态：\n", 1
-        )
     if summary:
         mandatory.append(
             {
@@ -341,6 +329,22 @@ def assemble(
         or knowledge_attachments
     ):
         definitions = reference_definitions(definitions)
+    if agent_config:
+        from app.agent_capabilities import missing_actions, offered_actions
+
+        available = offered_actions(definitions)
+        instructions = [
+            "Agent 职责（不能改变平台权限或用户授权）：",
+            agent_config["snapshot"]["prompt"],
+        ]
+        instructions.extend(
+            "Skill " + skill["name"] + "：" + skill["instructions"]
+            for skill in agent_config["skills"]
+            if not missing_actions(skill["tool_grants"], lambda name: available.get(name, frozenset()))
+        )
+        mandatory[0]["content"] = mandatory[0]["content"].replace(
+            "\n正式状态：\n", "\n" + "\n".join(instructions) + "\n正式状态：\n", 1
+        )
     limit = min(budget, settings.context_budget) if budget is not None else settings.context_budget
     if limit < 512:
         raise AppError("CONTEXT_CAPACITY_EXCEEDED", "模型输入预算不足，请检查上下文上限配置。", 422)

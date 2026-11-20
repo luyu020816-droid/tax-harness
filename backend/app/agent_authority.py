@@ -5,7 +5,7 @@ commits. Configuration publication and capability changes use the exclusive
 form of the same lock.
 """
 
-from app.agent_capabilities import CapabilityPolicy, restrict_document_ids
+from app.agent_capabilities import CapabilityPolicy, missing_actions, restrict_document_ids
 from app.errors import AppError
 from app.tool_schemas import TOOLS
 from app.values import jsonb, safe_json
@@ -15,6 +15,110 @@ LOCK_ID = 8123419417
 
 def _grants(config):
     return {name: frozenset(actions) for name, actions in config["tool_grants"].items()}
+
+
+def _disabled_tools(conn):
+    return {
+        r["tool_name"]
+        for r in conn.execute("SELECT tool_name FROM agent_tool_states WHERE NOT enabled")
+    }
+
+
+def capability_policy(snapshot, current, disabled, *, agent_enabled=True):
+    current_grants = _grants(current)
+    if snapshot["knowledge_mode"] != "authorized":
+        # Restricted knowledge must not be widened through historical excerpts.
+        for name in ("search_conversations", "read_conversation", "search_history", "read_history"):
+            current_grants.pop(name, None)
+    if snapshot["knowledge_mode"] == "none":
+        for name in ("search_knowledge", "read_evidence", "inspect_workbook", "query_workbook"):
+            current_grants.pop(name, None)
+    return CapabilityPolicy(
+        registered=frozenset(TOOLS),
+        bound_grants=_grants(snapshot),
+        current_grants=current_grants,
+        enabled_tools=frozenset(TOOLS) - disabled,
+        agent_enabled=agent_enabled,
+    )
+
+
+def skill_availability(conn, snapshot, policy):
+    active, inactive = [], []
+    for ref in snapshot["skill_versions"]:
+        row = conn.execute(
+            "SELECT s.enabled,s.name,v.config FROM agent_skills s LEFT JOIN agent_skill_versions v "
+            "ON v.skill_id=s.skill_id AND v.version=%s WHERE s.skill_id=%s",
+            (ref["version"], ref["skill_id"]),
+        ).fetchone()
+        if not row or not row["config"]:
+            inactive.append(
+                {
+                    **ref,
+                    "name": row["name"] if row else ref["skill_id"],
+                    "reason": "Skill 版本不可用",
+                }
+            )
+            continue
+        config = row["config"]
+        missing = missing_actions(config["tool_grants"], policy.actions)
+        needs_scope = config["requires_knowledge"] and (
+            snapshot["knowledge_mode"] == "none"
+            or (snapshot["knowledge_mode"] == "selected" and not snapshot["knowledge_document_ids"])
+        )
+        if not row["enabled"] or missing or needs_scope:
+            reason = (
+                "Skill 已停用"
+                if not row["enabled"]
+                else "知识范围不可用"
+                if needs_scope
+                else "依赖工具动作不可用"
+            )
+            inactive.append(
+                {**ref, "name": config["name"], "reason": reason, "missing_tools": missing}
+            )
+        else:
+            active.append((ref, config))
+    return active, inactive
+
+
+def effective_snapshot(conn, snapshot):
+    """Current configuration for a new request, shared by acceptance and previews."""
+    policy = capability_policy(snapshot, snapshot, _disabled_tools(conn))
+    active, inactive = skill_availability(conn, snapshot, policy)
+    return {
+        **snapshot,
+        "tool_grants": {
+            name: sorted(policy.actions(name))
+            for name in snapshot["tool_grants"]
+            if policy.actions(name)
+        },
+        "skill_versions": [ref for ref, _ in active],
+        "inactive_skills": inactive,
+    }
+
+
+def _revocations_after(conn, binding):
+    snapshot = binding["snapshot"]
+    rows = conn.execute(
+        "SELECT kind,capability_id FROM agent_capability_events WHERE action='disable' AND created_at>%s "
+        "AND ((kind='tool' AND capability_id=ANY(%s)) OR (kind='skill' AND capability_id=ANY(%s)))",
+        (
+            binding["bound_at"],
+            list(snapshot["tool_grants"]),
+            [s["skill_id"] for s in snapshot["skill_versions"]],
+        ),
+    ).fetchall()
+    return {(r["kind"], r["capability_id"]) for r in rows}
+
+
+def _agent_was_disabled(conn, binding):
+    return (
+        conn.execute(
+            "SELECT 1 FROM agent_config_events WHERE agent_id=%s AND action='disable' AND created_at>%s LIMIT 1",
+            (binding["agent_id"], binding["bound_at"]),
+        ).fetchone()
+        is not None
+    )
 
 
 def bind_turn(conn, auth, turn_id, agent_id):
@@ -33,22 +137,7 @@ def bind_turn(conn, auth, turn_id, agent_id):
     ).fetchone()
     if not profile or not profile["enabled"]:
         raise AppError("AGENT_UNAVAILABLE", "Agent 未启用或尚未发布。", 409)
-    config = dict(profile["config"])
-    disabled = {
-        r["tool_name"]
-        for r in conn.execute("SELECT tool_name FROM agent_tool_states WHERE NOT enabled")
-    }
-    config["tool_grants"] = {
-        name: actions for name, actions in config["tool_grants"].items() if name not in disabled
-    }
-    skills = []
-    for skill in config["skill_versions"]:
-        state = conn.execute(
-            "SELECT enabled FROM agent_skills WHERE skill_id=%s", (skill["skill_id"],)
-        ).fetchone()
-        if state and state["enabled"]:
-            skills.append(skill)
-    config["skill_versions"] = skills
+    config = effective_snapshot(conn, profile["config"])
     conn.execute(
         "INSERT INTO agent_turn_bindings(turn_id,agent_id,agent_version,snapshot) VALUES(%s,%s,%s,%s)",
         (turn_id, agent_id, profile["current_version"], jsonb(config)),
@@ -72,26 +161,14 @@ def policy_for_turn(conn, turn_id):
         return None
     if binding["current_config"] is None:
         raise AppError("AGENT_UNAVAILABLE", "Agent 配置已失效。", 409)
-    enabled = frozenset(TOOLS) - {
-        row["tool_name"]
-        for row in conn.execute("SELECT tool_name FROM agent_tool_states WHERE NOT enabled")
+    disabled = _disabled_tools(conn) | {
+        name for kind, name in _revocations_after(conn, binding) if kind == "tool"
     }
-    current_grants = _grants(binding["current_config"])
-    mode = binding["snapshot"]["knowledge_mode"]
-    if mode != "authorized":
-        # Historical conversation tools can return prior assistant text derived
-        # from documents outside a restricted agent's current scope.
-        for name in ("search_conversations", "read_conversation", "search_history", "read_history"):
-            current_grants.pop(name, None)
-    if mode == "none":
-        for name in ("search_knowledge", "read_evidence", "inspect_workbook", "query_workbook"):
-            current_grants.pop(name, None)
-    return CapabilityPolicy(
-        registered=frozenset(TOOLS),
-        bound_grants=_grants(binding["snapshot"]),
-        current_grants=current_grants,
-        enabled_tools=frozenset(enabled),
-        agent_enabled=binding["enabled"],
+    return capability_policy(
+        binding["snapshot"],
+        binding["current_config"],
+        disabled,
+        agent_enabled=binding["enabled"] and not _agent_was_disabled(conn, binding),
     )
 
 
@@ -108,10 +185,7 @@ def authorize_tool(conn, turn_id, name, arguments):
 def enabled_definitions(conn, definitions):
     """Apply platform-wide tool switches, including the knowledge routing alias."""
     conn.execute("SELECT pg_advisory_xact_lock_shared(%s)", (LOCK_ID,))
-    disabled = {
-        row["tool_name"]
-        for row in conn.execute("SELECT tool_name FROM agent_tool_states WHERE NOT enabled")
-    }
+    disabled = _disabled_tools(conn)
     if disabled & {"get_rules", "search_knowledge"}:
         disabled.add("lookup_knowledge")
     return [d for d in definitions if d["function"]["name"] not in disabled]
@@ -141,16 +215,13 @@ def context_configuration(conn, turn_id):
     snapshot = conn.execute(
         "SELECT snapshot FROM agent_turn_bindings WHERE turn_id=%s", (turn_id,)
     ).fetchone()["snapshot"]
-    skills = []
-    for ref in snapshot["skill_versions"]:
-        row = conn.execute(
-            "SELECT config FROM agent_skill_versions WHERE skill_id=%s AND version=%s",
-            (ref["skill_id"], ref["version"]),
-        ).fetchone()
-        if not row:
-            raise AppError("AGENT_UNAVAILABLE", "Agent 的 Skill 版本不可用。", 409)
-        skills.append(row["config"])
-    return {"snapshot": snapshot, "policy": policy, "skills": skills}
+    active, inactive = skill_availability(conn, snapshot, policy)
+    return {
+        "snapshot": snapshot,
+        "policy": policy,
+        "skills": [config for _, config in active],
+        "inactive_skills": [*snapshot.get("inactive_skills", []), *inactive],
+    }
 
 
 def history_scope_allows(current, previous):
@@ -174,7 +245,7 @@ def validate_snapshot(conn, turn_id):
     """Reject reuse of a context whose originally granted scope was narrowed."""
     conn.execute("SELECT pg_advisory_xact_lock_shared(%s)", (LOCK_ID,))
     row = conn.execute(
-        "SELECT b.snapshot,p.enabled,v.config AS current_config "
+        "SELECT b.agent_id,b.bound_at,b.snapshot,p.enabled,v.config AS current_config "
         "FROM agent_turn_bindings b LEFT JOIN agent_profiles p USING(agent_id) "
         "LEFT JOIN agent_profile_versions v ON v.agent_id=p.agent_id AND v.version=p.current_version "
         "WHERE b.turn_id=%s",
@@ -183,7 +254,7 @@ def validate_snapshot(conn, turn_id):
     if not row:
         return
     current = row["current_config"]
-    if not row["enabled"] or current is None:
+    if not row["enabled"] or current is None or _agent_was_disabled(conn, row):
         raise AppError("AGENT_UNAVAILABLE", "Agent 已停用或配置已失效。", 409)
     snapshot = row["snapshot"]
     old, new = _grants(snapshot), _grants(current)
@@ -194,6 +265,10 @@ def validate_snapshot(conn, turn_id):
         (list(old),),
     ).fetchone():
         raise AppError("AGENT_AUTHORITY_CHANGED", "Agent 能力已停用，请重新发起请求。", 409)
+    if _revocations_after(conn, row):
+        raise AppError(
+            "AGENT_AUTHORITY_CHANGED", "原请求的工具或 Skill 曾停用，请重新发起请求。", 409
+        )
     current_skills = set(current["skill_ids"])
     for skill in snapshot["skill_versions"]:
         if skill["skill_id"] not in current_skills:

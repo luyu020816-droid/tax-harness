@@ -36,7 +36,7 @@ from app.identity import Identity
 from app.invoice_imports import InvoiceImports
 from app.knowledge import Knowledge
 from app.knowledge_jobs import KnowledgeJobs
-from app.model_connection import ModelConnection, model_connection_router
+from app.model_connection import DefaultModelConnection, model_connection_router
 from app.runtime import Runtime
 from app.tool_schemas import StrictModel
 from app.values import canonical, safe_json
@@ -126,7 +126,7 @@ def create_app(
         statement_timeout_ms=settings.statement_timeout_ms,
         lock_timeout_ms=settings.lock_timeout_ms,
     )
-    model_connection = ModelConnection(settings) if model is None else None
+    model_connection = DefaultModelConnection(db, settings) if model is None else None
     if model_connection:
         _, model = model_connection.current
     from app.agent_models import PersistentAgentModels
@@ -142,7 +142,7 @@ def create_app(
     )
 
     def model_ready():
-        return (model_connection.current[0] if model_connection else settings).model_configured
+        return runtime._model_for()[0].model_configured
 
     knowledge = Knowledge(db, settings)
     knowledge_jobs = KnowledgeJobs(db, settings, runtime.tools.retrieval.engine)
@@ -162,6 +162,8 @@ def create_app(
             db.open()
         if own_ingest:
             ingest_db.open()
+        if model_connection:
+            await asyncio.to_thread(model_connection.initialize)
         if start_workers:
             await runtime.start()
             await knowledge_jobs.start()
@@ -303,7 +305,7 @@ def create_app(
         return JSONResponse(
             {
                 "database": database_ready,
-                "model": model_ready(),
+                "model": model_ready() if database_ready else False,
                 "model_mode": model.mode,
                 "maintenance": maintenance,
                 "invoice_import_ready": imports.available(),
@@ -447,27 +449,16 @@ def create_app(
     def start_compaction(session_id: UUID, body: CompactionBody, current=auth_dependency):
         from app import compaction_requests
 
-        actual_settings, _ = runtime._model_for()
-        with db.transaction(readonly=True) as conn:
-            identity.owned(conn, "sessions", "session_id", str(session_id), current)
-            if body.agent_id:
-                from app.agent_preview import configuration
-
-                binding = configuration(conn, str(body.agent_id))
-                if binding["snapshot"]["model_profile_id"] != "default":
-                    actual_settings, _ = agent_models.resolve(
-                        binding["snapshot"]["model_profile_id"],
-                        binding["snapshot"]["model_profile_version"],
-                    )
-        if not actual_settings.model_configured:
-            raise AppError("MODEL_UNAVAILABLE", "请先配置模型，再压缩会话。", 503)
         task = compaction_requests.accept(
             db,
             current,
             str(session_id),
             body.client_request_id,
-            actual_settings,
+            settings,
             agent_id=str(body.agent_id) if body.agent_id else None,
+            model_connection=model_connection,
+            agent_models=agent_models,
+            require_configured=True,
         )
         return {"operation_id": task["turn_id"], "status": task["status"]}
 

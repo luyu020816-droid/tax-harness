@@ -146,13 +146,17 @@ def enqueue(db, auth, turn_id, operation_id, *, limits=None):
     return {"turn_id": turn_id, "queued": False, **verify(db, auth, turn_id, operation_id)}
 
 
-def continuation_in(conn, execution):
-    action = conn.execute(
+def action_in(conn, user_id, turn_id):
+    return conn.execute(
         "SELECT result_ref,expected_revision FROM memory_change_ops WHERE user_id=%s AND target_id=%s "
         "AND target_type='turn' AND action='resume_invoice_operation' AND state='committed' "
         "ORDER BY expected_revision DESC LIMIT 1",
-        (execution.auth.user_id, execution.turn_id),
+        (user_id, turn_id),
     ).fetchone()
+
+
+def continuation_in(conn, execution):
+    action = action_in(conn, execution.auth.user_id, execution.turn_id)
     if action and action["expected_revision"] == execution.generation:
         return action["result_ref"]
     if execution.generation > 1:

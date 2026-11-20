@@ -1,11 +1,18 @@
 from types import SimpleNamespace
 
 import pytest
+from test_model_connection import FORM, LOCAL, URL, browser, make_app, probe_reply
+from test_purpose_task_recovery import CONFIRMABLE
+from test_trusted_writes import candidate
 
+from app import invoice_write
 from app.agent_models import PersistentAgentModels
 from app.errors import AppError
-from app.identity import Identity
+from app.identity import Identity, create_session
+from app.model import HttpModel
 from app.model_connection import ModelConnection
+from app.turns import accept_turn, read_turn
+from app.values import uid
 
 
 def complete(coroutine):
@@ -64,3 +71,85 @@ def test_model_metadata_versions_survive_restart_but_keys_do_not(db, monkeypatch
         restarted.resolve("a", 1)
     with pytest.raises(AppError, match="没有 Agent"):
         complete(restarted.test_and_enable(Identity("U002"), "a", "模型 A", 2, form))
+
+
+def test_ag01_restarted_worker_does_not_replace_a_missing_page_connection(db, admin, monkeypatch):
+    async def probe(self, payload):
+        assert payload["tools"][0]["function"]["name"] == "connection_probe"
+        return probe_reply()
+
+    monkeypatch.setattr(HttpModel, "complete", probe)
+    auth = Identity("U001")
+    app = make_app(db)
+    with browser(app) as client:
+        activated = client.post(URL + "/test", json=FORM, headers={"Origin": LOCAL}).json()
+        session = str(create_session(db, auth, "C001")["session_id"])
+        old = accept_turn(db, auth, session, uid(), "请写一句问候。")
+        assert old["default_model_version"] == activated["version"]
+    # A second process has a working .env connection but lacks this page key.
+    restarted = make_app(db)
+    with browser(restarted) as client:
+        metadata = client.get(URL).json()
+        assert metadata["model_id"] == FORM["model_id"]
+        assert metadata["version"] == activated["version"]
+        assert not metadata["configured"] and metadata["env_available"]
+        assert restarted.state.runtime.claim() is None
+        failed = read_turn(db, auth, old["turn_id"])
+        assert failed["status"] == "failed"
+        assert failed["error"]["code"] == "DEFAULT_MODEL_VERSION_UNAVAILABLE"
+        assert failed["error"]["details"]["model_profile_version"] == activated["version"]
+        assert not failed["runs"]
+        env = client.post(URL + "/test", json={}, headers={"Origin": LOCAL}).json()
+        assert env["version"] > activated["version"] and env["source"] == "env"
+        legacy = accept_turn(db, auth, session, uid(), "请写另一句问候。")
+        admin.execute(
+            "UPDATE turns SET default_model_version=NULL WHERE turn_id=%s", (legacy["turn_id"],)
+        )
+        assert restarted.state.runtime.claim() is None
+        assert read_turn(db, auth, legacy["turn_id"])["error"]["code"] == "DEFAULT_MODEL_UNBOUND"
+    rows = admin.execute("SELECT * FROM default_model_versions ORDER BY version").fetchall()
+    assert [row["source"] for row in rows] == ["env", "page", "env"]
+    assert FORM["api_key"] not in str(rows) and "env-fixture-key" not in str(rows)
+
+
+@pytest.mark.asyncio
+async def test_ag01_known_confirmation_remains_a_model_free_control_after_restart(db, monkeypatch):
+    from app.trace import read_run
+
+    async def probe(self, payload):
+        assert payload["tools"][0]["function"]["name"] == "connection_probe"
+        return probe_reply()
+
+    monkeypatch.setattr(HttpModel, "complete", probe)
+    auth = Identity("U001")
+    app = make_app(db)
+    with browser(app) as client:
+        version = client.post(URL + "/test", json=FORM, headers={"Origin": LOCAL}).json()["version"]
+        session = str(create_session(db, auth, "C001")["session_id"])
+        accept_turn(db, auth, session, uid(), CONFIRMABLE)
+        runtime = app.state.runtime
+        ex = runtime.claim()
+        plan = invoice_write.prepare(db, auth, **candidate(ex, CONFIRMABLE))
+        runtime.fail(ex, AppError("RUN_LIMIT_EXCEEDED", "测试结束原轮。", 503))
+        accepted = invoice_write.confirm(
+            db,
+            auth,
+            plan["plan_id"],
+            expected_revision=plan["revision"],
+            intent_hash=plan["intent_hash"],
+            request_id=uid(),
+        )
+    restarted = make_app(db)
+    with browser(restarted):
+        runtime = restarted.state.runtime
+        control = runtime.claim()
+        assert control.turn_id == accepted["turn_id"]
+        await runtime.run(control)
+        assert read_turn(db, auth, control.turn_id)["status"] == "completed"
+        trace = read_run(db, auth, control.run_id)
+        assert trace["model_binding"] == {
+            "profile_id": "default",
+            "version": version,
+            "model_id": FORM["model_id"],
+            "control_only": True,
+        }

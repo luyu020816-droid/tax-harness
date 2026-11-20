@@ -23,7 +23,18 @@ def model_fingerprint(settings):
     )
 
 
-def accept(db, auth, session_id, request_id, settings, agent_id=None):
+def accept(
+    db,
+    auth,
+    session_id,
+    request_id,
+    settings,
+    agent_id=None,
+    *,
+    model_connection=None,
+    agent_models=None,
+    require_configured=False,
+):
     fingerprint = (
         digest(["compact", session_id, agent_id]) if agent_id else digest(["compact", session_id])
     )
@@ -57,6 +68,22 @@ def accept(db, auth, session_id, request_id, settings, agent_id=None):
             "source_seq,text,request_kind) VALUES(%s,%s,%s,%s,%s,%s,'/compact','compact')",
             (turn_id, session_id, auth.user_id, request_id, fingerprint, sequence),
         )
+        from app.agent_authority import bind_turn
+        from app.model_connection import bind_default_in
+
+        binding = bind_turn(conn, auth, turn_id, agent_id) if agent_id else None
+        default_version = bind_default_in(conn, turn_id, binding)
+        config = binding["snapshot"] if binding else {}
+        if config.get("model_profile_id", "default") != "default" and agent_models:
+            settings, _ = agent_models.resolve(
+                config["model_profile_id"], config["model_profile_version"]
+            )
+        elif model_connection and default_version is not None:
+            settings, _ = model_connection.resolve(conn, default_version)
+        elif model_connection:
+            raise AppError("MODEL_UNAVAILABLE", "请先配置模型，再压缩会话。", 503)
+        if require_configured and not settings.model_configured:
+            raise AppError("MODEL_UNAVAILABLE", "请先配置模型，再压缩会话。", 503)
         source = add_source(
             conn,
             auth,
@@ -82,10 +109,6 @@ def accept(db, auth, session_id, request_id, settings, agent_id=None):
                 model_fingerprint(settings),
             ),
         )
-        if agent_id:
-            from app.agent_authority import bind_turn
-
-            bind_turn(conn, auth, turn_id, agent_id)
         # This control source is never a user preference or conversation message.
         assess(conn, str(source["source_id"]), "no_change")
         advance_progress(conn, auth)

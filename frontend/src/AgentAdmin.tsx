@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api, body } from './api';
 import { Modal } from './Modal';
-import type { KnowledgeDocument } from './types';
+import type { InactiveSkill, KnowledgeDocument } from './types';
 
 type Grants = Record<string, string[]>;
 type Draft = {
@@ -22,6 +22,7 @@ type Agent = {
   enabled: boolean;
   draft: Draft;
   published_config?: Draft | null;
+  inactive_skills?: InactiveSkill[];
 };
 type Tool = {
   name: string;
@@ -296,6 +297,14 @@ export function AgentAdmin({ company, onClose }: { company: string | null; onClo
             >
               {a.enabled ? '停用' : '启用'}
             </button>
+            {a.inactive_skills?.map((skill) => (
+              <small className="muted" style={{ display: 'block' }} key={skill.skill_id}>
+                {skill.name} v{skill.version} · {skill.reason}
+                {Object.entries(skill.missing_tools ?? {}).map(
+                  ([tool, actions]) => ` · ${tool}（${actions.join('、')}）`
+                )}
+              </small>
+            ))}
           </p>
         ))}
         <form className="form-stack" onSubmit={saveAgent}>

@@ -14,6 +14,7 @@ from app.events import emit
 from app.execution import Execution, guard
 from app.identity import Identity, assert_access, owned
 from app.model import ModelAdapter
+from app.model_connection import DefaultModelConnection, default_version_in
 from app.resource_access import session_allowed
 from app.sources import add_source, advance_progress, assess, read_source
 from app.tool_schemas import FinalReply
@@ -75,6 +76,8 @@ class Runtime:
     def _model_for(self, execution=None):
         if execution is not None and execution.model_configuration is not None:
             return execution.model_configuration
+        if isinstance(self.model_connection, DefaultModelConnection):
+            return self.model_connection.active_configuration()
         if self.model_connection is not None:
             return self.model_connection.current
         return self.settings, self.model
@@ -197,38 +200,59 @@ class Runtime:
             generation = turn["active_run_generation"] + 1
             token = work["fencing_token"] + 1
             run_id = uid()
-            model_settings, model = self._model_for()
+            persistent_default = isinstance(self.model_connection, DefaultModelConnection)
+            model_settings, model = (self.settings, self.model) if persistent_default else self._model_for()
             binding = conn.execute(
                 "SELECT snapshot FROM agent_turn_bindings WHERE turn_id=%s", (turn["turn_id"],)
             ).fetchone()
-            if binding:
-                from app.agent_authority import validate_snapshot
+            config = binding["snapshot"] if binding else {}
+            profile = config.get("model_profile_id", "default")
+            model_version = (
+                (turn["default_model_version"] if persistent_default else None)
+                if profile == "default" else config["model_profile_version"]
+            )
+            evidence_only = False
+            recorded_model = None
+            try:
+                if binding:
+                    from app.agent_authority import validate_snapshot
 
-                try:
                     validate_snapshot(conn, turn["turn_id"])
-                    config = binding["snapshot"]
-                    if config["model_profile_id"] != "default":
-                        if not self.agent_models:
-                            raise AppError(
-                                "MODEL_CONFIG_UNAVAILABLE", "Agent 模型配置不可用。", 503
-                            )
-                        model_settings, model = self.agent_models.resolve(
-                            config["model_profile_id"], config["model_profile_version"]
-                        )
-                except AppError as exc:
-                    error = exc.as_dict()
-                    conn.execute(
-                        "UPDATE turns SET status='failed',error=%s,updated_at=now() WHERE turn_id=%s",
-                        (jsonb(error), turn["turn_id"]),
-                    )
-                    conn.execute(
-                        "UPDATE work_items SET state='failed',last_error=%s,lease_until=NULL WHERE work_id=%s",
-                        (jsonb(error), work["work_id"]),
-                    )
-                    assess(conn, str(candidate["source_id"]), "failed")
-                    advance_progress(conn, Identity(user["user_id"]))
-                    emit(conn, str(turn["turn_id"]), None, "failed", error)
-                    return None
+                if profile != "default":
+                    if not self.agent_models:
+                        raise AppError("MODEL_CONFIG_UNAVAILABLE", "Agent 模型配置不可用。", 503)
+                    model_settings, model = self.agent_models.resolve(profile, model_version)
+                elif persistent_default:
+                    try:
+                        model_settings, model = self.model_connection.resolve(conn, model_version)
+                    except AppError:
+                        action = operation_recovery.action_in(conn, user["user_id"], turn["turn_id"])
+                        if turn["request_kind"] != "write_confirmation" and not (
+                            action and action["expected_revision"] == generation
+                        ):
+                            raise
+                        # These control paths never call a model. Keep the original
+                        # binding in the trace, and never borrow another credential.
+                        evidence_only = True
+                        model_settings, model = self.model_connection.unavailable
+                        if model_version is not None:
+                            metadata = default_version_in(conn, model_version)
+                            recorded_model = metadata["model_id"] if metadata else None
+                        model_settings = model_settings.model_copy(update={"model_id": recorded_model or ""})
+            except AppError as exc:
+                error = exc.as_dict()
+                conn.execute(
+                    "UPDATE turns SET status='failed',error=%s,updated_at=now() WHERE turn_id=%s",
+                    (jsonb(error), turn["turn_id"]),
+                )
+                conn.execute(
+                    "UPDATE work_items SET state='failed',last_error=%s,lease_until=NULL WHERE work_id=%s",
+                    (jsonb(error), work["work_id"]),
+                )
+                assess(conn, str(candidate["source_id"]), "failed")
+                advance_progress(conn, Identity(user["user_id"]))
+                emit(conn, str(turn["turn_id"]), None, "failed", error)
+                return None
             conn.execute(
                 "UPDATE runs SET state='interrupted',finished_at=now() WHERE turn_id=%s AND finished_at IS NULL",
                 (turn["turn_id"],),
@@ -253,6 +277,12 @@ class Runtime:
             from app.telemetry import snapshot
 
             insight_snapshot = snapshot(model_settings, getattr(model, "mode", "unknown"))
+            insight_snapshot["model_binding"] = {
+                "profile_id": profile, "version": model_version,
+                "model_id": recorded_model if evidence_only else model_settings.model_id,
+            }
+            if evidence_only:
+                insight_snapshot["model_binding"]["control_only"] = True
             insight_snapshot["dataset_profile"] = conn.execute(
                 "SELECT profile FROM dataset_metadata WHERE singleton_id=1"
             ).fetchone()["profile"]

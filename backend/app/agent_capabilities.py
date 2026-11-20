@@ -99,6 +99,29 @@ def filter_definitions(definitions: list[dict], policy: CapabilityPolicy) -> lis
     return result
 
 
+def offered_actions(definitions):
+    available = {}
+    for item in definitions:
+        function = item["function"]
+        name = function["name"]
+        available[name] = (
+            frozenset(
+                function["parameters"].get("properties", {}).get("action", {}).get("enum", [])
+            )
+            if name in ACTION_TOOLS
+            else frozenset({"invoke"})
+        )
+    return available
+
+
+def missing_actions(requirements, available):
+    return {
+        name: sorted(set(actions) - available(name))
+        for name, actions in requirements.items()
+        if not set(actions) <= available(name)
+    }
+
+
 def restrict_document_ids(
     mode: str, allowed: frozenset[str], requested: list[str] | None
 ) -> list[str] | None:

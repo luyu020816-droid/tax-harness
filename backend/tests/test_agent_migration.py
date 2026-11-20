@@ -23,7 +23,8 @@ from app.knowledge import Knowledge
 from app.knowledge_jobs import KnowledgeJobs
 from app.knowledge_strategy import Strategy, publish, read_in
 from app.runtime import Runtime
-from app.values import jsonb, uid
+from app.sources import add_source, next_sequence
+from app.values import digest, jsonb, uid
 from app.workbook_queries import dispatch, read_result
 
 AUTH = Identity("U001")
@@ -105,7 +106,33 @@ def _install_legacy(settings, family, through):
         )
 
 
-def _workbook_result(db, settings):
+def _legacy_turn(db, session_id, text, *, knowledge_upload_ids=None):
+    """Seed turns with the pre-028 admission fields and no model binding."""
+    turn_id, request_id = uid(), uid()
+    files = knowledge_upload_ids or []
+    with db.transaction() as conn:
+        sequence = next_sequence(conn, AUTH)
+        conn.execute(
+            "INSERT INTO turns(turn_id,session_id,user_id,client_request_id,request_hash,"
+            "source_seq,text,knowledge_upload_ids) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+            (turn_id, session_id, AUTH.user_id, request_id, digest([session_id, text, files]),
+             sequence, text, files),
+        )
+        source = add_source(conn, AUTH, text, turn_id=turn_id, source_seq=sequence, companies=["C001"])
+        conn.execute(
+            "INSERT INTO work_items(work_id,user_id,source_id,kind) VALUES(%s,%s,%s,'turn')",
+            (uid(), AUTH.user_id, source["source_id"]),
+        )
+    return {"turn_id": turn_id}
+
+
+def _seed_turn(db, session_id, text, *, legacy, knowledge_upload_ids=None):
+    if legacy:
+        return _legacy_turn(db, session_id, text, knowledge_upload_ids=knowledge_upload_ids)
+    return turns.accept_turn(db, AUTH, session_id, uid(), text, knowledge_upload_ids=knowledge_upload_ids)
+
+
+def _workbook_result(db, settings, *, legacy=False):
     file = Knowledge(db, settings).upload(
         AUTH,
         name="报销.xlsx",
@@ -117,13 +144,12 @@ def _workbook_result(db, settings):
     jobs = KnowledgeJobs(db, settings, None)
     jobs.run(jobs.claim())
     session_id = str(create_session(db, AUTH, "C001")["session_id"])
-    turn = turns.accept_turn(
+    turn = _seed_turn(
         db,
-        AUTH,
         session_id,
-        uid(),
         "2026年10月实付报销合计多少",
         knowledge_upload_ids=[file["file_id"]],
+        legacy=legacy,
     )
     ex = Runtime(db, model_settings(settings), ScriptedModel([])).claim()
     assert ex.turn_id == turn["turn_id"]
@@ -142,7 +168,7 @@ def _workbook_result(db, settings):
     )["result_id"]
 
 
-def _purpose_plan(db):
+def _purpose_plan(db, *, legacy=False):
     task = tasks.change_task(
         db,
         AUTH,
@@ -154,7 +180,7 @@ def _purpose_plan(db):
     )
     session_id = str(create_session(db, AUTH, "C001")["session_id"])
     text = "请安排把甲企业F002用途填写为办公耗材采购。"
-    turn = turns.accept_turn(db, AUTH, session_id, uid(), text)
+    turn = _seed_turn(db, session_id, text, legacy=legacy)
     with db.transaction(readonly=True) as conn:
         source_id = str(
             conn.execute(
@@ -210,8 +236,8 @@ def test_int01_databases_upgrade_and_run_all_four_business_paths(
     old_db.open()
     try:
         assert not old_db.ready()
-        old_workbook = _workbook_result(old_db, settings) if family == "A" else None
-        old_plan = _purpose_plan(old_db) if (family, through) == ("A", 25) else None
+        old_workbook = _workbook_result(old_db, settings, legacy=True) if family == "A" else None
+        old_plan = _purpose_plan(old_db, legacy=True) if (family, through) == ("A", 25) else None
         old_summary = _scoped_summary(old_db) if (family, through) == ("B", 25) else None
     finally:
         old_db.close()

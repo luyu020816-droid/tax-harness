@@ -6,6 +6,8 @@ test('local model settings test the env or enable a validated draft', async ({ p
     configured: true,
     source: 'env',
     model_id: 'env-model',
+    version: 1,
+    env_available: true,
     test_status: 'untested',
   };
   await page.setViewportSize({ width: 390, height: 844 });
@@ -44,6 +46,7 @@ test('local model settings test the env or enable a validated draft', async ({ p
     status = {
       ...status,
       ...(input.model_id ? { source: 'page', model_id: input.model_id } : {}),
+      version: status.version + 1,
       test_status: 'success',
     };
     return route.fulfill({ json: status });
@@ -53,6 +56,7 @@ test('local model settings test the env or enable a validated draft', async ({ p
   await page.getByRole('button', { name: '模型设置' }).click();
   const dialog = page.getByRole('dialog', { name: '本机模型设置' });
   await expect(dialog.getByRole('status')).toContainText('已配置，待测试');
+  await expect(dialog.getByRole('status')).toContainText('版本 1');
   await dialog.getByRole('button', { name: '测试连接', exact: true }).click();
   await expect(dialog.getByRole('status')).toContainText('连接成功');
   expect(requests[0]).toEqual({});
@@ -66,11 +70,13 @@ test('local model settings test the env or enable a validated draft', async ({ p
   await dialog.getByRole('button', { name: '测试并启用' }).click();
   await expect(dialog.getByRole('status')).toContainText('连接失败');
   await expect(dialog.getByRole('status')).toContainText('env-model');
+  await expect(dialog.getByRole('status')).toContainText('版本 2');
   await expect(key).toHaveValue('');
   await key.fill('valid-fixture-key');
   await dialog.getByRole('button', { name: '测试并启用' }).click();
   await expect(dialog.getByRole('status')).toContainText('连接成功');
   await expect(dialog.getByRole('status')).toContainText('new-model');
+  await expect(dialog.getByRole('status')).toContainText('版本 3');
   await expect(key).toHaveValue('');
   expect(requests).toHaveLength(3);
   expect(

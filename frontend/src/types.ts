@@ -198,6 +198,12 @@ export interface RunSummary {
 }
 export interface RunDetail {
   run: RunSummary;
+  model_binding?: {
+    profile_id: string;
+    version: number | null;
+    model_id: string | null;
+    control_only?: boolean;
+  } | null;
   agent?: {
     agent_id: string;
     agent_version: number;
@@ -234,6 +240,13 @@ export interface RunDetail {
   }[];
   events: unknown[];
 }
+export type InactiveSkill = {
+  skill_id: string;
+  version: number;
+  name: string;
+  reason: string;
+  missing_tools?: Record<string, string[]>;
+};
 export interface Source {
   source_id: string;
   role: string;

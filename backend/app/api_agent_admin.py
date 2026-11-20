@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request
 from pydantic import Field, ValidationError
 
 from app import agent_profiles, agent_skills, agent_tools
+from app.agent_authority import LOCK_ID, effective_snapshot
 from app.agent_profiles import AgentDraft, _require_manager
 from app.agent_skills import SkillDraft
 from app.errors import AppError
@@ -55,11 +56,15 @@ def agent_admin_router(db, auth_dependency, models):
     def agents(request: Request, current=auth_dependency):
         check(request, current)
         with db.transaction(readonly=True) as conn:
+            conn.execute("SELECT pg_advisory_xact_lock_shared(%s)", (LOCK_ID,))
             rows = conn.execute(
                 "SELECT p.*,v.config AS published_config FROM agent_profiles p "
                 "LEFT JOIN agent_profile_versions v ON v.agent_id=p.agent_id "
                 "AND v.version=p.current_version ORDER BY p.name,p.agent_id"
             ).fetchall()
+            for row in rows:
+                config = row["published_config"]
+                row["inactive_skills"] = effective_snapshot(conn, config)["inactive_skills"] if config else []
         return {"agents": safe_json(rows), "runtime_ready": True}
 
     @router.post("/agents", status_code=201)

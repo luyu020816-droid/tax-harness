@@ -6,6 +6,8 @@ type ConnectionStatus = {
   configured: boolean;
   source: 'none' | 'env' | 'page';
   model_id: string | null;
+  version?: number | null;
+  env_available?: boolean;
   test_status: 'unconfigured' | 'untested' | 'success' | 'failed';
 };
 
@@ -91,9 +93,11 @@ export function ModelConnection({
                     ? '设置不可用'
                     : '正在读取配置'}
           </strong>
-          {connection?.configured && (
+          {connection?.model_id && (
             <p className="muted small">
-              当前使用 {connection.model_id}（{connection.source === 'env' ? '.env' : '页面配置'}）
+              {connection.configured ? '当前使用' : '原连接不可用'} {connection.model_id}
+              {connection.version != null && ` · 版本 ${connection.version}`}（
+              {connection.source === 'env' ? '.env' : '页面配置'}）
             </p>
           )}
         </div>
@@ -141,7 +145,9 @@ export function ModelConnection({
             }}
           />
         </label>
-        <p className="muted small">测试通过后启用，服务重启后重新读取 .env。</p>
+        <p className="muted small">
+          测试通过后启用新版本。已有请求保留受理时的版本，页面凭据仅保留在配置它的进程中。
+        </p>
         {error && (
           <p className="error-note" role="alert">
             {error}
@@ -157,7 +163,7 @@ export function ModelConnection({
               busy ||
               (hasDraft
                 ? !baseUrl.trim() || !modelId.trim() || !key.trim()
-                : !connection.configured)
+                : !connection.configured && !connection.env_available)
             }
           >
             {busy ? '测试中…' : hasDraft || !connection?.configured ? '测试并启用' : '测试连接'}

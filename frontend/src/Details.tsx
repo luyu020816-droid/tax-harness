@@ -15,9 +15,17 @@ function RunContent({ id }: { id: string }) {
     <>
       {data?.agent && (
         <p className="notice">
-          Agent：{data.agent.name} · 配置版本 {data.agent.agent_version} · 模型配置{' '}
-          {data.agent.model_profile_id}
-          {data.agent.model_profile_version === null ? '' : ` v${data.agent.model_profile_version}`}
+          Agent {data.agent.name} · 配置版本 {data.agent.agent_version}
+          {!data.model_binding &&
+            ` · 模型配置 ${data.agent.model_profile_id}${data.agent.model_profile_version === null ? '' : ` v${data.agent.model_profile_version}`}`}
+        </p>
+      )}
+      {data?.model_binding && (
+        <p className="notice">
+          模型 {data.model_binding.model_id ?? '原请求无可用版本'} · 配置{' '}
+          {data.model_binding.profile_id}
+          {data.model_binding.version != null && ` v${data.model_binding.version}`}
+          {data.model_binding.control_only && ' · 程序核验'}
         </p>
       )}
       {provenance && (

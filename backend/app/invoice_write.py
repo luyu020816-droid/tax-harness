@@ -286,7 +286,8 @@ def confirm(db, auth, plan_id, *, expected_revision, intent_hash, request_id, li
         conn.execute("SELECT 1 FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,))
         plan = _owned(conn, auth, plan_id)
         origin_turn = conn.execute(
-            "SELECT turn_id FROM sources WHERE source_id=%s", (plan["origin_source_id"],)
+            "SELECT s.turn_id,t.default_model_version FROM sources s LEFT JOIN turns t USING(turn_id) "
+            "WHERE s.source_id=%s", (plan["origin_source_id"],)
         ).fetchone()
         if origin_turn and origin_turn["turn_id"]:
             authorize_tool(conn, origin_turn["turn_id"], "update_invoice", {"plan_id": plan_id})
@@ -330,8 +331,8 @@ def confirm(db, auth, plan_id, *, expected_revision, intent_hash, request_id, li
         turn_id, seq = uid(), next_sequence(conn, auth)
         text = f"确认修改{plan['company_id']}发票{plan['invoice_id']}用途/备注。"
         conn.execute(
-            "INSERT INTO turns(turn_id,session_id,user_id,client_request_id,request_hash,source_seq,text,request_kind,control_ref) "
-            "VALUES(%s,%s,%s,%s,%s,%s,%s,'write_confirmation',%s)",
+            "INSERT INTO turns(turn_id,session_id,user_id,client_request_id,request_hash,source_seq,text,"
+            "request_kind,control_ref,default_model_version) VALUES(%s,%s,%s,%s,%s,%s,%s,'write_confirmation',%s,%s)",
             (
                 turn_id,
                 plan["session_id"],
@@ -341,12 +342,13 @@ def confirm(db, auth, plan_id, *, expected_revision, intent_hash, request_id, li
                 seq,
                 text,
                 plan_id,
+                origin_turn["default_model_version"] if origin_turn else None,
             ),
         )
         if origin_turn and origin_turn["turn_id"]:
             conn.execute(
-                "INSERT INTO agent_turn_bindings(turn_id,agent_id,agent_version,snapshot) "
-                "SELECT %s,agent_id,agent_version,snapshot FROM agent_turn_bindings WHERE turn_id=%s",
+                "INSERT INTO agent_turn_bindings(turn_id,agent_id,agent_version,snapshot,bound_at) "
+                "SELECT %s,agent_id,agent_version,snapshot,bound_at FROM agent_turn_bindings WHERE turn_id=%s",
                 (turn_id, origin_turn["turn_id"]),
             )
         source = add_source(

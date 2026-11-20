@@ -72,6 +72,7 @@ def read_run(db, auth: Identity, run_id: str, *, conn=None) -> dict:
             (run["turn_id"],),
         ).fetchone()
         agent = None
+        model_binding = (run["insight_snapshot"] or {}).get("model_binding")
         if binding:
             config = binding["snapshot"]
             agent = {
@@ -79,12 +80,15 @@ def read_run(db, auth: Identity, run_id: str, *, conn=None) -> dict:
                 "agent_version": binding["agent_version"],
                 "name": config["name"],
                 "model_profile_id": config["model_profile_id"],
-                "model_profile_version": config["model_profile_version"],
+                "model_profile_version": model_binding["version"] if model_binding else config["model_profile_version"],
                 "tool_grants": config["tool_grants"],
                 "skill_versions": config["skill_versions"],
             }
         return safe_json(
-            {"run": run, "contexts": contexts, "tools": tools, "events": events, "agent": agent}
+            {
+                "run": run, "contexts": contexts, "tools": tools, "events": events,
+                "agent": agent, "model_binding": model_binding,
+            }
         )
 
 

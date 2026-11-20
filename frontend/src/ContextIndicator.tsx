@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api, body } from './api';
+import type { InactiveSkill } from './types';
 import './context-indicator.css';
 
 interface Usage {
@@ -18,6 +19,7 @@ interface Preview {
   margin: number | null;
   history_groups: number;
   tool_count: number;
+  inactive_skills?: InactiveSkill[];
   unaccounted_items: string[];
 }
 
@@ -178,6 +180,11 @@ export function ContextIndicator({
                     ? ` · 含输出预留与余量的压力 ${Math.round(preview.pressure_ratio * 100)}%`
                     : ''}
                 </span>
+                {preview.inactive_skills?.map((skill) => (
+                  <small key={skill.skill_id}>
+                    {skill.name} v{skill.version} · {skill.reason}
+                  </small>
+                ))}
                 <small>
                   这是估算，不是模型实际用量。未计入：{preview.unaccounted_items.join('、')}。
                 </small>

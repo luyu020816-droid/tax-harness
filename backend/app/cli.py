@@ -114,11 +114,11 @@ def _grant_runtime(conn, settings: Settings) -> None:
         sql.SQL(
             "GRANT INSERT ON agent_profile_versions,agent_config_events,agent_skill_versions,"
             "agent_capability_events,agent_turn_bindings,workbook_snapshots,workbook_results,"
-            "knowledge_strategy_versions TO {}"
+            "knowledge_strategy_versions,default_model_versions TO {}"
         ).format(role)
     )
     conn.execute(
-        sql.SQL("REVOKE UPDATE,DELETE ON knowledge_strategy_versions FROM {}").format(role)
+        sql.SQL("REVOKE UPDATE,DELETE ON knowledge_strategy_versions,default_model_versions FROM {}").format(role)
     )
     conn.execute(
         sql.SQL(
