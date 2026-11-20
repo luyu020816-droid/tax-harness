@@ -12,6 +12,149 @@ from app.values import uid
 AUTH = Identity("U001")
 
 
+def test_ar01_month_update_keeps_user_fields_and_invalidates_old_check(
+    db, admin, execution_factory
+):
+    from test_runtime import tool
+
+    from app.tools import ToolExecutor
+    from app.values import jsonb
+
+    fields = {"show_columns": ["税额", "含税金额"], "pending": ["待财务复核"], "legacy": "保留"}
+    task = change_task(
+        db,
+        AUTH,
+        company_id="C001",
+        action="start",
+        request_id=uid(),
+        intent="query_month",
+        period="2026-09",
+        unresolved=fields,
+    )
+    admin.execute(
+        "UPDATE tasks SET unresolved_json=unresolved_json||%s, checked_data_revision=1, "
+        "checked_rules_epoch=1 WHERE task_id=%s",
+        (jsonb({"missing_count": 3, "needs_refresh": False}), task["task_id"]),
+    )
+    text = "甲企业这项任务只把月份改成2026年10月。"
+    execution = execution_factory(text)
+    output, _ = ToolExecutor(db).execute(
+        execution,
+        tool(
+            "change_task",
+            {
+                "company_id": "C001",
+                "action": "update",
+                "period": "2026-10",
+                "target_id": str(task["task_id"]),
+                "expected_revision": task["revision"],
+                "source_refs": [{"source_id": execution.source_id, "quote": text}],
+            },
+        )["tool_calls"][0],
+    )
+    assert output["ok"], output
+    updated = output["data"]
+    assert updated["period"] == "2026-10"
+    assert updated["unresolved_json"] == {**fields, "needs_refresh": True}
+    assert updated["checked_data_revision"] is None and updated["checked_rules_epoch"] is None
+
+
+@pytest.mark.parametrize(
+    "text,cleared",
+    [("清除展示列。", True), ("清除展示列，但不要清除展示列。", False)],
+)
+def test_ar01_empty_patch_and_explicit_field_clear(db, execution_factory, text, cleared):
+    from test_runtime import tool
+
+    from app.tools import ToolExecutor
+
+    initial = {"show_columns": ["税额"], "pending": ["财务复核"]}
+    task = change_task(
+        db,
+        AUTH,
+        company_id="C001",
+        action="start",
+        request_id=uid(),
+        intent="query_month",
+        period="2026-09",
+        unresolved=initial,
+    )
+    no_fields = change_task(
+        db,
+        AUTH,
+        company_id="C001",
+        action="update",
+        request_id=uid(),
+        target_id=str(task["task_id"]),
+        expected_revision=task["revision"],
+        unresolved={},
+    )
+    assert no_fields["unresolved_json"] == initial
+    execution = execution_factory(text)
+    result, _ = ToolExecutor(db).execute(
+        execution,
+        tool(
+            "change_task",
+            {
+                "company_id": "C001",
+                "action": "update",
+                "clear_unresolved": ["show_columns"],
+                "target_id": str(task["task_id"]),
+                "expected_revision": no_fields["revision"],
+                "source_refs": [{"source_id": execution.source_id, "quote": text}],
+            },
+        )["tool_calls"][0],
+    )
+    assert result["ok"] is cleared
+    projected = load_core(db, AUTH, execution.session_id)["task"]["unresolved_json"]
+    assert projected["pending"] == initial["pending"]
+    assert ("show_columns" in projected) is not cleared
+
+
+def test_ar01_check_keeps_user_fields_and_gets_stale_after_rule_change(db, admin):
+    task = change_task(
+        db,
+        AUTH,
+        company_id="C001",
+        action="start",
+        request_id=uid(),
+        intent="complete_purposes",
+        period="2026-09",
+        unresolved={"pending": ["财务复核"]},
+    )
+    result = check_purposes(db, AUTH, "C001", "2026-09")
+    with db.transaction() as conn:
+        source = add_source(
+            conn,
+            AUTH,
+            result,
+            role="tool",
+            kind="tool_result",
+            source_seq=next_sequence(conn, AUTH),
+            companies=["C001"],
+        )
+    checked = apply_result(db, AUTH, task, result, str(source["source_id"]), source["source_seq"])
+    assert checked["unresolved_json"]["pending"] == ["财务复核"]
+    assert checked["unresolved_json"]["missing_count"] == result["missing_count"]
+    admin.execute("UPDATE company_heads SET rules_epoch=rules_epoch+1 WHERE company_id='C001'")
+    assert list_tasks(db, AUTH, "C001")[0]["unresolved_json"] == {
+        "pending": ["财务复核"],
+        "needs_refresh": True,
+    }
+    with pytest.raises(AppError) as error:
+        change_task(
+            db,
+            AUTH,
+            company_id="C001",
+            action="update",
+            request_id=uid(),
+            target_id=str(task["task_id"]),
+            expected_revision=task["revision"],
+            unresolved={"pending": ["旧并发编辑"]},
+        )
+    assert error.value.code == "VERSION_CONFLICT"
+
+
 def test_M01_M02_one_task_and_explicit_replacement(db):
     first = change_task(
         db,

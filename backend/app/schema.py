@@ -3,7 +3,7 @@
 SCHEMA_LOCK = 8123419426
 SEMIFINAL_VERSION = 26
 SEMIFINAL_SCRIPT = "026_semifinal_schema.sql"
-REQUIRED_VERSIONS = {5, 7, 8, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26}
+REQUIRED_VERSIONS = {5, 7, 8, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27}
 
 _COLUMNS = {
     "workbook_snapshots": {"version_id": "uuid", "snapshot": "jsonb"},
@@ -151,4 +151,19 @@ def semifinal_schema_issues(conn):
         if constraints.get((table, name)) != definition
     )
     issues.extend(name for name, definition in _INDEXES.items() if indexes.get(name) != definition)
+    active_index = conn.execute(
+        "SELECT pg_get_indexdef(indexrelid) AS definition FROM pg_index "
+        "WHERE indrelid=to_regclass('public.tasks') "
+        "AND indexrelid=to_regclass('public.tasks_unfinished_scope') "
+        "AND indisvalid AND indisunique AND indnullsnotdistinct"
+    ).fetchone()
+    if not active_index or active_index["definition"].partition(" USING ")[2] != (
+        "btree (user_id, company_id, intent, period) NULLS NOT DISTINCT "
+        "WHERE (status = ANY (ARRAY['active'::text, 'waiting_user'::text]))"
+    ):
+        issues.append("tasks_unfinished_scope")
+    if conn.execute("SELECT to_regclass('public.tasks_one_unfinished') AS legacy").fetchone()[
+        "legacy"
+    ]:
+        issues.append("tasks_one_unfinished")
     return issues

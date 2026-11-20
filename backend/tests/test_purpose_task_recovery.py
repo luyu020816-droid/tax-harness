@@ -191,6 +191,181 @@ async def run(runtime, accepted):
     return read_turn(runtime.db, AUTH, ex.turn_id)
 
 
+def task_command(db, admin, execution, text, **arguments):
+    output, _ = ToolExecutor(db).execute(
+        execution,
+        tool(
+            "change_task",
+            {
+                "company_id": "C001",
+                "source_refs": [{"source_id": execution.source_id, "quote": text}],
+                **arguments,
+            },
+        )["tool_calls"][0],
+    )
+    # The fixture creates a running work item for the real tool dispatcher.
+    admin.execute("UPDATE turns SET status='completed' WHERE turn_id=%s", (execution.turn_id,))
+    admin.execute("UPDATE work_items SET state='done' WHERE work_id=%s", (execution.work_id,))
+    return output
+
+
+@pytest.mark.asyncio
+async def test_ar07_two_active_tasks_edit_cancel_and_resume_after_restart(
+    db, admin, settings, execution_factory
+):
+    from app.db import Database
+
+    first = tasks.change_task(
+        db,
+        AUTH,
+        company_id="C001",
+        action="start",
+        request_id=uid(),
+        intent="query_month",
+        period=PERIOD,
+        unresolved={"pending": ["财务复核"]},
+    )
+    text = "另建甲企业2026年10月规则说明任务，保留已有待办。"
+    created = task_command(
+        db,
+        admin,
+        execution_factory(text),
+        text,
+        action="start",
+        intent="explain_rules",
+        period="2026-10",
+    )
+    assert created["ok"], created
+    second = created["data"]
+    assert {str(t["task_id"]) for t in tasks.list_tasks(db, AUTH, "C001")} == {
+        str(first["task_id"]),
+        second["task_id"],
+    }
+
+    session = str(create_session(db, AUTH, "C001")["session_id"])
+    config = model_settings(settings)
+    listed = await run(
+        Runtime(
+            db,
+            config,
+            ScriptedModel([tool("get_task", {"company_id": "C001"}), result_block("task")]),
+        ),
+        accept_turn(db, AUTH, session, uid(), "甲企业还有哪些待办？"),
+    )
+    assert "2026-09" in listed["final_message"] and "2026-10" in listed["final_message"]
+
+    ambiguous = "取消那个。"
+    denied = task_command(
+        db,
+        admin,
+        execution_factory(ambiguous),
+        ambiguous,
+        action="cancel",
+        target_id=second["task_id"],
+        expected_revision=second["revision"],
+    )
+    assert denied["error"]["code"] == "NEEDS_CLARIFICATION", denied
+    assert {t["status"] for t in tasks.list_tasks(db, AUTH, "C001")} == {"active"}
+
+    correction = "把九月发票查询任务的月份改为2026年11月。"
+    edited = task_command(
+        db,
+        admin,
+        execution_factory(correction),
+        correction,
+        action="update",
+        target_id=str(first["task_id"]),
+        expected_revision=first["revision"],
+        period="2026-11",
+    )
+    assert edited["ok"] and edited["data"]["period"] == "2026-11", edited
+    assert edited["data"]["unresolved_json"]["pending"] == ["财务复核"]
+    cancellation = "取消十月规则说明任务。"
+    cancelled = task_command(
+        db,
+        admin,
+        execution_factory(cancellation),
+        cancellation,
+        action="cancel",
+        target_id=second["task_id"],
+        expected_revision=second["revision"],
+    )
+    assert cancelled["ok"], cancelled
+
+    switch_company(db, AUTH, session, "C002")
+    assert not tasks.list_tasks(db, AUTH, "C002")
+    switch_company(db, AUTH, session, "C001")
+    restarted = Database(settings.test_database_url)
+    restarted.open()
+    try:
+        new_session = str(create_session(restarted, AUTH, "C001")["session_id"])
+        resumed = await run(
+            Runtime(
+                restarted,
+                config,
+                ScriptedModel(
+                    [
+                        tool("query_month", {"company_id": "C001", "period": "2026-11"}),
+                        result_block("monthly_summary"),
+                    ]
+                ),
+            ),
+            accept_turn(restarted, AUTH, new_session, uid(), "继续上次的发票查询任务。"),
+        )
+        assert resumed["status"] == "completed", resumed["error"]
+        assert resumed["final_cards"][0]["period"] == "2026-11"
+        states = {str(t["task_id"]): t["status"] for t in tasks.list_tasks(restarted, AUTH, "C001")}
+        assert states == {str(first["task_id"]): "waiting_user", second["task_id"]: "cancelled"}
+        with restarted.transaction(readonly=True) as conn:
+            assert tasks.current_in(conn, AUTH, "C001")["unresolved_json"]["pending"] == [
+                "财务复核"
+            ]
+    finally:
+        restarted.close()
+
+
+@pytest.mark.asyncio
+async def test_ar07_other_focus_does_not_stale_a_bound_invoice_plan(
+    db, admin, settings, execution_factory
+):
+    first = start_task(db)
+    origin = execution_factory(CONFIRMABLE)
+    plan = invoice_write.prepare(db, AUTH, **candidate(origin, CONFIRMABLE))
+    admin.execute("UPDATE turns SET status='completed' WHERE turn_id=%s", (origin.turn_id,))
+    admin.execute("UPDATE work_items SET state='done' WHERE work_id=%s", (origin.work_id,))
+    text = "另建甲企业2026年10月规则说明任务，保留已有待办。"
+    added = task_command(
+        db,
+        admin,
+        execution_factory(text),
+        text,
+        action="start",
+        intent="explain_rules",
+        period="2026-10",
+    )
+    assert added["ok"], added
+    sibling = added["data"]
+    confirmation = invoice_write.confirm(
+        db,
+        AUTH,
+        plan["plan_id"],
+        expected_revision=plan["revision"],
+        intent_hash=plan["intent_hash"],
+        request_id=uid(),
+    )
+    saved = await run(Runtime(db, model_settings(settings), ScriptedModel([])), confirmation)
+    assert saved["status"] == "completed", saved["error"]
+    assert saved["final_cards"][0]["operation_id"]
+    assert admin.execute("SELECT count(*) AS n FROM operations").fetchone()["n"] == 1
+    with db.transaction(readonly=True) as conn:
+        assert str(tasks.current_in(conn, AUTH, "C001")["task_id"]) == sibling["task_id"]
+        assert (
+            tasks.matching_in(conn, AUTH, "C001", "complete_purposes", PERIOD)["task_id"]
+            == first["task_id"]
+        )
+    assert invoice_write.get(db, AUTH, plan["plan_id"])["status"] == "consumed"
+
+
 @pytest.mark.asyncio
 async def test_restart_runtime_resumes_same_task_in_new_session(db, admin, settings):
     admin.execute(

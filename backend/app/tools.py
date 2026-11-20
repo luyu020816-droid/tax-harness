@@ -15,6 +15,8 @@ from app.tool_schemas import REFERENCE_MUTATIONS, TOOLS
 from app.turns import mentioned_companies
 from app.values import digest, jsonb, safe_json, uid
 
+_TASK_TOOL_INTENT = {"query_month": "query_month", "get_rules": "explain_rules",
+                     "check_purposes": "complete_purposes"}
 
 class ToolExecutor:
     def __init__(self, db, retrieval=None):
@@ -134,18 +136,26 @@ class ToolExecutor:
                 tool_call_id=call_id,
             )
         task_before = None
-        company = arguments.get("company_id")
+        company, period = arguments.get("company_id"), arguments.get("period")
         if name == "update_invoice":
             try:
-                company = invoice_write.get(self.db, execution.auth, arguments["plan_id"])[
-                    "company_id"
-                ]
+                plan = invoice_write.get(self.db, execution.auth, arguments["plan_id"])
+                company = plan["company_id"]
+                with self.db.transaction(readonly=True) as conn:
+                    invoice = conn.execute(
+                        "SELECT invoice_date FROM invoices WHERE company_id=%s AND invoice_id=%s",
+                        (company, plan["invoice_id"]),
+                    ).fetchone()
+                period = invoice["invoice_date"].strftime("%Y-%m") if invoice else None
             except AppError:
                 company = None
-        if company:
+        intent = _TASK_TOOL_INTENT.get(name, "complete_purposes" if name == "update_invoice" else None)
+        if company and intent and period:
             with self.db.transaction(readonly=True) as conn:
                 try:
-                    task_before = tasks.current_in(conn, execution.auth, company)
+                    task_before = tasks.matching_in(
+                        conn, execution.auth, company, intent, period, allow_unset=name != "update_invoice"
+                    )
                 except AppError:
                     pass
         try:
@@ -189,7 +199,9 @@ class ToolExecutor:
             return
         args = {"company_id": arguments["company_id"], "period": task["period"]}
         with self.db.transaction(readonly=True) as conn:
-            current = tasks.current_in(conn, execution.auth, args["company_id"])
+            current = tasks.matching_in(
+                conn, execution.auth, args["company_id"], "complete_purposes", task["period"]
+            )
         if not current or str(current["task_id"]) != str(task["task_id"]):
             return
         try:
@@ -444,11 +456,16 @@ class ToolExecutor:
             with db.transaction(readonly=True) as conn:
                 company = args["company_id"]
                 task = tasks.current_in(conn, auth, company)
-                if not task and args["include_cancelled"]:
+                if not task and args.get("include_cancelled"):
                     task = tasks.recent_cancelled_purpose_task(conn, execution, company)
                     if task:
                         return {"kind": "cancelled_purpose_task", "task": safe_json(task),
                                 "company_id": company}
+                active = tasks.active_in(conn, auth, company)
+                if len(active) > 1:
+                    return {"task": safe_json(task), "active_tasks": safe_json([
+                        tasks.task_summary(item) for item in active
+                    ])}
                 return {"task": safe_json(task)}
         if name == "change_task":
             return tasks.change_task(
@@ -654,15 +671,14 @@ class ToolExecutor:
             }
 
     def _maintain_task(self, execution, name, args, result, ref, task):
-        intent = {
-            "query_month": "query_month",
-            "get_rules": "explain_rules",
-            "check_purposes": "complete_purposes",
-        }[name]
+        intent = _TASK_TOOL_INTENT[name]
         with self.db.transaction(readonly=True) as conn:
             source = read_source(conn, execution.auth, execution.source_id, allow_suppressed=True)
         refs = [{"source_id": execution.source_id, "quote": source["content"]}]
         if not task and name == "check_purposes":
+            with self.db.transaction(readonly=True) as conn:
+                if tasks.current_in(conn, execution.auth, args["company_id"]):
+                    return  # A read in a different scope does not create another task.
             task = tasks.change_task(
                 self.db,
                 execution.auth,

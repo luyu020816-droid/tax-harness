@@ -8,7 +8,8 @@ from itertools import groupby
 from app.errors import AppError
 from app.identity import assert_access, owned
 from app.sources import read_source
-from app.tasks import current_in
+from app.task_commands import task_intents
+from app.tasks import active_in
 from app.values import digest, jsonb, uid
 
 PERIOD = re.compile(r"(?<!\d)(\d{4})\s*(?:年|[-/])\s*(1[0-2]|0?[1-9])\s*月?(?!\d)")
@@ -251,6 +252,21 @@ def require_task_company(conn, execution, company_id, source):
         raise AppError("TARGET_SCOPE_MISMATCH", "续办企业与当前范围不一致，请先核对企业。", 422)
 
 
+def _continuing_task(conn, auth, company, text):
+    active = active_in(conn, auth, company)
+    if len(active) < 2:
+        return (active[0] if active else None), False
+    intents = task_intents(text)
+    months = {int(m[1]) for m in BARE_MONTH.finditer(text)}
+    selected = [
+        task
+        for task in active
+        if (not intents or task["intent"] in intents)
+        and (not months or (task["period"] and int(task["period"][5:]) in months))
+    ]
+    return (selected[0], False) if len(selected) == 1 else (None, True)
+
+
 def require_period(conn, execution, company_id: str, period: str) -> dict:
     """Return a verified basis or fail; a company selector supplies no month."""
     assert_access(conn, execution.auth, company_id)
@@ -270,7 +286,9 @@ def require_period(conn, execution, company_id: str, period: str) -> dict:
     years = set(re.findall(r"(?<!\d)(\d{4})\s*年", source["content"]))
     if (months and int(period[5:]) not in months) or (years and period[:4] not in years):
         raise AppError("NEEDS_SCOPE_CLARIFICATION", "查询月份与本轮补充的信息不一致。", 422)
-    task = current_in(conn, execution.auth, company_id)
+    task, ambiguous = _continuing_task(conn, execution.auth, company_id, source["content"])
+    if ambiguous:
+        raise AppError("NEEDS_SCOPE_CLARIFICATION", "有多个待办，请先确认月份和办理目标。", 422)
     previous = None
     if task and task["period"]:
         if basis := _task_period_source(conn, execution, task, company_id, task["period"]):
@@ -286,7 +304,8 @@ def require_period(conn, execution, company_id: str, period: str) -> dict:
                 },
             )
     # A successful query is a confirmed session slot, with its complete source chain.
-    previous = _history_basis(conn, execution, company_id) or previous
+    if not previous or not task or task["intent"] not in task_intents(source["content"]):
+        previous = _history_basis(conn, execution, company_id) or previous
     if previous:
         previous_period, basis = previous
         if months and len(months) == 1 and period[:4] == previous_period[:4]:
@@ -429,10 +448,12 @@ def prepare_frame(db, execution, core):
                 periods = request_periods(source["content"], source["created_at"])
                 if not periods:
                     months = {int(m[1]) for m in BARE_MONTH.finditer(source["content"])}
-                    task = current_in(conn, execution.auth, company)
+                    task, ambiguous = _continuing_task(
+                        conn, execution.auth, company, source["content"]
+                    )
                     if task and task["period"]:
                         periods.add(task["period"])
-                    else:
+                    elif not ambiguous:
                         rows = conn.execute(
                             "SELECT e.arguments FROM tool_executions e JOIN runs r USING(run_id) JOIN turns t USING(turn_id) "
                             "WHERE t.user_id=%s AND t.session_id=%s AND t.source_seq<%s AND e.state='done' "

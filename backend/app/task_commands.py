@@ -12,6 +12,29 @@ _MONTH_NAMES = ("一", "二", "三", "四", "五", "六", "七", "八", "九", "
 _MONTH_WORDS = r"0?[1-9]|1[0-2]|[一二三四五六七八九]|十[一二]?"
 _TASK_NOUN = r"(?:任务|待办|这项|这一项|该项)"
 _TASK_REQUEST = r"(?:(?:请帮我|帮我|请|只|仅|先|现在))*"
+_CLEAR_FIELDS = {
+    "show_columns": "展示列|显示列|show_columns",
+    "pending": "待复核事项|复核要求|pending",
+    "period": "月份|办理月份|period",
+}
+
+
+def authorize_task_clear(text, fields, *, target=""):
+    """Accept positive, named field removal with wording supported by the workbench."""
+    text = re.sub(r"\s+", "", unicodedata.normalize("NFKC", text)).rstrip("。！!")
+    clauses = re.split(r"[，,；;、]", text)
+    matches = {
+        field
+        for field in fields
+        if field in _CLEAR_FIELDS
+        and any(
+            re.fullmatch(
+                rf"{_TASK_REQUEST}(?:清空|清除|删除){target}(?:{_CLEAR_FIELDS[field]})", clause
+            )
+            for clause in clauses
+        )
+    }
+    return len(clauses) == len(matches) and matches == set(fields)
 
 
 def _task_selector(task, aliases, *, replacement=False, explicit_company=False):
@@ -19,7 +42,7 @@ def _task_selector(task, aliases, *, replacement=False, explicit_company=False):
     company_selector = f"(?:(?:{company})(?:的)?)" + ("" if explicit_company else "?")
     period = task["period"]
     when = ""
-    if period is not None:
+    if period:
         year, padded_month = period.split("-")
         month = int(padded_month)
         when = (
@@ -30,6 +53,46 @@ def _task_selector(task, aliases, *, replacement=False, explicit_company=False):
             when = f"(?:{when})?"
     intent = f"(?:{_TASK_INTENT[task['intent']]})" + ("" if replacement else "?")
     return rf"(?:当前|本次|这次|这个|这条|此|该)?{company_selector}{when}{intent}{_TASK_NOUN}"
+
+
+def authorize_task_addition(text, proposed, aliases):
+    if not proposed["intent"]:
+        return False
+    text = re.sub(r"\s+", "", unicodedata.normalize("NFKC", text)).rstrip("。！!")
+    target = _task_selector(proposed, aliases, replacement=True)
+    return bool(
+        re.fullmatch(
+            rf"{_TASK_REQUEST}(?:另建|新增|再建|追加){target}(?:[，,；;]保留(?:已有|原有)待办)?",
+            text,
+        )
+    )
+
+
+def authorize_task_update(text, task, aliases, changes):
+    target = _task_selector(task, aliases)
+    clear = list(changes.get("clear_unresolved", ()))
+    if changes.get("clear_period"):
+        clear.append("period")
+    if changes["intent"] not in (None, task["intent"]) or changes["unresolved"]:
+        return False
+    if clear:
+        return changes["period"] is None and authorize_task_clear(
+            text, clear, target=rf"{target}的?"
+        )
+    if not changes["period"]:
+        return False
+    year, month = changes["period"].split("-")
+    date = rf"(?:{year}年(?:{month}|{int(month)})月|{year}[-/]{month})"
+    text = re.sub(r"\s+", "", unicodedata.normalize("NFKC", text)).rstrip("。！!")
+    return bool(
+        re.fullmatch(
+            rf"{_TASK_REQUEST}(?:把|将){target}(?:的)?(?:办理)?月份(?:改为|改成){date}", text
+        )
+    )
+
+
+def task_intents(text):
+    return {intent for intent, label in _TASK_INTENT.items() if re.search(label, text)}
 
 
 def authorize_task_change(text, action, task, aliases, replacement=None, replacement_aliases=()):

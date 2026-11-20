@@ -95,6 +95,7 @@ class TaskBody(ControlBody):
     period: str | None = None
     intent: str | None = None
     unresolved: dict | None = None
+    clear_unresolved: list[str] = Field(default_factory=list, max_length=20)
 
 
 class ViewBody(StrictModel):

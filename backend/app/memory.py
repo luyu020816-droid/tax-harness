@@ -3,7 +3,7 @@ import json
 from app.errors import AppError
 from app.identity import Identity, assert_access, owned
 from app.sources import read_source
-from app.tasks import current_in
+from app.tasks import active_in, current_in, task_summary
 from app.values import safe_json
 
 
@@ -25,15 +25,11 @@ def load_core(db, auth: Identity, session_id: str) -> dict:
             "SELECT memory_epoch FROM users WHERE user_id=%s", (auth.user_id,)
         ).fetchone()
         task = current_in(conn, auth, company) if company else None
-        candidates = []
-        if not company:
-            candidates = conn.execute(
-                "SELECT t.task_id,t.company_id,t.period,t.intent,t.status,t.revision,t.generation "
-                "FROM task_slots s JOIN tasks t ON s.current_task_id=t.task_id "
-                "JOIN user_company_grants g ON g.user_id=s.user_id AND g.company_id=s.company_id "
-                "WHERE s.user_id=%s AND g.can_read ORDER BY t.company_id",
-                (auth.user_id,),
-            ).fetchall()
+        candidates = [
+            task_summary(item)
+            for item in active_in(conn, auth, company)
+            if not task or item["task_id"] != task["task_id"]
+        ]
         prefs = conn.execute(
             "SELECT * FROM preferences WHERE user_id=%s AND status='active' "
             "AND (scope_key='@user' OR scope_key=%s) ORDER BY scope_key,stable_key",
@@ -91,8 +87,6 @@ def load_core(db, auth: Identity, session_id: str) -> dict:
                 task["checked_data_revision"] == head["data_revision"]
                 and task["checked_rules_epoch"] == head["rules_epoch"]
             )
-            if not task["snapshot_current"]:
-                task["unresolved_json"] = {**task["unresolved_json"], "needs_refresh": True}
             if task["snapshot_current"] and task["last_check_ref"]:
                 evidence = read_source(
                     conn, auth, str(task["last_check_ref"]), allow_suppressed=True

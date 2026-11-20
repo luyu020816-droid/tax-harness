@@ -54,9 +54,9 @@ def get(db, auth, plan_id):
 def _require_current_task(conn, auth, plan):
     if plan["status"] == "consumed" or not plan["task_id"]:
         return
-    from app.tasks import current_in
+    from app.tasks import matching_in
 
-    current = current_in(conn, auth, plan["company_id"])
+    current = matching_in(conn, auth, plan["company_id"], "complete_purposes", plan["task_period"])
     if (
         not current
         or current["task_id"] != plan["task_id"]
@@ -161,17 +161,14 @@ def prepare(
             )
         if invoice["revision"] != expected_revision:
             raise AppError("VERSION_CONFLICT", "发票已变化，请核对当前记录。", 409)
-        from app.tasks import current_in
+        from app.tasks import matching_in
 
         head = conn.execute(
             "SELECT * FROM company_heads WHERE company_id=%s FOR UPDATE", (company_id,)
         ).fetchone()
-        task = current_in(conn, auth, company_id)
-        if task and (
-            task["intent"] != "complete_purposes"
-            or task["period"] != invoice["invoice_date"].strftime("%Y-%m")
-        ):
-            task = None
+        task = matching_in(
+            conn, auth, company_id, "complete_purposes", invoice["invoice_date"].strftime("%Y-%m")
+        )
         if "purpose" in patch or task:
             slot = conn.execute(
                 "SELECT authority_source_seq FROM task_slots WHERE user_id=%s AND company_id=%s",

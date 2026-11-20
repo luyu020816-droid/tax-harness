@@ -1051,14 +1051,16 @@ class Runtime:
         if not company:
             return pending
         assert_access(conn, execution.auth, company)
-        task = tasks.current_in(conn, execution.auth, company)
+        task = tasks.matching_in(
+            conn, execution.auth, company, pending["intent"], pending.get("period"), allow_unset=True
+        )
         if task:
             return {
                 **pending,
                 "task_id": str(task["task_id"]),
                 "task_generation": task["generation"],
             }
-        if pending["intent"] not in tasks.INTENTS:
+        if pending["intent"] not in tasks.INTENTS or tasks.current_in(conn, execution.auth, company):
             return pending
         slot = tasks._slot(conn, execution.auth, company)
         if execution.source_seq <= slot["authority_source_seq"]:

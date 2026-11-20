@@ -255,6 +255,15 @@ def _result_text(data, view, *, today=None):
     if view == "rules":
         return f"当前适用规则：{_rules(data)}。完整依据可在规则详情核对。", data
     if view == "task":
+        if data.get("active_tasks"):
+            intents = {"query_month": "发票查询", "explain_rules": "规则说明",
+                       "complete_purposes": "用途补充"}
+            items = [
+                f"- {item.get('period') or '月份待补充'} {intents[item['intent']]}（"
+                f"{'进行中' if item['status'] == 'active' else '等待补充'}）"
+                for item in data["active_tasks"]
+            ]
+            return f"{label}有 {len(items)} 项未完成任务。\n" + "\n".join(items), None
         if "task" not in data:
             labels = {
                 "cancelled": "已取消",

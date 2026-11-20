@@ -6,7 +6,7 @@ from app.errors import AppError
 from app.execution import Execution, guard, guard_company
 from app.identity import Identity, assert_access, owned
 from app.sources import read_source, validate_refs
-from app.tasks import _revision, current_in
+from app.tasks import _revision, current_in, matching_in
 from app.values import INVOICE_ID_PATTERN, digest, jsonb, uid
 
 
@@ -337,13 +337,11 @@ def update_invoice(
                         operation_id,
                     ),
                 ).fetchone()
-                task = current_in(conn, auth, company_id)
-                if (
-                    changed
-                    and task
-                    and task["intent"] == "complete_purposes"
-                    and task["period"] == invoice["invoice_date"].strftime("%Y-%m")
-                ):
+                task = matching_in(
+                    conn, auth, company_id, "complete_purposes",
+                    invoice["invoice_date"].strftime("%Y-%m"),
+                )
+                if changed and task:
                     task = conn.execute(
                         "UPDATE tasks SET revision=revision+1,authority_source_seq=greatest(authority_source_seq,%s),"
                         "unresolved_json=unresolved_json||%s,updated_at=now() WHERE task_id=%s RETURNING *",

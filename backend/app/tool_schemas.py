@@ -118,6 +118,9 @@ class ChangeTask(Scope):
     target_id: UUID | None = None
     expected_revision: int | None = None
     unresolved: dict = Field(default_factory=dict)
+    clear_unresolved: list[str] = Field(
+        default_factory=list, max_length=20, description="明确要清除的用户字段键名。"
+    )
     source_refs: list[SourceRef] = Field(min_length=1, max_length=6)
 
 
@@ -479,13 +482,14 @@ TOOLS = {
     ),
     "get_task": (
         GetTask,
-        "读取当前用户在该企业的未完成任务。问本次保存与待办时用include_cancelled=true核对"
+        "读取当前用户在该企业的全部未完成待办及当前焦点。问本次保存与待办时用include_cancelled=true核对"
         "本会话最近取消的用途任务；返回已取消任务就用result(view=task)交付历史回执和状态。"
         "新会话续办仍须查询当前资料。",
     ),
     "change_task": (
         ChangeTask,
-        "创建、更正、明确替换、取消或删除任务；每用户每企业最多一项未完成，不能凭口头声明完成。",
+        "创建、更正、明确替换、取消或删除任务。用户明确另建且保留已有待办时用start。"
+        "有多个待办时，用get_task列出后按明确的月份和办理目标选定ID与版本；目标不清时追问。",
     ),
     "manage_preference": (
         ManagePreference,
