@@ -111,7 +111,10 @@ def suppress_old_history(
     target_id=None,
     before_seq=None,
 ) -> None:
-    ids = [str(r["source_id"]) for r in refs]
+    ids = [
+        str(ref[key])
+        for ref in refs for key in ("source_id", "origin_source_id") if ref.get(key)
+    ]
     if ids:
         # Suppress automatic historical use, while keeping immutable evidence for other valid facts.
         conn.execute(

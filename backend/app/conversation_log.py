@@ -32,7 +32,7 @@ def snapshot(conn, auth, session_id):
     ).fetchone()["n"]
 
 
-def read(conn, auth, source_id):
+def read(conn, auth, source_id, *, reader_turn_id=None):
     row = conn.execute(
         "SELECT t.session_id,t.source_seq FROM sources s JOIN turns t USING(turn_id) "
         "WHERE s.source_id=%s AND s.user_id=%s",
@@ -41,7 +41,7 @@ def read(conn, auth, source_id):
     if not row:
         raise AppError("RESOURCE_NOT_FOUND", "历史记录不存在或不可访问。", 404)
     owned(conn, "sessions", "session_id", str(row["session_id"]), auth)
-    source = read_source(conn, auth, source_id)
+    source = read_source(conn, auth, source_id, reader_turn_id=reader_turn_id)
     if source["role"] == "assistant":
         from app.knowledge_retrieval import read_evidence_group_in, validate_retrievals
 

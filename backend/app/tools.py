@@ -171,7 +171,8 @@ class ToolExecutor:
                 visible = preferences.list_preferences(
                     self.db,
                     execution.auth,
-                    arguments.get("scope") if arguments.get("scope") != "@user" else None,
+                    preferences.tool_company(self.db, execution, arguments.get("scope")),
+                    turn_id=execution.turn_id,
                 )
                 exc.details = {
                     **exc.details,
@@ -480,7 +481,8 @@ class ToolExecutor:
                 return {
                     "preferences": safe_json(
                         preferences.list_preferences(
-                            db, auth, args.get("scope") if args.get("scope") != "@user" else None
+                            db, auth, preferences.tool_company(db, execution, args.get("scope")),
+                            turn_id=execution.turn_id,
                         )
                     )
                 }

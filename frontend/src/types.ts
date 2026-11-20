@@ -174,6 +174,7 @@ export interface Preference {
   value: string;
   revision: number;
   generation: number;
+  needs_resolution?: boolean;
   source_refs: { source_id: string }[];
 }
 export interface Pending {

@@ -619,7 +619,7 @@ def create_app(
 
     @app.get("/api/v1/preferences")
     def preference_list(company_id: str | None = None, current=auth_dependency):
-        return safe_json(preferences.list_preferences(db, current, company_id))
+        return safe_json(preferences.list_preferences(db, current, company_id, management=True))
 
     @app.get("/api/v1/memory/preferences")
     def memory_history_list(
@@ -629,11 +629,21 @@ def create_app(
             if company_id:
                 identity.assert_access(conn, current, company_id)
             rows = conn.execute(
-                "SELECT preference_id,scope_key,stable_key,status,revision,generation FROM preferences p "
+                "SELECT preference_id,scope_key,stable_key,status,revision,generation,value,source_refs FROM preferences p "
                 "WHERE p.user_id=%s AND (p.scope_key='@user' OR (p.scope_key=%s AND EXISTS(SELECT 1 FROM user_company_grants g WHERE g.user_id=p.user_id AND g.company_id=p.scope_key AND g.can_read))) "
                 "AND (%s::uuid IS NULL OR preference_id<%s) ORDER BY preference_id DESC LIMIT 21",
                 (current.user_id, company_id, before_id, before_id),
             ).fetchall()
+            from app import preference_access
+
+            for row in rows[:20]:
+                try:
+                    preference_access.sources_in(conn, current, row, company_id)
+                except AppError as exc:
+                    if not preference_access.invalid_source(exc):
+                        raise
+                    row["stable_key"] = "来源待核对"
+                del row["value"], row["source_refs"]
             return safe_json(
                 {
                     "items": rows[:20],

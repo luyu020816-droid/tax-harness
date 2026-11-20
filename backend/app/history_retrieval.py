@@ -339,7 +339,9 @@ class HistoryRetrieval:
                 for u in packet["protected_excerpts"]
             ):
                 raise AppError("SOURCE_INVALIDATED", "引用不是当前摘要的受保护摘录。", 409)
-            source = read_source(conn, execution.auth, source_id, company_id=company)
+            source = read_source(
+                conn, execution.auth, source_id, company_id=company, reader_turn_id=execution.turn_id
+            )
             start = source["content"].find(quote)
         candidate = {
             **source,

@@ -441,6 +441,11 @@ export function MemoryView({
               <article className="memory-row" key={pref.preference_id}>
                 <div className="memory-content">
                   <strong>{pref.value}</strong>
+                  {pref.needs_resolution && (
+                    <p className="notice">
+                      此类偏好有多条记录。请保留要使用的一条，其余从此处删除。
+                    </p>
+                  )}
                   <p>
                     {pref.scope_key === '@user' ? '我的全部企业' : companyName(pref.scope_key)} ·
                     用户明确设置

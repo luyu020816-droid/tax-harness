@@ -177,7 +177,10 @@ def search(db, execution, arguments, settings, engine):
         with measured(db, execution, timings, "聊天候选原文核验"):
             for item in candidates:
                 try:
-                    source = read(conn, execution.auth, item["source_id"])
+                    source = read(
+                        conn, execution.auth, item["source_id"],
+                        reader_turn_id=getattr(execution, "turn_id", None),
+                    )
                 except AppError as exc:
                     if exc.code not in (
                         "SOURCE_INVALIDATED",
@@ -332,7 +335,9 @@ def page(db, execution, arguments, cursor, settings, engine):
                 continue
             item = candidates[key]
             try:
-                source = read(conn, execution.auth, key)
+                source = read(
+                    conn, execution.auth, key, reader_turn_id=getattr(execution, "turn_id", None)
+                )
                 if (
                     source["content_hash"] != item["source_hash"]
                     or source["revision"] != item["revision"]

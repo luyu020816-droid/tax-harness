@@ -63,6 +63,7 @@ def groups(db, execution, covered=(), *, excluded=None, preserve_recent=0):
                             execution.auth,
                             str(source["source_id"]),
                             company_id=session["selected_company_id"],
+                            reader_turn_id=execution.turn_id,
                         )
                         if source["role"] == "assistant":
                             from app.conversation_log import read

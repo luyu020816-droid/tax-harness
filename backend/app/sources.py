@@ -61,7 +61,8 @@ def add_source(
 
 
 def read_source(
-    conn, auth: Identity, source_id: str, *, company_id=None, allow_suppressed=False
+    conn, auth: Identity, source_id: str, *, company_id=None, allow_suppressed=False,
+    reader_turn_id=None,
 ) -> dict:
     row = conn.execute(
         "SELECT * FROM sources WHERE source_id=%s AND user_id=%s AND recall_state<>'deleted'",
@@ -89,6 +90,9 @@ def read_source(
             raise AppError("SOURCE_INVALIDATED", "来源会话已删除，不再用于上下文或引用。", 409)
     if row["role"] == "assistant" and row["turn_id"]:
         from app.knowledge_visibility import answer_visible
+        from app.preference_access import validate_answer
+
+        validate_answer(conn, auth, source_id, company=company_id, reader_turn_id=reader_turn_id)
 
         turn = conn.execute(
             "SELECT final_cards,final_response_ref FROM turns WHERE turn_id=%s AND user_id=%s",
@@ -107,13 +111,25 @@ def read_source(
             data = {}
         if not isinstance(data, dict):
             data = {}
+        if "preferences" in data or "preference_id" in data:
+            from app.preference_access import validate_dependencies
+
+            values = data.get("preferences", [data])
+            validate_dependencies(
+                conn, auth, [
+                    {"kind": "preference", "id": item["preference_id"],
+                     "revision": item["revision"], "generation": item["generation"]}
+                    for item in values if item.get("status") == "active"
+                ], company_id or (scopes[0]["company_id"] if len(scopes) == 1 else None),
+                reader_turn_id=reader_turn_id,
+            )
         if data.get("kind") in ("conversation_search", "conversation_evidence"):
             from app.conversation_history import evidence_in
 
             for match in data.get(
                 "matches", [data] if data.get("kind") == "conversation_evidence" else []
             ):
-                evidence_in(conn, auth, match["citation_id"])
+                evidence_in(conn, auth, match["citation_id"], reader_turn_id=reader_turn_id)
         elif data.get("kind") == "knowledge_search":
             from app.knowledge_retrieval import validate_retrievals
 

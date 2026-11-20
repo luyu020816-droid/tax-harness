@@ -10,6 +10,39 @@ from app.agent_skills import publish as publish_skill
 from app.agent_tools import set_enabled as set_tool
 from app.errors import AppError
 from app.identity import Identity
+from app.preferences import change_preference
+from app.values import uid
+
+
+@pytest.mark.parametrize("can_list", [False, True])
+def test_mem02_agent_can_only_receive_preferences_with_list_permission(
+    db, settings, execution_factory, can_list
+):
+    auth = Identity("U001")
+    change_preference(
+        db,
+        auth,
+        action="remember",
+        scope="C001",
+        key="company_format",
+        value="MEM02_AGENT_SCOPED_FORMAT",
+        request_id=uid(),
+    )
+    draft = AgentDraft(
+        name="偏好授权校验",
+        model_profile_id="default",
+        tool_grants={"manage_preference": ["list"]} if can_list else {},
+    )
+    agent = create_draft(db, auth, draft)
+    agent = publish(db, auth, agent["agent_id"], agent["revision"])
+    set_enabled(db, auth, agent["agent_id"], agent["revision"], True)
+    execution = execution_factory("请给一句问候")
+    with db.transaction() as conn:
+        conn.execute("UPDATE turns SET status='queued' WHERE turn_id=%s", (execution.turn_id,))
+        bind_turn(conn, auth, execution.turn_id, agent["agent_id"])
+        conn.execute("UPDATE turns SET status='running' WHERE turn_id=%s", (execution.turn_id,))
+    payload, _, _ = context.assemble(db, model_settings(settings), execution, [])
+    assert ("MEM02_AGENT_SCOPED_FORMAT" in payload["messages"][0]["content"]) is can_list
 
 
 def test_global_tool_switch_filters_legacy_context_and_invalidates_old_payload(

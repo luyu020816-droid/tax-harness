@@ -17,6 +17,19 @@ def answer_visible(conn, auth, cards):
 
 
 def project_turn(conn, auth, turn):
+    if turn.get("final_response_ref"):
+        from app.preference_access import validate_answer
+
+        try:
+            validate_answer(conn, auth, turn["final_response_ref"], historical=True)
+        except AppError:
+            return {
+                **turn,
+                "final_message": "这条回答引用的记忆已失效，请在当前范围重新核对。",
+                "final_cards": [
+                    card for card in (turn["final_cards"] or []) if card.get("kind") == "operation"
+                ],
+            }
     if answer_visible(conn, auth, turn.get("final_cards")):
         return turn
     return {

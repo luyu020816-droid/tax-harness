@@ -24,7 +24,7 @@ def collect(conn, execution, refs, budget):
     companies = [session["selected_company_id"]] if session["selected_company_id"] else []
     units, seen = [], set()
     for ref in refs:
-        source = read_source(conn, execution.auth, ref["source_id"])
+        source = read_source(conn, execution.auth, ref["source_id"], reader_turn_id=execution.turn_id)
         validate_source_scope(conn, execution.auth, source, companies)
         turn = conn.execute(
             "SELECT session_id FROM turns WHERE turn_id=%s", (source["turn_id"],)
@@ -81,7 +81,7 @@ def validate(conn, execution, content, refs):
         raise AppError("SUMMARY_INVALID", "摘要摘录包校验失败。", 422)
     allowed = {r["source_id"]: r["revision"] for r in refs}
     for ref in refs:
-        source = read_source(conn, execution.auth, ref["source_id"])
+        source = read_source(conn, execution.auth, ref["source_id"], reader_turn_id=execution.turn_id)
         turn = conn.execute(
             "SELECT session_id FROM turns WHERE turn_id=%s", (source["turn_id"],)
         ).fetchone()

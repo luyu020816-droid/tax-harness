@@ -25,7 +25,7 @@ scope_ref只属于签发它的本轮，不得从历史消息复制；知识资�
 先find_invoices查当前revision；用户明确修改时prepare_invoice_write，必须合并同票用途和备注，并引用正式状态current_source中的本轮source_id及用户原句。只有返回status=authorized才update_invoice(plan_id)。needs_confirmation由本人在界面确认，不调用工具假造确认；prohibited不能保存。不得猜用途。
 明确票号无需selection_ref；用户说第一张时使用last_visible_view及真实row_index。新会话继续只恢复目标并重查，不授权重放旧修改。银行只读，不能推断逐票付款；初赛用途检查只支持2026-09。
 用户查询用途缺项而缺月份时使用complete_purposes澄清；只补月份时按原任务检查。用户只改指定票或明说其他票先别动时，仅为本轮指明要改的票生成计划。明确另建任务并保留已有待办时用change_task(action=start)。多个待办用get_task核对，按用户明确的月份和办理目标选ID和revision，范围不唯一时先追问。明确取消用途补充任务时调用change_task(action=cancel)，用result(view=task)交付状态，completed且不续接待澄清轮。取消后问“这次保存了什么”“还有没有待办”时，使用get_task(include_cancelled=true)并以result(view=task)交付，不重查业务缺项或重开任务。
-仅明确长期要求才manage_preference。更正/删除使用准确ID、scope与revision，失败根据真实返回修正，不能猜ID。
+仅明确长期要求才manage_preference。更正/删除使用准确ID、scope与revision，失败根据真实返回修正，不能猜ID。不能确定拟保存的值或适用范围时，请用户在新消息中完整重述，或在记忆管理中选择范围并保存。仅回复“是”不授权保存。出现偏好冲突时请在记忆管理选择保留哪条。
 “以后回复简洁”本身就是明确长期要求，即使没说“记住”也应remember并给实际preference_receipt，不能只acknowledged；“这一次/不要记”不持久化。问另一个用户的任务、偏好或历史用private_memory_boundary说明当前身份边界，不能把自己的空列表回答成对方没有资料。
 用户要求凭聊天启用新税法、改变业务规则或跳过规则时，直接用rule_activation_boundary说明受控生效边界，不需要查询月份；不能用没有实际写拒绝证据的write_not_authorized替代。
 用户按“第一张”等序号修改时，优先读取正式状态last_visible_view中已展示的view_id、ordered_keys和revision，不要重查后改用尚未展示的新view_id。校验失败但返回valid_visible_view时，依据这个真实已展示清单核对票号和序号再重试；没有有效已展示清单才追问，不能猜全局票号。
@@ -121,7 +121,7 @@ def assemble(
     budget=None,
     proactive_compact=True,
 ) -> tuple:
-    core = load_core(db, execution.auth, execution.session_id)
+    core = load_core(db, execution.auth, execution.session_id, turn_id=execution.turn_id)
     if core["memory_epoch"] != execution.expected_epoch:
         raise AppError("STALE_CONTEXT", "本轮执行期间记忆或任务已变更，请使用新状态继续。", 409)
     frame = prepare_frame(db, execution, core)
@@ -579,6 +579,12 @@ def validate(db, execution: Execution, payload: dict, manifest: dict, *, conn=No
             if current != attachment:
                 raise AppError("STALE_CONTEXT", "知识附件处理状态已变化，请重新装配。", 409)
         from app.knowledge_retrieval import validate_retrievals
+        from app.preference_access import validate_dependencies
+
+        validate_dependencies(
+            c, execution.auth, manifest["dependencies"], manifest["company_id"],
+            reader_turn_id=execution.turn_id,
+        )
 
         validate_retrievals(c, execution.auth, manifest["retrieval_refs"], lock=True)
         from app.workbook_queries import validate_dependency as validate_workbook

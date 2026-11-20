@@ -54,7 +54,7 @@ def actual_usage(db, settings, auth, session_id):
 
 def preview(db, settings, auth, session_id, draft, *, binding=None):
     """Estimate without creating sources, bindings, turns or an Execution."""
-    core = load_core(db, auth, session_id)
+    core = load_core(db, auth, session_id, binding=binding)
     with db.transaction(readonly=True) as conn:
         session = owned(conn, "sessions", "session_id", session_id, auth)
         user = conn.execute(

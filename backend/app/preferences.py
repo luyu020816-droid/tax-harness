@@ -1,15 +1,17 @@
 import re
 
+from app import preference_access
 from app.errors import AppError
 from app.execution import Execution
 from app.identity import Identity, assert_access, owned
 from app.memory_changes import assert_newer, begin_change, finish_change, suppress_old_history
+from app.preference_rules import preference_evidence, preference_identity, value_identity
+from app.sources import read_source
 from app.values import jsonb, uid
 
 
 def history(db, auth, preference_id, *, before_revision=None, limit=20):
     """Explicit audit view, including tombstones; never used for model recall."""
-    from app.sources import read_source
     from app.values import safe_json
 
     with db.transaction(readonly=True) as conn:
@@ -23,9 +25,15 @@ def history(db, auth, preference_id, *, before_revision=None, limit=20):
         ).fetchall()
         for row in rows[:limit]:
             try:
-                for ref in row["source_refs"]:
-                    read_source(conn, auth, str(ref["source_id"]), allow_suppressed=True)
-            except AppError:
+                preference_access.sources_in(
+                    conn,
+                    auth,
+                    {**row, "scope_key": pref["scope_key"]},
+                    pref["scope_key"] if pref["scope_key"] != "@user" else None,
+                )
+            except AppError as exc:
+                if not preference_access.invalid_source(exc):
+                    raise
                 row["value"], row["source_refs"] = None, []
                 row["redacted"] = True
         return safe_json(
@@ -38,19 +46,66 @@ def history(db, auth, preference_id, *, before_revision=None, limit=20):
         )
 
 
-def list_preferences(db, auth: Identity, company_id: str | None = None) -> list[dict]:
+def visible_in(conn, auth, company_id, *, turn_id=None, binding=None, management=False):
+    if company_id:
+        assert_access(conn, auth, company_id)
+    if not preference_access.can_read(conn, turn_id=turn_id, binding=binding):
+        return []
+    rows = conn.execute(
+        "SELECT * FROM preferences WHERE user_id=%s AND status='active' "
+        "AND (scope_key='@user' OR scope_key=%s) ORDER BY scope_key,stable_key",
+        (auth.user_id, company_id),
+    ).fetchall()
+    catalogue = preference_access.company_names(conn) if rows else {}
+    by_identity = {}
+    for preference in rows:
+        try:
+            evidence = preference_access.sources_in(
+                conn, auth, preference, company_id, catalogue=catalogue
+            )
+        except AppError as exc:
+            if not preference_access.invalid_source(exc):
+                raise
+            continue
+        identity = (
+            preference["scope_key"],
+            preference_identity(preference["stable_key"], preference["value"]),
+        )
+        by_identity.setdefault(identity, []).append((preference, evidence))
+    visible = []
+    for group in by_identity.values():
+        if len(group) == 1:
+            visible.extend(group)
+        elif management:
+            visible.extend(({**row, "needs_resolution": True}, evidence) for row, evidence in group)
+        elif len({value_identity(row["value"]) for row, _ in group}) == 1:
+            visible.append(max(group, key=lambda item: item[0]["authority_source_seq"]))
+    return visible
+
+
+def list_preferences(
+    db,
+    auth: Identity,
+    company_id: str | None = None,
+    *,
+    turn_id=None,
+    management=False,
+) -> list[dict]:
     with db.transaction(readonly=True) as conn:
-        if company_id:
-            assert_access(conn, auth, company_id)
-        rows = conn.execute(
-            "SELECT * FROM preferences WHERE user_id=%s AND status='active' "
-            "AND (scope_key='@user' OR scope_key=%s) ORDER BY scope_key,stable_key",
-            (auth.user_id, company_id),
-        ).fetchall()
         return [
             {**row, "source_refs": [{"source_id": ref["source_id"]} for ref in row["source_refs"]]}
-            for row in rows
+            for row, _ in visible_in(conn, auth, company_id, turn_id=turn_id, management=management)
         ]
+
+
+def tool_company(db, execution, scope):
+    if not scope or scope == "@user":
+        return None
+    with db.transaction(readonly=True) as conn:
+        company = owned(conn, "sessions", "session_id", execution.session_id, execution.auth)
+        if company["selected_company_id"] != scope:
+            raise preference_access.scope_error()
+    return scope
 
 
 def change_preference(
@@ -95,6 +150,10 @@ def change_preference(
             current = owned(
                 conn, "preferences", "preference_id", str(existing["preference_id"]), auth
             )
+            if current["status"] == "active":
+                preference_access.sources_in(
+                    conn, auth, current, scope if scope != "@user" else None
+                )
             epoch = conn.execute(
                 "SELECT memory_epoch FROM users WHERE user_id=%s", (auth.user_id,)
             ).fetchone()["memory_epoch"]
@@ -104,9 +163,79 @@ def change_preference(
                 "memory_epoch": epoch,
                 "replayed": True,
             }
-        if not old and key:
+        signature = None
+        correction = False
+        if execution:
+            source = read_source(conn, auth, execution.source_id)
+            quotes = [
+                ref["quote"]
+                for ref in change["refs"]
+                if str(ref["source_id"]) == execution.source_id
+            ]
+            catalogue = preference_access.company_names(conn)
+            signature, correction, literal = preference_evidence(
+                source["content"],
+                quotes,
+                action,
+                value,
+                company_names=catalogue.get(scope, ()),
+            )
+            preference_access.authorize_scope(source, scope, value, signature, catalogue)
+            if signature and signature[1] != "default":
+                value = literal
+            if scope == "@user" and signature:
+                change["refs"] = preference_access.personal_authorization(
+                    conn, auth, source, change, value, signature
+                )
+        elif scope == "@user" and value is not None:
+            preference_access.authorize_scope(
+                {"content": value, "scope_kind": "user_private"},
+                scope,
+                value,
+                None,
+                preference_access.company_names(conn),
+            )
+        identity = preference_identity(
+            key or (old["stable_key"] if old else None), value, signature
+        )
+        candidates = conn.execute(
+            "SELECT * FROM preferences WHERE user_id=%s AND scope_key=%s AND status='active' "
+            "ORDER BY preference_id FOR UPDATE",
+            (auth.user_id, scope),
+        ).fetchall()
+        if old:
+            if (
+                execution
+                and action != "delete"
+                and identity != preference_identity(old["stable_key"], old["value"])
+            ):
+                raise AppError("NEEDS_CLARIFICATION", "更正内容与选中的偏好不匹配。", 422)
+            identity = preference_identity(old["stable_key"], old["value"])
+        matching = [
+            row
+            for row in candidates
+            if preference_identity(row["stable_key"], row["value"]) == identity
+        ]
+        if (len(matching) > 1 and (execution or not target_id)) or (
+            execution and action == "delete" and len(candidates) != 1
+        ):
+            raise AppError(
+                "PREFERENCE_CONFLICT", "请在记忆管理里选择并处理要更正或删除的偏好。", 409
+            )
+        if not old and identity:
+            old = (
+                matching[0]
+                if matching
+                else conn.execute(
+                    "SELECT * FROM preferences WHERE user_id=%s AND scope_key=%s AND stable_key=%s "
+                    "FOR UPDATE",
+                    (auth.user_id, scope, identity),
+                ).fetchone()
+            )
+        if not old and key and key != identity:
             old = conn.execute(
-                "SELECT * FROM preferences WHERE user_id=%s AND scope_key=%s AND stable_key=%s FOR UPDATE",
+                "SELECT * FROM preferences WHERE user_id=%s AND scope_key=%s AND stable_key=%s "
+                "FOR UPDATE",
                 (auth.user_id, scope, key),
             ).fetchone()
         if old:
@@ -115,6 +244,14 @@ def change_preference(
                 (old["preference_id"],),
             ).fetchone()
             assert_newer(change["source_seq"], old)
+            if (
+                execution
+                and correction
+                and not target_id
+                and expected_revision is None
+                and len(matching) == 1
+            ):
+                expected_revision = old["revision"]
             if expected_revision != old["revision"]:
                 raise AppError("VERSION_CONFLICT", "偏好版本已变化，请先查看当前值。", 409)
             if old["status"] == "deleted" and action != "remember":
@@ -153,7 +290,7 @@ def change_preference(
                     uid(),
                     auth.user_id,
                     scope,
-                    key,
+                    identity,
                     value,
                     change["source_seq"],
                     jsonb(change["refs"]),

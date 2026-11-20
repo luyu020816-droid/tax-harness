@@ -47,18 +47,12 @@ def content_allowed(conn, auth, run_id):
             validate_retrievals(conn, auth, row["manifest"].get("retrieval_refs", []))
             for dependency in row["manifest"].get("workbook_dependencies", []):
                 validate_workbook(conn, auth, turn["turn_id"], dependency)
-            for dependency in row["manifest"].get("dependencies", []):
-                if dependency.get("kind") == "preference":
-                    pref = conn.execute(
-                        "SELECT status,revision,generation FROM preferences WHERE preference_id=%s AND user_id=%s",
-                        (dependency["id"], auth.user_id),
-                    ).fetchone()
-                    if (
-                        not pref
-                        or pref["status"] != "active"
-                        or any(pref[k] != dependency[k] for k in ("revision", "generation"))
-                    ):
-                        return False
+            from app.preference_access import validate_dependencies
+
+            validate_dependencies(
+                conn, auth, row["manifest"].get("dependencies", []),
+                row["manifest"].get("company_id"),
+            )
 
             def check_embedded(value):
                 if isinstance(value, dict):

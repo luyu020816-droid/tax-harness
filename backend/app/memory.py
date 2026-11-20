@@ -2,12 +2,14 @@ import json
 
 from app.errors import AppError
 from app.identity import Identity, assert_access, owned
+from app.preference_rules import preference_identity
+from app.preferences import visible_in
 from app.sources import read_source
 from app.tasks import active_in, current_in, task_summary
 from app.values import safe_json
 
 
-def load_core(db, auth: Identity, session_id: str) -> dict:
+def load_core(db, auth: Identity, session_id: str, *, turn_id=None, binding=None) -> dict:
     with db.transaction(readonly=True) as conn:
         session = owned(conn, "sessions", "session_id", session_id, auth)
         company = session["selected_company_id"]
@@ -30,22 +32,9 @@ def load_core(db, auth: Identity, session_id: str) -> dict:
             for item in active_in(conn, auth, company)
             if not task or item["task_id"] != task["task_id"]
         ]
-        prefs = conn.execute(
-            "SELECT * FROM preferences WHERE user_id=%s AND status='active' "
-            "AND (scope_key='@user' OR scope_key=%s) ORDER BY scope_key,stable_key",
-            (auth.user_id, company),
-        ).fetchall()
         effective = {}
         dependencies = []
-        for pref in prefs:
-            if not pref["source_refs"]:
-                raise AppError(
-                    "STATE_SOURCE_UNAVAILABLE", "有效偏好缺少来源，暂停使用并等待修复。", 503
-                )
-            evidence = []
-            for ref in pref["source_refs"]:
-                source = read_source(conn, auth, str(ref["source_id"]), allow_suppressed=True)
-                evidence.append({"source_id": source["source_id"], "revision": source["revision"]})
+        for pref, evidence in visible_in(conn, auth, company, turn_id=turn_id, binding=binding):
             entry = {
                 k: pref[k]
                 for k in (
@@ -58,8 +47,10 @@ def load_core(db, auth: Identity, session_id: str) -> dict:
                 )
             }
             entry["evidence"] = evidence
-            if pref["stable_key"] not in effective or pref["scope_key"] != "@user":
-                effective[pref["stable_key"]] = entry
+            identity = preference_identity(pref["stable_key"], pref["value"])
+            if identity not in effective or pref["scope_key"] != "@user":
+                effective[identity] = entry
+        for pref in effective.values():
             dependencies.append(
                 {
                     "kind": "preference",

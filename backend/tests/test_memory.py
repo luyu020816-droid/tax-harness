@@ -12,6 +12,248 @@ from app.values import uid
 AUTH = Identity("U001")
 
 
+def preference_command(db, execution, text, **args):
+    from test_runtime import tool
+
+    from app.tools import ToolExecutor
+
+    return ToolExecutor(db).execute(
+        execution,
+        tool(
+            "manage_preference",
+            {
+                "source_refs": [{"source_id": execution.source_id, "quote": text}],
+                **args,
+            },
+        )["tool_calls"][0],
+    )[0]
+
+
+@pytest.mark.parametrize(
+    "text,value",
+    [
+        ("只这次三行，不要记住。", "三行"),
+        ("如果我说“以后回复简短”，该怎么理解？", "简短"),
+        ("比如：今后回复详细。", "详细"),
+        ("以后回复简短，但不要记下来。", "简短"),
+        ("以后请回复简短。", "详细"),
+    ],
+)
+def test_mem01_proposals_need_persistent_intent_and_supported_value(
+    db, admin, execution_factory, text, value
+):
+    result = preference_command(
+        db,
+        execution_factory(text),
+        text,
+        action="remember",
+        key="response_style",
+        value=value,
+    )
+    assert not result["ok"], result
+    assert result["error"]["code"] == "NEEDS_CLARIFICATION"
+    assert not list_preferences(db, AUTH)
+    assert not admin.execute("SELECT 1 FROM preference_revisions").fetchone()
+    assert not admin.execute(
+        "SELECT 1 FROM memory_change_ops WHERE target_type='preference'"
+    ).fetchone()
+
+
+def test_mem02_company_instruction_cannot_be_saved_as_personal(db, execution_factory):
+    text = "请记住：甲企业项目标识MEM02标记。"
+    execution = execution_factory(text)
+    proposed = preference_command(
+        db,
+        execution,
+        text,
+        action="remember",
+        key="report_marker",
+        value="甲企业项目标识MEM02标记",
+    )
+    assert not proposed["ok"], proposed
+    assert proposed["error"]["code"] == "MEMORY_SCOPE_MISMATCH"
+    valid = preference_command(
+        db,
+        execution,
+        text,
+        action="remember",
+        scope="C001",
+        key="report_marker",
+        value="项目标识MEM02标记",
+    )
+    assert valid["ok"], valid
+    assert [p["value"] for p in list_preferences(db, AUTH, "C001")] == ["项目标识MEM02标记"]
+    assert not list_preferences(db, AUTH, "C002")
+    assert not list_preferences(db, Identity("U002"), "C001")
+
+
+def test_ar02_cross_session_correction_uses_original_preference_id(db, execution_factory):
+    text = "请记住，今后回复要简短。"
+    first = preference_command(
+        db,
+        execution_factory(text),
+        text,
+        action="remember",
+        key="response_length",
+        value="简短",
+    )
+    assert first["ok"], first
+    correction = "更正刚才的要求，今后回复要详细，请记住。"
+    second = preference_command(
+        db,
+        execution_factory(correction, company="C002"),
+        correction,
+        action="remember",
+        key="answer_length",
+        value="详细",
+    )
+    assert second["ok"], second
+    assert second["data"]["preference_id"] == first["data"]["preference_id"]
+    assert second["data"]["revision"] == first["data"]["revision"] + 1
+    assert [p["value"] for p in list_preferences(db, AUTH, "C002")] == ["详细"]
+
+
+@pytest.mark.asyncio
+async def test_mem02_legacy_company_source_does_not_return_via_trace_or_model(
+    db, admin, settings, source_factory, execution_factory
+):
+    import json
+
+    from test_runtime import ScriptedModel, answer_plan, model_settings
+
+    from app.conversation_log import read
+    from app.knowledge_admin import revoke_read
+    from app.preferences import history
+    from app.runtime import Runtime
+    from app.summary_evidence import pack
+    from app.turns import accept_turn, read_turn
+    from app.values import jsonb
+
+    marker = "MEM02_OLD_COMPANY_MARKER"
+    text = "以后回复简洁。"
+    execution = execution_factory(text)
+    saved = preference_command(
+        db,
+        execution,
+        text,
+        action="remember",
+        key="response_style",
+        value="简洁",
+    )
+    assert saved["ok"], saved
+    default = saved["data"]
+    admin.execute("UPDATE turns SET status='completed' WHERE turn_id=%s", (execution.turn_id,))
+    admin.execute("UPDATE work_items SET state='done' WHERE work_id=%s", (execution.work_id,))
+    legacy = change_preference(
+        db, AUTH, action="remember", key="legacy_marker", value=marker, request_id=uid()
+    )
+
+    async def run(company, output, session_id=None, *, auth=AUTH):
+        session_id = session_id or str(create_session(db, auth, company)["session_id"])
+        turn = accept_turn(db, auth, session_id, uid(), "请给一句普通问候。")
+        model = ScriptedModel([answer_plan(blocks=[{"type": "chat_answer", "text": output}])])
+        worker = Runtime(db, model_settings(settings), model)
+        await worker.run(worker.claim())
+        result = read_turn(db, auth, turn["turn_id"])
+        assert result["status"] == "completed", result
+        return result, model.requests, session_id
+
+    old_answer, old_requests, old_session = await run("C002", "你好 " + marker)
+    assert marker in json.dumps(old_requests)
+    raw = source_factory(f"请记住：仅限甲企业使用标识 {marker}。")
+    refs = jsonb([{"source_id": str(raw["source_id"]), "quote": raw["content"]}])
+    admin.execute(
+        "UPDATE preferences SET source_refs=%s WHERE preference_id=%s",
+        (refs, legacy["preference_id"]),
+    )
+    admin.execute(
+        "UPDATE preference_revisions SET source_refs=%s WHERE preference_id=%s",
+        (refs, legacy["preference_id"]),
+    )
+    answer_ref = admin.execute(
+        "SELECT final_response_ref FROM turns WHERE turn_id=%s", (old_answer["turn_id"],)
+    ).fetchone()["final_response_ref"]
+    admin.execute(
+        "INSERT INTO summaries(summary_id,user_id,session_id,scope,covered_sources,memory_epoch,content,status,generation) "
+        "SELECT %s,user_id,%s,'C002',%s,memory_epoch,%s,'active',1 FROM users WHERE user_id='U001'",
+        (
+            uid(),
+            old_session,
+            jsonb([{"source_id": str(answer_ref), "revision": 1}]),
+            pack(marker, []),
+        ),
+    )
+    with db.transaction(readonly=True) as conn:
+        with pytest.raises(AppError) as error:
+            read(conn, AUTH, str(answer_ref))
+        assert error.value.code == "SOURCE_INVALIDATED"
+    assert [str(r["preference_id"]) for r in list_preferences(db, AUTH, "C002")] == [
+        default["preference_id"]
+    ]
+    _, before_revoke, _ = await run("C002", "你好。", old_session)
+    assert marker not in json.dumps(before_revoke)
+
+    revoke_read(admin, AUTH.user_id, "C001", uid())
+    assert marker not in read_turn(db, AUTH, old_answer["turn_id"])["final_message"]
+    _, requests, _ = await run("C002", "你好。", old_session)
+    assert marker not in json.dumps(requests)
+    assert [r["value"] for r in list_preferences(db, AUTH, "C002")] == ["简洁"]
+    revision = history(db, AUTH, str(legacy["preference_id"]))["revisions"][0]
+    assert revision["redacted"] and revision["value"] is None
+    _, other_requests, _ = await run(None, "你好。", auth=Identity("U002"))
+    assert marker not in json.dumps(other_requests)
+
+
+def test_ar02_body_and_appendix_are_independent(db, execution_factory):
+    text = "以后正文简短、附录详细。"
+    for value in ("简短", "详细"):
+        saved = preference_command(
+            db,
+            execution_factory(text),
+            text,
+            action="remember",
+            key="response_style",
+            value=value,
+        )
+        assert saved["ok"], saved
+    assert {r["value"] for r in list_preferences(db, AUTH)} == {"正文简短", "附录详细"}
+
+
+def test_ar02_legacy_opposite_values_need_manual_resolution(db, admin, execution_factory):
+    first = change_preference(
+        db, AUTH, action="remember", key="response_style", value="简洁", request_id=uid()
+    )
+    second = change_preference(
+        db, AUTH, action="remember", key="old_length", value="详细", request_id=uid()
+    )
+    admin.execute(
+        "UPDATE preferences SET stable_key='answer_length' WHERE preference_id=%s",
+        (second["preference_id"],),
+    )
+    assert not list_preferences(db, AUTH)
+    candidates = list_preferences(db, AUTH, management=True)
+    assert len(candidates) == 2 and all(row["needs_resolution"] for row in candidates)
+    text = "更正刚才的要求，今后回复要详细。"
+    rejected = preference_command(
+        db,
+        execution_factory(text),
+        text,
+        action="remember",
+        key="answer_length",
+        value="详细",
+    )
+    assert rejected["error"]["code"] == "PREFERENCE_CONFLICT", rejected
+    change_preference(
+        db,
+        AUTH,
+        action="delete",
+        target_id=str(first["preference_id"]),
+        expected_revision=first["revision"],
+        request_id=uid(),
+    )
+    assert [row["value"] for row in list_preferences(db, AUTH)] == ["详细"]
+
+
 def test_ar01_month_update_keeps_user_fields_and_invalidates_old_check(
     db, admin, execution_factory
 ):

@@ -57,14 +57,14 @@ def _view(source, citation, excerpt, start, end):
     )
 
 
-def evidence_in(conn, auth, citation_id):
+def evidence_in(conn, auth, citation_id, *, reader_turn_id=None):
     row = conn.execute(
         "SELECT e.*,q.query_plan,q.scope_snapshot FROM history_evidence e JOIN history_queries q USING(query_id) WHERE e.citation_id=%s AND q.user_id=%s",
         (citation_id, auth.user_id),
     ).fetchone()
     if not row or row["query_plan"].get("kind") != "conversation":
         raise AppError("RESOURCE_NOT_FOUND", "历史引用不存在或无权访问。", 404)
-    source = read(conn, auth, str(row["source_id"]))
+    source = read(conn, auth, str(row["source_id"]), reader_turn_id=reader_turn_id)
     excerpt = source["content"][row["char_start"] : row["char_end"]]
     if source["revision"] != row["source_revision"] or digest(excerpt) != row["excerpt_hash"]:
         raise AppError("SOURCE_INVALIDATED", "历史引用已失效。", 409)
@@ -74,7 +74,7 @@ def evidence_in(conn, auth, citation_id):
         auth,
         source,
         row["scope_snapshot"].get("before_source_seq", source["source_seq"] + 1),
-        row["query_plan"].get("arguments", {}),
+        row["query_plan"].get("arguments", {}), reader_turn_id=reader_turn_id,
     )
     return result
 
@@ -220,7 +220,15 @@ def _lexical_search(
         )
         matches = []
         for row in rows[:page_size]:
-            source = read(conn, execution.auth, str(row["source_id"]))
+            try:
+                source = read(
+                    conn, execution.auth, str(row["source_id"]),
+                    reader_turn_id=getattr(execution, "turn_id", None),
+                )
+            except AppError as exc:
+                if exc.code not in ("SOURCE_INVALIDATED", "ACCESS_DENIED", "RESOURCE_NOT_FOUND"):
+                    raise
+                continue
             content = source["content"].lower()
             position = content.find(query.strip().lower()) if query.strip() else 0
             if position < 0:
@@ -244,7 +252,8 @@ def _lexical_search(
 
 def read_page(db, execution, *, source_id, char_start=0):
     with db.transaction() as conn:
-        source = read(conn, execution.auth, source_id)
+        reader_turn_id = getattr(execution, "turn_id", None)
+        source = read(conn, execution.auth, source_id, reader_turn_id=reader_turn_id)
         if source["source_seq"] >= execution.source_seq:
             raise AppError("SOURCE_INVALIDATED", "不能读取本轮或之后的历史记录。", 409)
         query_id = uid()
@@ -259,7 +268,9 @@ def read_page(db, execution, *, source_id, char_start=0):
             ),
         )
         result = _evidence(conn, execution.auth, query_id, source, char_start)
-        result["neighbors"] = neighbors_in(conn, execution.auth, source, execution.source_seq)
+        result["neighbors"] = neighbors_in(
+            conn, execution.auth, source, execution.source_seq, reader_turn_id=reader_turn_id
+        )
         return result
 
 
@@ -346,7 +357,7 @@ def search(
     return result
 
 
-def neighbors_in(conn, auth, source, before, filters=None):
+def neighbors_in(conn, auth, source, before, filters=None, *, reader_turn_id=None):
     from app.conversation_index import ELIGIBLE
 
     filters = filters or {}
@@ -386,7 +397,7 @@ def neighbors_in(conn, auth, source, before, filters=None):
         ).fetchall()
         for row in rows:
             try:
-                neighbor = read(conn, auth, str(row["source_id"]))
+                neighbor = read(conn, auth, str(row["source_id"]), reader_turn_id=reader_turn_id)
             except AppError as exc:
                 if exc.code not in ("SOURCE_INVALIDATED", "RESOURCE_NOT_FOUND", "ACCESS_DENIED"):
                     raise
