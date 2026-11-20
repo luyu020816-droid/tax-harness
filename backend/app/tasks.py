@@ -2,6 +2,8 @@ from app.errors import AppError
 from app.execution import Execution
 from app.identity import Identity, assert_access, owned
 from app.memory_changes import assert_newer, begin_change, finish_change, suppress_old_history
+from app.sources import read_source
+from app.task_commands import authorize_task_change
 from app.values import jsonb, month_bounds, uid
 
 UNFINISHED = ("active", "waiting_user")
@@ -107,6 +109,38 @@ def _end(conn, task, status, sequence, refs):
     return row
 
 
+def _require_task_command(conn, execution, action, task, body):
+    company_id = body["company_id"]
+    assert_access(conn, execution.auth, task["company_id"])
+    aliases = {
+        row["company_id"]: [row["company_id"], row["name"], *row["aliases"]]
+        for row in conn.execute(
+            "SELECT company_id,name,aliases FROM companies WHERE company_id=ANY(%s)",
+            ([company_id, task["company_id"]],),
+        )
+    }
+    source = read_source(conn, execution.auth, execution.source_id)
+    if not authorize_task_change(
+        source["content"],
+        action,
+        task,
+        aliases[task["company_id"]],
+        replacement=body if action == "replace" else None,
+        replacement_aliases=aliases[company_id],
+    ):
+        raise AppError(
+            "NEEDS_CLARIFICATION",
+            "待办保留原状。需要明确指令才能取消、删除或替换，请指定动作和任务范围。",
+            422,
+            details={
+                "task_id": str(task["task_id"]),
+                "company_id": task["company_id"],
+                "period": task["period"],
+                "revision": task["revision"],
+            },
+        )
+
+
 def change_task(
     db,
     auth: Identity,
@@ -176,23 +210,13 @@ def change_task(
                 )
             if expected_revision != old["revision"]:
                 raise AppError("VERSION_CONFLICT", "任务已变化，请先查看当前任务。", 409)
+            if execution and action in ("cancel", "delete", "replace"):
+                if slots[old["company_id"]]["current_task_id"] != old["task_id"]:
+                    raise AppError("STALE_CONTEXT", "待办已变更，请重新查看当前事项。", 409)
+                _require_task_command(conn, execution, action, old, body)
             if action in ("cancel", "delete"):
                 if old["company_id"] != company_id:
                     raise AppError("RESOURCE_NOT_FOUND", "任务不属于该企业。", 404)
-                if action == "cancel" and execution:
-                    from app.request_evidence import request_periods
-                    from app.sources import read_source
-                    from app.turns import mentioned_companies
-
-                    source = read_source(conn, auth, execution.source_id)
-                    periods = request_periods(source["content"], source["created_at"])
-                    companies = mentioned_companies(conn, source["content"])
-                    if (companies and company_id not in companies) or (
-                        periods and periods != {old["period"]}
-                    ):
-                        raise AppError(
-                            "TARGET_SCOPE_MISMATCH", "取消请求与当前任务范围不一致。", 422
-                        )
                 result = _end(
                     conn,
                     old,
@@ -251,6 +275,8 @@ def change_task(
                     )
                 _end(conn, old, "replaced", change["source_seq"], change["refs"])
                 slot = _slot(conn, auth, company_id)
+        elif execution and action == "replace":
+            raise AppError("NEEDS_CLARIFICATION", "没有可替换的活动任务，请明确要新建的任务。", 422)
         elif action not in ("start", "replace"):
             raise AppError("RESOURCE_NOT_FOUND", "没有可更新的任务。", 404)
         if slot["current_task_id"]:

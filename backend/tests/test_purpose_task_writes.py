@@ -51,6 +51,104 @@ def test_task_cancel_revokes_its_confirmation(db, admin, execution_factory):
     assert not admin.execute("SELECT 1 FROM operations").fetchone()
 
 
+@pytest.mark.parametrize(
+    "text,cancelled",
+    [
+        ("甲企业2026年9月的用途补充任务不要取消，保留待办。", False),
+        ("“取消当前甲企业用途任务”这句话怎么理解？", False),
+        ("如果取消甲企业九月用途任务，会发生什么？", False),
+        ("取消九月这项，九月保留。", False),
+        ("取消十月这项。", False),
+        ("只取消九月这项，十月保留。", True),
+    ],
+)
+def test_turn01_task_and_confirmation_follow_user_command(
+    db, admin, execution_factory, text, cancelled
+):
+    from test_runtime import tool
+
+    from app.identity import Identity
+    from app.tools import ToolExecutor
+
+    auth = Identity("U001")
+    task = change(db, auth, "start", intent="complete_purposes", period=PERIOD)
+    origin = execution_factory(CONFIRMABLE)
+    plan = invoice_write.prepare(db, auth, **candidate(origin, CONFIRMABLE))
+    execution = execution_factory(text)
+    output, _ = ToolExecutor(db).execute(
+        execution,
+        tool(
+            "change_task",
+            {
+                "company_id": "C001",
+                "action": "cancel",
+                "target_id": str(task["task_id"]),
+                "expected_revision": task["revision"],
+                "source_refs": [{"source_id": execution.source_id, "quote": text}],
+            },
+        )["tool_calls"][0],
+    )
+    assert output["ok"] is cancelled, output
+    if not cancelled:
+        assert output["error"]["code"] == "NEEDS_CLARIFICATION"
+    with db.transaction(readonly=True) as conn:
+        current = tasks.current_in(conn, auth, "C001")
+    current_plan = invoice_write.get(db, auth, plan["plan_id"])
+    if cancelled:
+        assert current is None
+        assert tasks.list_tasks(db, auth, "C001")[0]["status"] == "cancelled"
+        assert current_plan["status"] == "revoked"
+    else:
+        assert current["task_id"] == task["task_id"]
+        assert current["revision"] == task["revision"]
+        assert current_plan["status"] == "needs_confirmation"
+        assert current_plan["revision"] == plan["revision"]
+    assert not admin.execute("SELECT 1 FROM operations").fetchone()
+
+
+@pytest.mark.parametrize(
+    "text,expected_intent",
+    [
+        ("请解释把当前用途任务换成2026年9月规则说明任务的影响。", "complete_purposes"),
+        ("把当前用途任务换成2026年9月发票查询任务。", "complete_purposes"),
+        ("把当前用途任务换成2026年9月规则说明任务。", "explain_rules"),
+    ],
+)
+def test_turn01_replacement_must_match_user_selected_new_task(
+    db, execution_factory, text, expected_intent
+):
+    from test_runtime import tool
+
+    from app.identity import Identity
+    from app.tools import ToolExecutor
+
+    auth = Identity("U001")
+    task = change(db, auth, "start", intent="complete_purposes", period=PERIOD)
+    execution = execution_factory(text)
+    output, _ = ToolExecutor(db).execute(
+        execution,
+        tool(
+            "change_task",
+            {
+                "company_id": "C001",
+                "action": "replace",
+                "intent": "explain_rules",
+                "period": PERIOD,
+                "target_id": str(task["task_id"]),
+                "expected_revision": task["revision"],
+                "source_refs": [{"source_id": execution.source_id, "quote": text}],
+            },
+        )["tool_calls"][0],
+    )
+    assert output["ok"] is (expected_intent == "explain_rules"), output
+    with db.transaction(readonly=True) as conn:
+        current = tasks.current_in(conn, auth, "C001")
+    assert current["intent"] == expected_intent
+    if not output["ok"]:
+        assert current["task_id"] == task["task_id"]
+        assert current["revision"] == task["revision"]
+
+
 @pytest.mark.asyncio
 async def test_replaced_task_cannot_execute_an_already_queued_confirmation(
     db, admin, settings, execution_factory
