@@ -9,6 +9,8 @@ import type { Detail, Source, UploadedInvoice, ImportBatch, RunDetail } from './
 
 function RunContent({ id }: { id: string }) {
   const { data } = useResource<RunDetail>(`/runs/${id}`);
+  const provenance = data?.contexts.find((c) => c.manifest.runtime_provenance)?.manifest
+    .runtime_provenance;
   return (
     <>
       {data?.agent && (
@@ -17,6 +19,15 @@ function RunContent({ id }: { id: string }) {
           {data.agent.model_profile_id}
           {data.agent.model_profile_version === null ? '' : ` v${data.agent.model_profile_version}`}
         </p>
+      )}
+      {provenance && (
+        <details>
+          <summary>运行实现与依赖版本</summary>
+          <p className="muted small">
+            记录该次运行的源码摘要、Python 与已安装依赖版本，不代表可切换的工具实现。
+          </p>
+          <pre className="source-text">{JSON.stringify(provenance, null, 2)}</pre>
+        </details>
       )}
       <RunInsightDrawer runId={id} />
     </>

@@ -99,6 +99,7 @@ def choose_groups(
     policy=None,
     mode="hybrid",
     budget=LIMIT_TOKENS,
+    max_groups=LIMIT_GROUPS,
 ):
     groups, lookup = {}, {}
     for version, chunks in chunks_by_version.items():
@@ -116,7 +117,7 @@ def choose_groups(
     for position, key in enumerate(ordered):
         members = groups[key]
         cost = sum(c["estimated_tokens"] for c in members)
-        fits = position < LIMIT_GROUPS and consumed + cost <= budget
+        fits = position < max_groups and consumed + cost <= budget
         trace.append(
             {
                 "group_id": key,

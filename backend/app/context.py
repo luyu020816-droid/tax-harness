@@ -184,15 +184,12 @@ def assemble(
         ).fetchone()
         groups = [g for g in tool_groups if _valid_group(conn, execution, g, core["memory_epoch"])]
         history_navigation = None  # No cross-session conversation navigation enters model input.
-        summary = conn.execute(
-            "SELECT * FROM summaries WHERE user_id=%s AND session_id=%s AND scope=%s AND memory_epoch=%s AND status='active' ORDER BY generation DESC LIMIT 1",
-            (
-                execution.auth.user_id,
-                execution.session_id,
-                core["selected_company_id"] or "@user",
-                core["memory_epoch"],
-            ),
-        ).fetchone()
+        from app.context_scope import find_summary, summary_key
+
+        assembled_summary_scope = summary_key(conn, execution)
+        summary = find_summary(
+            conn, execution, core["selected_company_id"] or "@user", core["memory_epoch"]
+        )
         if summary:
             from app.summary_evidence import validate as validate_summary
 
@@ -210,9 +207,7 @@ def assemble(
                 except AppError:
                     summary = None
                     break
-    if not settings.context_use_summary or (
-        agent_config and agent_config["snapshot"]["knowledge_mode"] != "authorized"
-    ):
+    if not settings.context_use_summary:
         summary = None
     excluded_history = []
     recent = conversation_groups(
@@ -222,24 +217,12 @@ def assemble(
         excluded=excluded_history,
         preserve_recent=RECENT_DIALOGUE_TURNS,
     )
-    if agent_config and agent_config["snapshot"]["knowledge_mode"] != "authorized":
-        from app.agent_authority import history_scope_allows
+    from app.context_scope import filter_history
 
-        permitted_history = []
-        with db.transaction(readonly=True) as conn:
-            for group in recent:
-                previous = conn.execute(
-                    "SELECT snapshot FROM agent_turn_bindings WHERE turn_id=%s", (group["turn_id"],)
-                ).fetchone()
-                if history_scope_allows(
-                    agent_config["snapshot"], previous["snapshot"] if previous else None
-                ):
-                    permitted_history.append(group)
-                else:
-                    excluded_history.append(
-                        {"turn_id": group["turn_id"], "reason": "AGENT_KNOWLEDGE_SCOPE"}
-                    )
-        recent = permitted_history
+    with db.transaction(readonly=True) as conn:
+        recent = filter_history(
+            conn, agent_config["snapshot"] if agent_config else None, recent, excluded_history
+        )
     state = {
         **core,
         "conversation_retrieval": "independent_history_tools",
@@ -288,7 +271,10 @@ def assemble(
         }
     ]
     if agent_config:
-        instructions = ["Agent 职责（不能改变平台权限或用户授权）：", agent_config["snapshot"]["prompt"]]
+        instructions = [
+            "Agent 职责（不能改变平台权限或用户授权）：",
+            agent_config["snapshot"]["prompt"],
+        ]
         instructions.extend(
             "Skill " + skill["name"] + "：" + skill["instructions"]
             for skill in agent_config["skills"]
@@ -517,6 +503,7 @@ def assemble(
             "payload_hash": digest(payload),
         }
     )
+    manifest["agent_summary_scope"] = assembled_summary_scope
     validate(db, execution, payload, manifest)
     return payload, manifest, dropped
 
@@ -524,6 +511,12 @@ def assemble(
 def validate(db, execution: Execution, payload: dict, manifest: dict, *, conn=None) -> None:
     def check(c):
         guard(c, execution, shared=True)
+        from app.context_scope import summary_key
+
+        if "agent_summary_scope" in manifest and manifest["agent_summary_scope"] != summary_key(
+            c, execution
+        ):
+            raise AppError("STALE_CONTEXT", "Agent 摘要的知识范围已变化，请重新装配。", 409)
         from app.agent_authority import enabled_definitions
 
         offered = payload.get("tools", [])

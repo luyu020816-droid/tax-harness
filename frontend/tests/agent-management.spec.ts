@@ -4,6 +4,20 @@ test('manager configures an agent and chooses it for a conversation', async ({ p
   await page.setViewportSize({ width: 390, height: 844 });
   let agent: any = null;
   let submitted: any = null;
+  let skill: any = {
+    skill_id: '22222222-2222-4222-8222-222222222222',
+    name: '核对 Skill',
+    revision: 1,
+    current_version: 1,
+    enabled: true,
+    config: {
+      name: '核对 Skill',
+      description: '',
+      instructions: '先核对票号',
+      tool_grants: {},
+      requires_knowledge: false,
+    },
+  };
   const agentId = '11111111-1111-4111-8111-111111111111';
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '');
@@ -46,11 +60,25 @@ test('manager configures an agent and chooses it for a conversation', async ({ p
       return reply(agent, 201);
     }
     if (path === `/agent-admin/agents/${agentId}/publish`) {
-      agent = { ...agent, revision: 2, current_version: 1 };
+      if (route.request().postDataJSON().expected_revision !== agent.revision)
+        return reply({ message: '版本冲突' }, 409);
+      agent = {
+        ...agent,
+        revision: agent.revision + 1,
+        current_version: (agent.current_version ?? 0) + 1,
+      };
+      return reply(agent);
+    }
+    if (path === `/agent-admin/agents/${agentId}` && method === 'PUT') {
+      const input = route.request().postDataJSON();
+      if (input.expected_revision !== agent.revision) return reply({ message: '版本冲突' }, 409);
+      agent = { ...agent, revision: agent.revision + 1, draft: input.draft };
       return reply(agent);
     }
     if (path === `/agent-admin/agents/${agentId}/enabled`) {
-      agent = { ...agent, revision: 3, enabled: true };
+      const input = route.request().postDataJSON();
+      if (input.expected_revision !== agent.revision) return reply({ message: '版本冲突' }, 409);
+      agent = { ...agent, revision: agent.revision + 1, enabled: input.enabled };
       return reply(agent);
     }
     if (path === '/agent-admin/tools')
@@ -63,7 +91,26 @@ test('manager configures an agent and chooses it for a conversation', async ({ p
           revision: 0,
         },
       ]);
-    if (path === '/agent-admin/skills' || path === '/agent-admin/models') return reply([]);
+    if (path === '/agent-admin/skills') return reply([skill]);
+    if (path === `/agent-admin/skills/${skill.skill_id}/enabled`) {
+      const input = route.request().postDataJSON();
+      if (input.expected_revision !== skill.revision) return reply({ message: '版本冲突' }, 409);
+      skill = { ...skill, revision: skill.revision + 1, enabled: input.enabled };
+      const { config, ...metadata } = skill;
+      return reply(metadata);
+    }
+    if (path === `/agent-admin/skills/${skill.skill_id}` && method === 'PUT') {
+      const input = route.request().postDataJSON();
+      if (input.expected_revision !== skill.revision) return reply({ message: '版本冲突' }, 409);
+      skill = {
+        ...skill,
+        revision: skill.revision + 1,
+        current_version: skill.current_version + 1,
+        config: input.draft,
+      };
+      return reply(skill);
+    }
+    if (path === '/agent-admin/models') return reply([]);
     if (path === '/knowledge/documents') {
       const later = new URL(route.request().url()).searchParams.has('offset');
       return reply({
@@ -111,12 +158,32 @@ test('manager configures an agent and chooses it for a conversation', async ({ p
     .first()
     .click();
   await dialog.getByLabel('invoke').first().check();
-  await dialog.getByRole('button', { name: '保存草稿' }).click();
+  await dialog.getByRole('button', { name: '保存草稿', exact: true }).click();
   await expect(dialog.getByRole('status')).toContainText('草稿已保存');
+  await dialog.getByLabel('职责提示词').fill('先核对企业，再查询发票');
+  await expect(dialog.getByRole('button', { name: '发布已保存草稿' })).toBeDisabled();
+  await expect(dialog).toContainText('有未保存修改');
+  await dialog.getByRole('button', { name: '保存草稿', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: '发布已保存草稿' })).toBeEnabled();
   await dialog.getByRole('button', { name: '发布已保存草稿' }).click();
   await expect(dialog.getByRole('status')).toContainText('已发布');
   await dialog.getByRole('button', { name: '启用', exact: true }).first().click();
   await expect(dialog.getByRole('status')).toContainText('状态已更新');
+  await dialog.getByLabel('职责说明').fill('启用后继续编辑');
+  await dialog.getByRole('button', { name: '保存草稿', exact: true }).click();
+  await expect(dialog.getByRole('status')).toContainText('草稿已保存');
+  expect(agent.draft.description).toBe('启用后继续编辑');
+  await dialog.getByText('工具启停', { exact: true }).click();
+  await expect(dialog).toContainText('引用此工具的 Agent（含草稿）：发票助手（启用）');
+  await dialog.getByText('Skill 配置', { exact: true }).click();
+  const skillRow = dialog.locator('p').filter({ hasText: '核对 Skill · v1' });
+  await skillRow.getByRole('button', { name: '编辑', exact: true }).click();
+  await skillRow.getByRole('button', { name: '停用', exact: true }).click();
+  await expect(dialog.getByRole('status')).toContainText('Skill 状态已更新');
+  await dialog.getByLabel('任务指引').fill('停用后仍可编辑新版本');
+  await dialog.getByRole('button', { name: '发布 Skill', exact: true }).click();
+  await expect(dialog.getByRole('status')).toContainText('Skill 版本已发布');
+  expect(skill.config.instructions).toBe('停用后仍可编辑新版本');
   await dialog.getByRole('button', { name: '关闭' }).click();
   await page.getByLabel('当前 Agent').selectOption(agentId);
   await page.getByRole('textbox', { name: '输入办理需求' }).fill('查询发票');

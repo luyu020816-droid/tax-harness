@@ -4,6 +4,7 @@ import { api, body, companyName, requestId } from './api';
 import { KnowledgeCitation } from './KnowledgeCitation';
 import { KnowledgeTextDialog } from './KnowledgeText';
 import { Modal } from './Modal';
+import { KnowledgeStrategy } from './KnowledgeStrategy';
 import { useResource } from './useResource';
 import type {
   Detail,
@@ -408,6 +409,7 @@ export function KnowledgeView({
           上传资料
         </button>
       </header>
+      <KnowledgeStrategy key={company} company={company} />
       <section aria-labelledby="business-rules-heading">
         <div className="knowledge-list-heading">
           <h2 id="business-rules-heading">业务规则</h2>

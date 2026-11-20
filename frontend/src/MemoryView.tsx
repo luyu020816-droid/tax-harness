@@ -2,6 +2,7 @@ import { useRef, useState, type FormEvent } from 'react';
 import { ArrowUpRight, FileText, Pencil, Plus, Trash2 } from 'lucide-react';
 import { api, body, companyName, requestId, statusName, taskName } from './api';
 import { Modal } from './Modal';
+import { MemoryHistory } from './MemoryHistory';
 import { useResource } from './useResource';
 import type { Detail, Pending, Preference, Task, User } from './types';
 
@@ -393,6 +394,7 @@ export function MemoryView({
           ['tasks', '任务', active.length],
           ['preferences', '偏好', prefs.length],
           ['pending', '待澄清', pending.length],
+          ['history', '变更记录', ''],
         ].map(([key, label, count]) => (
           <button
             key={key}
@@ -404,6 +406,7 @@ export function MemoryView({
           </button>
         ))}
       </div>
+      {tab === 'history' && <MemoryHistory key={company ?? '@user'} company={company} />}
       {(error || taskResource.error || prefResource.error || pendingResource.error) && !confirm && (
         <p className="error-note" role="alert">
           {error || taskResource.error || prefResource.error || pendingResource.error}

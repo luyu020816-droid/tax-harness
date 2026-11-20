@@ -1,6 +1,7 @@
 import json
 
 from app.context import estimate_tokens, validate_tool_pairs
+from app.context_scope import find_summary, summary_key
 from app.errors import AppError
 from app.events import emit
 from app.execution import guard
@@ -166,10 +167,8 @@ async def compact(db, settings, model, execution, groups, step: int, *, manual=F
     previous_id, previous_content = None, ""
     with db.transaction() as conn:
         guard(conn, execution)
-        previous = conn.execute(
-            "SELECT summary_id,content,covered_sources FROM summaries WHERE user_id=%s AND session_id=%s AND scope=%s AND memory_epoch=%s AND status='active' ORDER BY generation DESC LIMIT 1",
-            (execution.auth.user_id, execution.session_id, scope, execution.expected_epoch),
-        ).fetchone()
+        scope_key = summary_key(conn, execution)
+        previous = find_summary(conn, execution, scope, execution.expected_epoch)
         if previous:
             previous_id, previous_content = previous["summary_id"], previous["content"]
             for ref in previous["covered_sources"]:
@@ -312,11 +311,9 @@ async def compact(db, settings, model, execution, groups, step: int, *, manual=F
             or (session["selected_company_id"] or "@user") != scope
         ):
             raise AppError("STALE_CONTEXT", "会话范围已变化，摘要未发布。", 409)
-        current = conn.execute(
-            "SELECT summary_id FROM summaries WHERE user_id=%s AND session_id=%s AND scope=%s "
-            "AND memory_epoch=%s AND status='active' ORDER BY generation DESC LIMIT 1 FOR UPDATE",
-            (execution.auth.user_id, execution.session_id, scope, execution.expected_epoch),
-        ).fetchone()
+        if summary_key(conn, execution) != scope_key:
+            raise AppError("STALE_CONTEXT", "摘要权限或知识范围已变化，候选未发布。", 409)
+        current = find_summary(conn, execution, scope, execution.expected_epoch, lock=True)
         if (current["summary_id"] if current else None) != previous_id:
             raise AppError("STALE_CONTEXT", "摘要已更新，候选未发布。", 409)
         for ref in refs:
@@ -333,11 +330,11 @@ async def compact(db, settings, model, execution, groups, step: int, *, manual=F
             (execution.session_id, [r["source_id"] for r in refs]),
         ).fetchone()["n"]
         conn.execute(
-            "UPDATE summaries SET status='superseded' WHERE user_id=%s AND session_id=%s AND scope=%s AND status='active'",
-            (execution.auth.user_id, execution.session_id, scope),
+            "UPDATE summaries SET status='superseded' WHERE user_id=%s AND session_id=%s AND scope=%s AND agent_scope=%s AND status='active'",
+            (execution.auth.user_id, execution.session_id, scope, scope_key),
         )
         conn.execute(
-            "INSERT INTO summaries(summary_id,user_id,session_id,scope,covered_sources,memory_epoch,content,status,generation) VALUES(%s,%s,%s,%s,%s,%s,%s,'active',%s)",
+            "INSERT INTO summaries(summary_id,user_id,session_id,scope,covered_sources,memory_epoch,content,status,generation,agent_scope) VALUES(%s,%s,%s,%s,%s,%s,%s,'active',%s,%s)",
             (
                 summary_id,
                 execution.auth.user_id,
@@ -347,6 +344,7 @@ async def compact(db, settings, model, execution, groups, step: int, *, manual=F
                 execution.expected_epoch,
                 pack(text, protected),
                 generation,
+                scope_key,
             ),
         )
         conn.execute(

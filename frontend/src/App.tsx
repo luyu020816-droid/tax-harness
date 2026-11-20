@@ -90,7 +90,9 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
   const [newMessages, setNewMessages] = useState(false);
   const [compactTask, setCompactTask] = useState<{ session: string; id: string } | null>(null);
   const [compactNotice, setCompactNotice] = useState('');
-  const compactRequest = useRef<{ session: string; id: string } | null>(null);
+  const compactRequest = useRef<{ session: string; id: string; agent?: string | null } | null>(
+    null
+  );
   const generation = useRef(0);
   const composer = useRef<HTMLTextAreaElement>(null);
   const scrollArea = useRef<HTMLDivElement>(null);
@@ -133,8 +135,12 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
       return;
     }
     const stored = localStorage.getItem(`tax-compact:${user.user_id}:${session.session_id}`);
-    const retry = localStorage.getItem(`tax-compact-request:${user.user_id}:${session.session_id}`);
-    compactRequest.current = retry ? { session: session.session_id, id: retry } : null;
+    const retry = localStorage.getItem(
+      `tax-compact-request:${user.user_id}:${session.session_id}:${selectedAgent || 'legacy'}`
+    );
+    compactRequest.current = retry
+      ? { session: session.session_id, id: retry, agent: selectedAgent }
+      : null;
     setCompactTask(stored ? { session: session.session_id, id: stored } : null);
     setCompactNotice('');
   }, [session?.session_id, user?.user_id]);
@@ -543,22 +549,19 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
       return;
     }
     if (isCompact) {
-      if (selectedAgent) {
-        setError('当前 Agent 暂不支持手动压缩，请使用普通对话继续。');
-        return;
-      }
       if (attachment || knowledgeAttachment) {
         setError('压缩命令不能携带附件，请先移除附件或另开一条消息。');
         return;
       }
       const stamp = generation.current;
       const identity =
-        compactRequest.current?.session === session.session_id
+        compactRequest.current?.session === session.session_id &&
+        compactRequest.current?.agent === selectedAgent
           ? compactRequest.current
-          : { session: session.session_id, id: requestId() };
+          : { session: session.session_id, id: requestId(), agent: selectedAgent };
       compactRequest.current = identity;
       localStorage.setItem(
-        `tax-compact-request:${user.user_id}:${session.session_id}`,
+        `tax-compact-request:${user.user_id}:${session.session_id}:${selectedAgent || 'legacy'}`,
         identity.id
       );
       setSending(true);
@@ -566,14 +569,19 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
       try {
         const accepted = await api<{ operation_id: string; status: string }>(
           `/sessions/${session.session_id}/compactions`,
-          { method: 'POST', body: body({ client_request_id: identity.id }) }
+          {
+            method: 'POST',
+            body: body({ client_request_id: identity.id, agent_id: selectedAgent || null }),
+          }
         );
         if (!accepted.operation_id) throw new Error('未收到压缩任务编号，请使用同一请求重试。');
         localStorage.setItem(
           `tax-compact:${user.user_id}:${session.session_id}`,
           accepted.operation_id
         );
-        localStorage.removeItem(`tax-compact-request:${user.user_id}:${session.session_id}`);
+        localStorage.removeItem(
+          `tax-compact-request:${user.user_id}:${session.session_id}:${selectedAgent || 'legacy'}`
+        );
         if (stamp === generation.current) {
           setCompactTask({ session: session.session_id, id: accepted.operation_id });
           setCompactNotice('压缩任务已受理');
@@ -1316,6 +1324,8 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                       )}
                     <ContextIndicator
                       sessionId={session?.session_id ?? null}
+                      draft={draft}
+                      agentId={selectedAgent || null}
                       version={`${version}:${company}:${activeId}:${modelSettingsOpen}`}
                     />
                     <span>

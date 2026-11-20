@@ -7,6 +7,37 @@ from app.memory_changes import assert_newer, begin_change, finish_change, suppre
 from app.values import jsonb, uid
 
 
+def history(db, auth, preference_id, *, before_revision=None, limit=20):
+    """Explicit audit view, including tombstones; never used for model recall."""
+    from app.sources import read_source
+    from app.values import safe_json
+
+    with db.transaction(readonly=True) as conn:
+        pref = owned(conn, "preferences", "preference_id", preference_id, auth)
+        if pref["scope_key"] != "@user":
+            assert_access(conn, auth, pref["scope_key"])
+        rows = conn.execute(
+            "SELECT * FROM preference_revisions WHERE preference_id=%s "
+            "AND (%s::integer IS NULL OR revision<%s) ORDER BY revision DESC LIMIT %s",
+            (preference_id, before_revision, before_revision, limit + 1),
+        ).fetchall()
+        for row in rows[:limit]:
+            try:
+                for ref in row["source_refs"]:
+                    read_source(conn, auth, str(ref["source_id"]), allow_suppressed=True)
+            except AppError:
+                row["value"], row["source_refs"] = None, []
+                row["redacted"] = True
+        return safe_json(
+            {
+                "preference_id": preference_id,
+                "current_status": pref["status"],
+                "revisions": rows[:limit],
+                "next_revision": rows[limit - 1]["revision"] if len(rows) > limit else None,
+            }
+        )
+
+
 def list_preferences(db, auth: Identity, company_id: str | None = None) -> list[dict]:
     with db.transaction(readonly=True) as conn:
         if company_id:

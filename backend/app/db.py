@@ -3,6 +3,14 @@ from contextlib import contextmanager
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
+from app.schema import (
+    REQUIRED_VERSIONS,
+    SEMIFINAL_SCRIPT,
+    SEMIFINAL_VERSION,
+    migration_ledger,
+    semifinal_schema_issues,
+)
+
 
 class Database:
     def __init__(self, dsn: str, *, statement_timeout_ms=15000, lock_timeout_ms=3000):
@@ -36,8 +44,9 @@ class Database:
 
     def ready(self) -> bool:
         with self.transaction(readonly=True) as conn:
-            versions = {
-                row["version"]
-                for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
-            }
-            return {5, 7, 8, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25} <= versions
+            ledger = migration_ledger(conn)
+            return (
+                REQUIRED_VERSIONS <= ledger.keys()
+                and ledger[SEMIFINAL_VERSION] == SEMIFINAL_SCRIPT
+                and not semifinal_schema_issues(conn)
+            )
