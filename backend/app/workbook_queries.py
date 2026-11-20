@@ -1,21 +1,20 @@
 """Authority, execution and evidence for immutable workbook versions."""
 
-import re
+import hashlib
 from datetime import date
 
 from app.agent_authority import authorize_tool, restrict_knowledge
 from app.errors import AppError
 from app.execution import guard
 from app.knowledge import document_in
-from app.knowledge_parser import MEDIA
+from app.knowledge_parser import MEDIA, parse_isolated
 from app.sources import read_source
 from app.turns import mentioned_companies
 from app.values import jsonb, safe_json, uid
-from app.xlsx_workbooks import calculate
+from app.workbook_scope import validate_request
+from app.xlsx_workbooks import PARSER_VERSION, calculate
 
 PREVIEW_LIMIT = 12
-MONTH = re.compile(r"(?<!\d)(?:(\d{4})\s*年\s*)?(1[0-2]|0?[1-9])\s*月(?!\s*\d)")
-DATE = re.compile(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*[日号]")
 
 
 def active_version(conn, auth, document_id, version_id, *, lock=False):
@@ -46,6 +45,37 @@ def validate_dependency(conn, auth, turn_id, dependency, *, lock=False):
     return active_version(
         conn, auth, dependency["document_id"], dependency["version_id"], lock=lock
     )
+
+
+def _recheck_required():
+    return AppError(
+        "WORKBOOK_RECHECK_REQUIRED",
+        "表格结果需要重新核验，请选择有效的原始 Excel 并重新查询。",
+        409,
+    )
+
+
+def snapshot_in(conn, version_id):
+    """Load a snapshot after the caller has authorized this exact version."""
+    snapshot = conn.execute(
+        "SELECT snapshot FROM workbook_snapshots WHERE version_id=%s", (version_id,)
+    ).fetchone()
+    if snapshot and snapshot["snapshot"].get("parser_version") == PARSER_VERSION:
+        return snapshot["snapshot"]
+    original = conn.execute(
+        "SELECT f.file_bytes,f.sha256 FROM knowledge_versions v JOIN knowledge_files f USING(file_id) "
+        "WHERE v.version_id=%s",
+        (version_id,),
+    ).fetchone()
+    if not original or not original["file_bytes"]:
+        raise _recheck_required()
+    content = bytes(original["file_bytes"])
+    if hashlib.sha256(content).hexdigest() != original["sha256"]:
+        raise _recheck_required()
+    try:
+        return parse_isolated(content, ".xlsx")
+    except AppError as exc:
+        raise _recheck_required() from exc
 
 
 def candidates(conn, execution, company_id, knowledge_attachments):
@@ -106,8 +136,9 @@ def candidates(conn, execution, company_id, knowledge_attachments):
         "JOIN knowledge_documents d USING(document_id) JOIN knowledge_files f USING(file_id) "
         "JOIN turns t USING(turn_id) "
         "WHERE r.turn_id=%s AND r.generation=t.active_run_generation AND t.status IN ('completed','resolved') "
-        "AND d.company_id=%s AND t.final_cards @> jsonb_build_array(jsonb_build_object('result_id',w.result_id))",
-        (previous["turn_id"], company_id),
+        "AND d.company_id=%s AND w.result->>'parser_version'=%s "
+        "AND t.final_cards @> jsonb_build_array(jsonb_build_object('result_id',w.result_id))",
+        (previous["turn_id"], company_id, PARSER_VERSION),
     ).fetchall()
     available = []
     for row in rows:
@@ -133,83 +164,14 @@ def candidates(conn, execution, company_id, knowledge_attachments):
     return available, not available
 
 
-def validate_request(query, snapshot, text, previous):
-    from app.request_evidence import explicit_periods
-    from app.xlsx_workbooks import clean
-
-    text = clean(text)
-    sheet = next((s for s in snapshot["sheets"] if s["name"] == query["sheet"]), None)
-    if sheet and not sheet["reason"]:
-        usable = [s for s in snapshot["sheets"] if not s["reason"]]
-        if len(usable) > 1 and not (
-            query["sheet"] == previous.get("sheet") or query["sheet"] in text
-        ):
-            raise AppError("NEEDS_CLARIFICATION", "请确认要计算哪一个工作表。", 422)
-        for field, candidates in sheet["columns"].items():
-            column = query["columns"][field]
-            header = candidates.get(column)
-            if (
-                len(candidates) > 1
-                and header
-                and not (
-                    query["sheet"] == previous.get("sheet")
-                    and column == previous.get("columns", {}).get(field)
-                    or clean(header) in text
-                    or re.search(rf"(?<![A-Za-z]){column}\s*列", text, re.I)
-                )
-            ):
-                raise AppError("NEEDS_CLARIFICATION", "请确认使用哪一列作为计算口径。", 422)
-        amount = sheet["columns"]["amount"].get(query["columns"]["amount"])
-        if (
-            amount
-            and re.search(r"实付|实际支付", text)
-            and clean(amount) not in {"实付金额", "实际支付金额"}
-        ):
-            raise AppError("NEEDS_CLARIFICATION", "当前金额列不能确认为实付，请确认计算口径。", 422)
-    if query.get("all_dates"):
-        if re.search(r"全部日期|不[限按]日期|所有日期|整[张个]表|全表|所有(?:明细|行|记录)", text):
-            return
-        if previous.get("all_dates") and not MONTH.search(text) and not DATE.search(text):
-            return
-        raise AppError("NEEDS_CLARIFICATION", "请确认日期范围，或明确要求计算全部日期。", 422)
-    periods = explicit_periods(text) if not DATE.search(text) else set()
-    months = list(MONTH.finditer(text))
-    if (len(periods) == 1 or (not periods and len(months) == 1)) and not DATE.search(text):
-        year, month = next(iter(periods)).split("-") if periods else months[0].groups()
-        if not year:
-            year = (previous.get("date_from") or "")[:4]
-        if year:
-            y, m = int(year), int(month)
-            if not 1 <= y <= 9998:
-                raise AppError("INVALID_ARGUMENT", "指定年份超出可计算范围。", 422)
-            expected = date(y, m, 1), date(y + (m == 12), m % 12 + 1, 1)
-            if (query["date_from"], query["date_to_exclusive"]) == tuple(
-                d.isoformat() for d in expected
-            ):
-                return
-            raise AppError("WORKBOOK_SCOPE_MISMATCH", "工具日期范围与用户指定月份不符。", 422)
-        raise AppError("NEEDS_CLARIFICATION", "请确认该月份的年份。", 422)
-    if (
-        len(periods) > 1
-        or len(months) > 1
-        or DATE.search(text)
-        or re.search(r"本月|这个月|上个月|今年|去年", text)
-    ):
-        return
-    if previous and all(
-        query.get(k) == previous.get(k) for k in ("date_from", "date_to_exclusive")
-    ):
-        return
-    raise AppError("NEEDS_CLARIFICATION", "请先提供日期范围。", 422)
-
-
 def dispatch(db, execution, name, args):
     with db.transaction() as conn:
         guard(conn, execution, shared=True)
         company = conn.execute(
             "SELECT selected_company_id FROM sessions WHERE session_id=%s", (execution.session_id,)
         ).fetchone()["selected_company_id"]
-        text = read_source(conn, execution.auth, execution.source_id)["content"]
+        source = read_source(conn, execution.auth, execution.source_id)
+        text = source["content"]
         requested = mentioned_companies(conn, text)
         if requested and requested != [company]:
             raise AppError("TARGET_SCOPE_MISMATCH", "本轮指定的企业与当前表格企业不一致。", 422)
@@ -238,9 +200,8 @@ def dispatch(db, execution, name, args):
             raise AppError("WORKBOOK_UNAVAILABLE", "表格版本已变化，请重新选择有效资料。", 409)
         dependency = {"document_id": args["document_id"], "version_id": version_id, "tool": name}
         meta = validate_dependency(conn, execution.auth, execution.turn_id, dependency, lock=True)
-        snapshot = conn.execute(
-            "SELECT snapshot FROM workbook_snapshots WHERE version_id=%s", (version_id,)
-        ).fetchone()["snapshot"]
+        snapshot = snapshot_in(conn, version_id)
+        meta["parser_version"] = snapshot["parser_version"]
         if name == "inspect_workbook":
             return {
                 **meta,
@@ -254,14 +215,25 @@ def dispatch(db, execution, name, args):
         query = {
             key: value for key, value in args.items() if key not in ("document_id", "version_id")
         }
+        earlier = None
         if selected.get("continuing_clarification"):
             prior = conn.execute(
-                "SELECT text FROM turns WHERE session_id=%s AND user_id=%s AND source_seq<%s "
-                "AND request_kind<>'compact' ORDER BY source_seq DESC LIMIT 1",
+                "SELECT s.source_id FROM turns t JOIN sources s USING(turn_id) "
+                "WHERE t.session_id=%s AND t.user_id=%s AND t.source_seq<%s "
+                "AND t.request_kind<>'compact' AND s.role='user' AND s.source_seq=t.source_seq "
+                "ORDER BY t.source_seq DESC LIMIT 1",
                 (execution.session_id, execution.auth.user_id, execution.source_seq),
             ).fetchone()
-            text = f"{prior['text']}。{text}" if prior else text
-        validate_request(query, snapshot, text, selected.get("previous_query", {}))
+            if prior:
+                earlier = read_source(conn, execution.auth, prior["source_id"], company_id=company)
+        query = validate_request(
+            query,
+            snapshot,
+            text,
+            selected.get("previous_query", {}),
+            created_at=source["created_at"],
+            prior_source=earlier,
+        )
         result = calculate(
             snapshot,
             sheet=query["sheet"],
@@ -284,7 +256,7 @@ def dispatch(db, execution, name, args):
             "workbook_dependency": dependency,
             "result_id": result_id,
             "query": query,
-            "currency": "CNY",
+            "currency": result["currency"],
             "total": result["total"],
             "count": result["count"],
             "groups": result["groups"][:PREVIEW_LIMIT],
@@ -294,9 +266,12 @@ def dispatch(db, execution, name, args):
         }
 
 
-def read_result(conn, auth, result_id, *, run_id=None, offset=0, group_offset=0):
+def validate_result(conn, auth, result_id, *, run_id=None, include_result=False):
+    fields = ",w.result,w.query" if include_result else ""
     row = conn.execute(
-        "SELECT w.*,v.document_id,r.turn_id FROM workbook_results w JOIN runs r USING(run_id) "
+        "SELECT w.run_id,w.version_id,v.document_id,r.turn_id,w.result->>'parser_version' AS parser_version"
+        + fields
+        + " FROM workbook_results w JOIN runs r USING(run_id) "
         "JOIN turns t USING(turn_id) JOIN sessions s USING(session_id) JOIN knowledge_versions v USING(version_id) "
         "WHERE w.result_id=%s AND t.user_id=%s AND s.deleted_at IS NULL AND t.status<>'deleted'",
         (result_id, auth.user_id),
@@ -313,12 +288,20 @@ def read_result(conn, auth, result_id, *, run_id=None, offset=0, group_offset=0)
             "tool": "query_workbook",
         },
     )
+    if row["parser_version"] != PARSER_VERSION:
+        raise _recheck_required()
+    return row, meta
+
+
+def read_result(conn, auth, result_id, *, run_id=None, offset=0, group_offset=0):
+    row, meta = validate_result(conn, auth, result_id, run_id=run_id, include_result=True)
     result = row["result"]
     return {
         **meta,
-        "result_id": str(row["result_id"]),
+        "result_id": str(result_id),
         "query": row["query"],
-        "currency": "CNY",
+        "parser_version": result["parser_version"],
+        "currency": result["currency"],
         "total": result["total"],
         "count": result["count"],
         "headers": result["headers"],

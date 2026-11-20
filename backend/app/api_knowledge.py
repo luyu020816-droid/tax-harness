@@ -163,13 +163,11 @@ def knowledge_router(store, retrieval, auth_dependency, history=None):
 
     @router.get("/knowledge/documents/{document_id}/workbook")
     def workbook(document_id: UUID, version_id: UUID, current=auth_dependency):
-        from app.workbook_queries import active_version
+        from app.workbook_queries import active_version, snapshot_in
 
         with store.db.transaction(readonly=True) as conn:
             active_version(conn, current, document_id, version_id)
-            snapshot = conn.execute(
-                "SELECT snapshot FROM workbook_snapshots WHERE version_id=%s", (version_id,)
-            ).fetchone()["snapshot"]
+            snapshot = snapshot_in(conn, version_id)
             return {"sheets": [
                 {key: value for key, value in sheet.items() if key != "rows"}
                 for sheet in snapshot["sheets"]

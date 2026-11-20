@@ -1039,7 +1039,23 @@ def _knowledge_quotes(conn, execution, citation_id, outputs):
     return result
 
 
+def _workbook_error(conn, execution, outputs):
+    if not outputs:
+        return None
+    failures = conn.execute(
+        "SELECT result_source_id FROM tool_executions WHERE run_id=%s AND state='failed' "
+        "AND name IN ('inspect_workbook','query_workbook') AND result_source_id=ANY(%s::uuid[])",
+        (execution.run_id, list(outputs)),
+    ).fetchall()
+    refs = {str(row["result_source_id"]) for row in failures}
+    return next((outputs[ref]["error"] for ref in reversed(outputs) if ref in refs), None)
+
+
 def _explanation(conn, execution, code, outputs, rules, state):
+    if code == "workbook_query_failed":
+        error = _workbook_error(conn, execution, outputs)
+        if error:
+            return error["message"]
     if code == "amount_materials":
         return "可按企业和月份查询三类金额资料：发票总额、银行收入和银行支出。"
     if code == "amount_material_unsupported":
@@ -1198,6 +1214,12 @@ def _clarification(conn, execution, item, state, outputs):
 
     source = read_source(conn, execution.auth, execution.source_id, allow_suppressed=True)
     fields = set(item.missing_fields)
+    if fields == {"target"} and item.intent == "other":
+        error = _workbook_error(conn, execution, outputs)
+        if error and error["code"] == "NEEDS_CLARIFICATION":
+            return item.model_copy(
+                update={"company_id": None, "period": None, "summary": error["message"]}
+            )
     if fields == {"location"} and item.intent == "other":
         city_required = any(
             (output.get("error") or {}).get("code") == "PUBLIC_WEB_CITY_REQUIRED"

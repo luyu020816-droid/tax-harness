@@ -138,6 +138,10 @@ def read_source(
             from app.knowledge_retrieval import read_evidence_group_in
 
             read_evidence_group_in(conn, auth, data["citation_id"])
+        elif data.get("kind") == "workbook_result":
+            from app.workbook_queries import validate_result
+
+            validate_result(conn, auth, data["result_id"])
         elif data.get("kind") == "history_search":
             from app.history_retrieval import validate_query_in
 

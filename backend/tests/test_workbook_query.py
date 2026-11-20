@@ -14,7 +14,7 @@ from app.knowledge import Knowledge
 from app.knowledge_jobs import KnowledgeJobs
 from app.runtime import Runtime
 from app.turns import accept_turn, read_turn
-from app.values import uid
+from app.values import jsonb, uid
 from app.workbook_queries import read_result, validate_request
 from app.xlsx_workbooks import calculate, parse_workbook
 
@@ -30,12 +30,14 @@ ROWS = (
 )
 
 
-def workbook(rows=ROWS, headers=("报销日期", "费用类别", "实付金额")):
+def workbook(rows=ROWS, headers=("报销日期", "费用类别", "实付金额"), formats=None):
     book = Workbook()
     book.active.title = "报销明细"
     book.active.append(headers)
     for row in rows:
         book.active.append(row)
+    for address, number_format in (formats or {}).items():
+        book.active[address].number_format = number_format
     data = BytesIO()
     book.save(data)
     book.close()
@@ -93,6 +95,52 @@ def test_invalid_target_amount_fails_instead_of_summing_partial_rows(invalid):
         )
 
 
+@pytest.mark.parametrize("foreign", ["USD", None, "未知币种"])
+def test_file02_uses_currency_of_each_participating_row(foreign):
+    rows = (
+        ("2026-10-01", "交通费", 120, "CNY"),
+        ("2026-10-02", "住宿费", 10, foreign),
+    )
+    headers = ("报销日期", "费用类别", "实付金额", "币种")
+    args = dict(
+        sheet="报销明细", columns=COLUMNS, start=OCTOBER[0], end=OCTOBER[1], group_by="none"
+    )
+    snapshot = parse_workbook(workbook(rows, headers))
+    with pytest.raises(AppError, match="D3") as problem:
+        calculate(snapshot, **args, category=None)
+    assert problem.value.details == {"sheet": "报销明细", "cell": "D3"}
+    assert calculate(snapshot, **args, category="交通费")["total"] == "120.00"
+    fixed = parse_workbook(workbook((rows[0], (*rows[1][:3], "人民币")), headers))
+    assert calculate(fixed, **args, category=None)["total"] == "130.00"
+
+
+@pytest.mark.parametrize(
+    ("header", "number_format", "address"),
+    [
+        ("实付金额", '0.00"C A D"', "C2"),
+        ("实付金额", '#,##0.00"CAD"', "C2"),
+        ("实付金额", "[$¥-411]#,##0.00", "C2"),
+        ("实付金额", "#,##0.0,", "C2"),
+        ("实付金额（万元）", "General", "C1"),
+    ],
+)
+def test_file02_validates_amount_header_and_format(header, number_format, address):
+    snapshot = parse_workbook(
+        workbook(ROWS, ("报销日期", "费用类别", header), {"C2": number_format})
+    )
+    with pytest.raises(AppError, match=address) as problem:
+        calculate(
+            snapshot,
+            sheet="报销明细",
+            columns=COLUMNS,
+            start=OCTOBER[0],
+            end=OCTOBER[1],
+            category=None,
+            group_by="none",
+        )
+    assert problem.value.details == {"sheet": "报销明细", "cell": address}
+
+
 def _sheet_reply(payload):
     output = json.loads(payload["messages"][-1]["content"])
     assert output.get("ok"), output
@@ -118,10 +166,10 @@ def test_workbook_scope_requires_user_evidence():
         sheet="报销明细", columns=COLUMNS, date_from="2026-10-01", date_to_exclusive="2026-11-01"
     )
     validate_request(query, snapshot, "2026年10月实付报销", {})
-    validate_request(query, snapshot, "只看交通费", query)
+    validate_request({**query, "category": "交通费"}, snapshot, "只看交通费", query)
     with pytest.raises(AppError, match="日期范围"):
         validate_request(query, snapshot, "实付报销有多少", {})
-    with pytest.raises(AppError, match="月份不符"):
+    with pytest.raises(AppError, match="月份.*不符"):
         validate_request(query, snapshot, "2026年11月实付报销", {})
     with pytest.raises(AppError, match="年份"):
         validate_request(query, snapshot, "10月实付报销", {})
@@ -132,6 +180,291 @@ def test_workbook_scope_requires_user_evidence():
     snapshot["sheets"].append({**snapshot["sheets"][0], "name": "另一张表"})
     with pytest.raises(AppError, match="哪一个工作表"):
         validate_request(query, snapshot, "2026年10月实付报销，用 C 列", {})
+
+
+@pytest.mark.parametrize(
+    ("question", "wrong", "field"),
+    [
+        (
+            "2026-10-01到2026/10/02的实付合计",
+            {"date_to_exclusive": "2026-11-01"},
+            "date_to_exclusive",
+        ),
+        ("2026年10月1日至2026年10月2日，交通费合计", {"category": "住宿费"}, "category"),
+        ("2026-10-01至2026-10-02按费用类别拆开", {"group_by": "none"}, "group_by"),
+    ],
+)
+def test_file01_rejects_unconfirmed_range_category_and_grouping(question, wrong, field):
+    snapshot = parse_workbook(workbook())
+    query = dict(
+        sheet="报销明细",
+        columns=COLUMNS,
+        date_from="2026-10-01",
+        date_to_exclusive="2026-10-03",
+    )
+    with pytest.raises(AppError) as problem:
+        validate_request({**query, **wrong}, snapshot, question, {})
+    assert problem.value.code == "WORKBOOK_SCOPE_MISMATCH"
+    assert problem.value.details["field"] == field
+
+
+def test_file01_accepts_end_date_and_protects_explicit_scope_changes():
+    snapshot = parse_workbook(workbook())
+    query = dict(
+        sheet="报销明细",
+        columns=COLUMNS,
+        date_from="2026-10-01",
+        date_to_exclusive="2026-10-03",
+    )
+    checked = validate_request(query, snapshot, "2026年10月1日到10月2日的实付合计", {})
+    assert checked["date_to_exclusive"] == "2026-10-03"
+    month = {**query, "date_to_exclusive": "2026-11-01"}
+    for ambiguous in (
+        "10月1日",
+        "2026年10月或11月",
+        "2026年10月，按日期分组",
+        "2026年10月，用 D 列",
+    ):
+        with pytest.raises(AppError) as problem:
+            validate_request(month, snapshot, ambiguous, {})
+        assert problem.value.code == "NEEDS_CLARIFICATION"
+    first = {**checked, "category": "交通费", "group_by": "category"}
+    all_rows = {**query, "all_dates": True, "date_from": None, "date_to_exclusive": None}
+    checked = validate_request(all_rows, snapshot, "全表所有类别，只要总计", first)
+    assert checked["category"] is None and checked["group_by"] == "none" and checked["all_dates"]
+    with pytest.raises(AppError, match="日期范围"):
+        validate_request(all_rows, snapshot, "换成2026年11月", checked)
+
+
+@pytest.fixture
+def excel_turn(db, settings):
+    auth = Identity("U001")
+    session = str(create_session(db, auth, "C001")["session_id"])
+
+    def attach(content):
+        file = Knowledge(db, settings).upload(
+            auth,
+            name="报销.xlsx",
+            title="报销明细",
+            company_id="C001",
+            content=content,
+            request_id=uid(),
+        )
+        jobs = KnowledgeJobs(db, settings, None)
+        jobs.run(jobs.claim())
+        args = dict(
+            document_id=file["document_id"],
+            version_id=file["version_id"],
+            sheet="报销明细",
+            columns=COLUMNS,
+            date_from="2026-10-01",
+            date_to_exclusive="2026-11-01",
+        )
+
+        async def query(text, *, attached=True, changes=None, reply=_sheet_reply):
+            runtime = Runtime(
+                db,
+                model_settings(settings),
+                ScriptedModel(
+                    [
+                        tool("query_workbook", {**args, **(changes or {})}),
+                        reply,
+                    ]
+                ),
+            )
+            turn = accept_turn(
+                db,
+                auth,
+                session,
+                uid(),
+                text,
+                knowledge_upload_ids=[file["file_id"]] if attached else [],
+            )
+            await runtime.run(runtime.claim())
+            return read_turn(db, auth, turn["turn_id"])
+
+        return file, query
+
+    return auth, attach
+
+
+def _tool_denied(code, **details):
+    def reply(payload):
+        output = json.loads(payload["messages"][-1]["content"])
+        assert output["ok"] is False and output["error"]["code"] == code, output
+        assert output["error"]["details"] == details
+        plan = {"blocks": [{"type": "explanation", "code": "workbook_query_failed"}]}
+        if code == "NEEDS_CLARIFICATION":
+            plan = {
+                "status": "waiting_user",
+                "blocks": [],
+                "clarification": {"intent": "other", "missing_fields": ["target"]},
+            }
+        return {"role": "assistant", "content": json.dumps(plan)}
+
+    return reply
+
+
+def _result_card(turn):
+    return next(card for card in turn["final_cards"] if card["kind"] == "workbook_result")
+
+
+@pytest.mark.asyncio
+async def test_file01_runtime_returns_only_verified_scope_and_original_rows(db, excel_turn):
+    auth, attach = excel_turn
+    _, query = attach(
+        workbook(
+            (
+                ("2026-10-01", "交通费", 12.30),
+                ("2026-10-02", "住宿费", 45.12),
+                ("2026-11-02", "交通费", 123.40),
+            )
+        )
+    )
+    for text, changes, field, expected, actual in (
+        (
+            "2026年10月实付合计",
+            {"date_to_exclusive": "2026-10-03"},
+            "date_to_exclusive",
+            "2026-11-01",
+            "2026-10-03",
+        ),
+        ("2026年10月只看交通费", {"category": "住宿费"}, "category", "交通费", "住宿费"),
+        ("2026年10月按费用类别拆开", {}, "group_by", "category", "none"),
+    ):
+        denied = await query(
+            text,
+            changes=changes,
+            reply=_tool_denied(
+                "WORKBOOK_SCOPE_MISMATCH",
+                field=field,
+                expected=expected,
+                actual=actual,
+            ),
+        )
+        assert denied["status"] == "completed", denied
+        assert all(card["kind"] != "workbook_result" for card in denied["final_cards"])
+    with db.transaction(readonly=True) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM workbook_results").fetchone()["n"] == 0
+
+    need_date = await query(
+        "请按费用类别拆开，计算实付金额",
+        changes={"group_by": "category"},
+        reply=_tool_denied("NEEDS_CLARIFICATION"),
+    )
+    assert need_date["status"] == "waiting_user", need_date
+    assert "请先提供日期范围" in need_date["final_message"]
+    clarified = await query("2026年10月", attached=False, changes={"group_by": "category"})
+    with db.transaction(readonly=True) as conn:
+        page = read_result(conn, auth, _result_card(clarified)["result_id"])
+    assert page["total"] == "57.42" and page["query"]["group_by"] == "category"
+
+    for text, attached, changes, total, numbers in (
+        (
+            "2026-10-01至2026年10月2日实付合计",
+            True,
+            {"date_to_exclusive": "2026-10-03"},
+            "57.42",
+            [2, 3],
+        ),
+        ("2026年10月按费用类别拆开", True, {"group_by": "category"}, "57.42", [2, 3]),
+        ("只看交通费", False, {"group_by": "category", "category": "交通费"}, "12.30", [2]),
+        (
+            "只看十一月",
+            False,
+            {
+                "date_from": "2026-11-01",
+                "date_to_exclusive": "2026-12-01",
+                "group_by": "category",
+                "category": "交通费",
+            },
+            "123.40",
+            [4],
+        ),
+    ):
+        answered = await query(text, attached=attached, changes=changes)
+        with db.transaction(readonly=True) as conn:
+            page = read_result(conn, auth, _result_card(answered)["result_id"])
+        assert page["total"] == total and page["query"]["columns"]["amount"] == "C"
+        assert [row[0] for row in page["rows"]] == numbers
+        if numbers == [2, 3] and changes.get("group_by"):
+            assert {g["category"]: g["total"] for g in page["groups"]} == {
+                "交通费": "12.30",
+                "住宿费": "45.12",
+            }
+
+
+@pytest.mark.asyncio
+async def test_file02_runtime_shows_original_cell_for_mixed_currency(db, excel_turn):
+    _, attach = excel_turn
+    _, query = attach(
+        workbook(
+            (("2026-10-01", "交通费", 120, "CNY"), ("2026-10-02", "住宿费", 10, "USD")),
+            ("报销日期", "费用类别", "实付金额", "币种"),
+        )
+    )
+    answer = await query(
+        "2026年10月实付报销合计",
+        reply=_tool_denied("WORKBOOK_UNIT_UNSUPPORTED", sheet="报销明细", cell="D3"),
+    )
+    assert answer["status"] == "completed", answer
+    assert "D3" in answer["final_message"] and "130.00" not in answer["final_message"]
+    assert not answer["final_cards"]
+    with db.transaction(readonly=True) as conn:
+        assert conn.execute("SELECT count(*) AS n FROM workbook_results").fetchone()["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_file02_old_snapshots_use_original_bytes_and_old_answers_require_new_query(
+    db,
+    admin,
+    excel_turn,
+):
+    auth, attach = excel_turn
+    file, query = attach(workbook())
+    old_turn = await query("2026年10月实付报销合计")
+    old_result = _result_card(old_turn)["result_id"]
+    admin.execute(
+        "UPDATE workbook_results SET result=result-'parser_version' WHERE result_id=%s",
+        (old_result,),
+    )
+    projected = read_turn(db, auth, old_turn["turn_id"])
+    assert all(card["kind"] != "workbook_result" for card in projected["final_cards"])
+    run = public_run(db, auth, old_turn["runs"][0]["run_id"])
+    assert run["contexts"] and all(item["payload"].get("redacted") for item in run["contexts"])
+    with db.transaction(readonly=True) as conn, pytest.raises(AppError, match="重新"):
+        read_result(conn, auth, old_result)
+    with db.transaction(readonly=True) as conn:
+        old_snapshot = conn.execute(
+            "SELECT snapshot FROM workbook_snapshots WHERE version_id=%s", (file["version_id"],)
+        ).fetchone()["snapshot"]
+    old_snapshot["parser_version"] = "workbook-1"
+    for sheet in old_snapshot["sheets"]:
+        sheet.pop("currency_columns", None)
+        sheet.pop("amount_units", None)
+        sheet["rows"] = [row[:2] for row in sheet["rows"]]
+    admin.execute(
+        "UPDATE workbook_snapshots SET snapshot=%s WHERE version_id=%s",
+        (jsonb(old_snapshot), file["version_id"]),
+    )
+    admin.execute(
+        "UPDATE knowledge_versions SET parser_version='workbook-1' WHERE version_id=%s",
+        (file["version_id"],),
+    )
+
+    reparsed = await query("2026年10月实付报销合计")
+    with db.transaction(readonly=True) as conn:
+        page = read_result(conn, auth, _result_card(reparsed)["result_id"])
+        assert page["currency"] == "CNY" and page["total"] == "617.00"
+        assert page["parser_version"] == "workbook-2"
+    changed = workbook(ROWS[:1])
+    admin.execute(
+        "UPDATE knowledge_files SET file_bytes=%s,byte_size=%s WHERE file_id=%s",
+        (changed, len(changed), file["file_id"]),
+    )
+    denied = await query("2026年10月实付报销合计", reply=_tool_denied("WORKBOOK_RECHECK_REQUIRED"))
+    assert denied["status"] == "completed", denied
+    assert all(card["kind"] != "workbook_result" for card in denied["final_cards"])
 
 
 @pytest.mark.asyncio
@@ -311,7 +644,10 @@ async def test_workbook_upload_agent_followup_and_evidence_revocation(db, settin
         scoped_session = str(create_session(db, auth, "C001")["session_id"])
         scope_model = ScriptedModel(
             [
-                tool("query_workbook", {**args, "version_id": new_version["version_id"]}),
+                tool(
+                    "query_workbook",
+                    {**args, "version_id": new_version["version_id"], "group_by": "none"},
+                ),
                 _sheet_reply,
                 stale_reply,
             ]

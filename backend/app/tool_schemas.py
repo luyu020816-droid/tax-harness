@@ -263,6 +263,7 @@ class ExplanationBlock(StrictModel):
         "knowledge_unavailable",
         "knowledge_insufficient",
         "knowledge_compare",
+        "workbook_query_failed",
         "public_web_unavailable",
         "public_weather_period",
         "public_web_scope_required",

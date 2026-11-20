@@ -253,9 +253,12 @@ def assemble(
     workbook_prompt = (
         "\nworkbook_candidates 是当前唯一可信的 Excel 候选。用户问表格明细时调用 inspect_workbook 查结构，"
         "用 query_workbook 计算。多表、多候选列、未明确时间或口径时先追问；实付仅用明确实付字段。"
+        "用户给出含结束日的起止日期时，把次日填入 date_to_exclusive。类别用原表名称，分组须来自用户要求。"
         "明确要求全部日期才能填 all_dates。续问更改条件时保留未更改的上次条件并重新计算。"
         "成功必须交付 type=result、view=workbook_result 和本轮工具信封中的 result_ref；"
-        "精确金额和证据由程序放入结果卡。失败说明具体原因，不把缺列、无效值或拒绝当作零。"
+        "精确金额和证据由程序放入结果卡。WORKBOOK_SCOPE_MISMATCH 按 details 的字段核对后重试。"
+        "NEEDS_CLARIFICATION 用 waiting_user，intent=other、missing_fields=[\"target\"]，程序生成具体追问。"
+        "无法完成时用说明块 type=explanation、code=workbook_query_failed，程序展示失败原因和单元格。"
         if workbook_candidates else ""
     )
     if workbook_followup_unavailable:

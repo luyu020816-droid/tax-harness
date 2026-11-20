@@ -5,6 +5,7 @@ from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
+from unicodedata import category as char_category
 from unicodedata import normalize
 from xml.etree.ElementTree import iterparse
 from zipfile import ZipFile
@@ -15,7 +16,7 @@ from openpyxl.utils import column_index_from_string, get_column_letter
 from app.errors import AppError
 from app.xlsx_invoices import validate_archive
 
-PARSER_VERSION = "workbook-1"
+PARSER_VERSION = "workbook-2"
 MAX_ROWS = 10001  # One header plus 10,000 physical data rows.
 MAX_COLUMNS = 50
 ALIASES = {
@@ -25,10 +26,64 @@ ALIASES = {
 }
 TOTAL_LABEL = re.compile(r"^(?:总?合计|小计|总计|汇总|subtotal|grand total|total)(?:[：:]|$)", re.I)
 NUMBER = re.compile(r"[+-]?(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]+)?")
+CURRENCY_COLUMNS = {
+    "币种",
+    "支付币种",
+    "报销币种",
+    "交易币种",
+    "结算币种",
+    "货币",
+    "货币单位",
+    "金额单位",
+    "currency",
+    "currency code",
+}
+RMB_UNITS = {"CNY", "RMB", "人民币", "人民币元", "元", "¥", "CN¥"}
+EXCEL_CURRENCY = re.compile(r"\[\$([^\]-]*)(?:-([^\]]+))?\]")
 
 
 def clean(value):
     return normalize("NFKC", value).strip()
+
+
+def _amount_unit(header):
+    """Return unit evidence, or None when the heading is not an amount field."""
+    for name in sorted(ALIASES["amount"], key=len, reverse=True):
+        if not header.startswith(name):
+            continue
+        suffix = header[len(name) :].strip()
+        if (
+            not suffix
+            or suffix[0] in "([/:"
+            or re.fullmatch(
+                r"(?:[A-Za-z]{3}|人民币元?|[万千百万亿]?(?:元|角|分)|[\u4e00-\u9fff]{1,4}币|[¥€$£])",
+                suffix,
+            )
+        ):
+            return suffix.strip("()[]/: ").upper()
+    return None
+
+
+def _unsupported_format(value):
+    value = clean(value).upper()
+    for symbol, locale in EXCEL_CURRENCY.findall(value):
+        if symbol and (
+            symbol not in RMB_UNITS
+            or (symbol == "¥" and locale not in {"", "804", "0804", "ZH-CN"})
+        ):
+            return True
+    value = re.sub(r"\[[^\]]*\]|[_*].", "", value)
+    if "%" in value or re.search(r"(?<=[#0?]),+(?![#0?])", value):
+        return True
+    if any(char_category(char) == "Sc" and char != "¥" for char in value):
+        return True
+    for literal in re.findall(r'"([^"]*)"', value):
+        if any(char.isalpha() for char in literal) and "".join(literal.split()) not in RMB_UNITS:
+            return True
+    return any(
+        token not in RMB_UNITS and token != "GENERAL"
+        for token in re.findall(r"[A-Z]{3,}|[\u4e00-\u9fff]+", value)
+    )
 
 
 def _xml_cells(archive, path):
@@ -72,8 +127,6 @@ def _cell(cell, raw):
     if isinstance(value, date):
         return ["date", value.isoformat()]
     if cell.data_type == "n":
-        if re.search(r"(?i)[%€£$]|USD|EUR|GBP|JPY|HKD|美元|欧元|港币|日元", cell.number_format):
-            return ["invalid", None]
         return ["number", raw.get(cell.coordinate)]
     if isinstance(value, str) and len(value) <= 500:
         return ["text", value]
@@ -93,6 +146,7 @@ def parse_workbook(content):
                     continue
                 raw, reason, last_row = _xml_cells(archive, sheet._worksheet_path)
                 candidates = {field: {} for field in ALIASES}
+                currency_columns, amount_units = {}, {}
                 data = []
                 header = None
                 sheet.reset_dimensions()
@@ -107,9 +161,20 @@ def parse_workbook(content):
                             for index, cell in enumerate(cells, 1):
                                 if not isinstance(cell.value, str) or cell.data_type == "f":
                                     continue
-                                for field, aliases in ALIASES.items():
-                                    if clean(cell.value) in aliases:
-                                        candidates[field][get_column_letter(index)] = cell.value
+                                column = get_column_letter(index)
+                                name = clean(cell.value)
+                                for field in ("date", "category"):
+                                    if name in ALIASES[field]:
+                                        candidates[field][column] = cell.value
+                                unit = _amount_unit(name)
+                                if unit is not None:
+                                    candidates["amount"][column] = cell.value
+                                    amount_units[column] = unit
+                                if (
+                                    re.split(r"[(\[:]", name.casefold(), maxsplit=1)[0].strip()
+                                    in CURRENCY_COLUMNS
+                                ):
+                                    currency_columns[column] = cell.value
                             missing = [field for field, cols in candidates.items() if not cols]
                             if missing:
                                 labels = {"date": "日期", "category": "费用类别", "amount": "金额"}
@@ -118,7 +183,8 @@ def parse_workbook(content):
                             indexes = {
                                 get_column_letter(index): index - 1
                                 for index in range(1, MAX_COLUMNS + 1)
-                                if any(
+                                if get_column_letter(index) in currency_columns
+                                or any(
                                     get_column_letter(index) in cols for cols in candidates.values()
                                 )
                             }
@@ -129,14 +195,26 @@ def parse_workbook(content):
                         ):
                             reason = "工作表包含显式汇总行，请仅上传明细。"
                             break
+                        unsupported_formats = [
+                            col
+                            for col in amount_units
+                            if cells[indexes[col]].value is not None
+                            and _unsupported_format(cells[indexes[col]].number_format)
+                        ]
                         data.append(
-                            [row_number, {col: _cell(cells[i], raw) for col, i in indexes.items()}]
+                            [
+                                row_number,
+                                {col: _cell(cells[i], raw) for col, i in indexes.items()},
+                                unsupported_formats,
+                            ]
                         )
                 sheets.append(
                     {
                         "name": sheet.title,
                         "header_row": header,
                         "columns": candidates,
+                        "currency_columns": currency_columns,
+                        "amount_units": amount_units,
                         "reason": reason or ("工作表为空。" if header is None else None),
                         "rows": [] if reason else data,
                     }
@@ -175,6 +253,15 @@ def _amount(cell):
     return cents
 
 
+def _unit_error(sheet, address):
+    return AppError(
+        "WORKBOOK_UNIT_UNSUPPORTED",
+        f"工作表「{sheet}」的 {address} 无法确认为人民币元，请核对币种或金额单位。",
+        422,
+        details={"sheet": sheet, "cell": address},
+    )
+
+
 def calculate(snapshot, *, sheet, columns, start, end, category, group_by):
     source = next((item for item in snapshot["sheets"] if item["name"] == sheet), None)
     if not source or source["reason"]:
@@ -187,10 +274,14 @@ def calculate(snapshot, *, sheet, columns, start, end, category, group_by):
         raise AppError("WORKBOOK_COLUMN_REQUIRED", "请确认表格日期、费用类别和金额列。", 422)
     if (start is None) != (end is None) or (start and start >= end):
         raise AppError("INVALID_ARGUMENT", "请提供有效日期区间或明确查询全部日期。", 422)
+    amount_column = columns["amount"]
+    unit = source["amount_units"][amount_column]
+    if unit and unit not in RMB_UNITS:
+        raise _unit_error(sheet, f"{amount_column}{source['header_row']}")
     category = clean(category) if category is not None else None
     rows, groups = [], defaultdict(lambda: {"count": 0, "total": Decimal(0)})
     total = Decimal(0)
-    for row, cells in source["rows"]:
+    for row, cells, unsupported_formats in source["rows"]:
         field = "date"
         try:
             day = _date(cells[columns[field]])
@@ -203,12 +294,21 @@ def calculate(snapshot, *, sheet, columns, start, end, category, group_by):
                 raise ValueError
             if category is not None and category != label:
                 continue
+            for column in source["currency_columns"]:
+                currency_kind, currency = cells[column] or (None, None)
+                if currency_kind != "text" or clean(currency).upper() not in RMB_UNITS:
+                    raise _unit_error(sheet, f"{column}{row}")
+            if amount_column in unsupported_formats:
+                raise _unit_error(sheet, f"{amount_column}{row}")
             field = "amount"
             amount = _amount(cells[columns[field]])
         except ValueError as exc:
             address = f"{columns[field]}{row}"
             raise AppError(
-                "WORKBOOK_CELL_INVALID", f"工作表「{sheet}」的 {address} 无法用于计算。", 422
+                "WORKBOOK_CELL_INVALID",
+                f"工作表「{sheet}」的 {address} 无法用于计算。",
+                422,
+                details={"sheet": sheet, "cell": address},
             ) from exc
         total += amount
         rows.append([row, day.isoformat(), label, format(amount, ".2f")])
@@ -216,6 +316,8 @@ def calculate(snapshot, *, sheet, columns, start, end, category, group_by):
             groups[label]["count"] += 1
             groups[label]["total"] += amount
     return {
+        "parser_version": PARSER_VERSION,
+        "currency": "CNY",
         "total": format(total, ".2f"),
         "count": len(rows),
         "rows": rows,

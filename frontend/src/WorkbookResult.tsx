@@ -13,9 +13,10 @@ type WorkbookPage = {
   query: {
     sheet: string;
     columns: { date: string; category: string; amount: string };
-    date_from?: string;
-    date_to_exclusive?: string;
-    category?: string;
+    date_from: string | null;
+    date_to_exclusive: string | null;
+    category: string | null;
+    group_by: 'none' | 'category';
   };
   rows: [number, string, string | null, string][];
   groups: { category: string; count: number; total: string }[];
@@ -61,6 +62,7 @@ export function WorkbookResult({ id }: { id: string }) {
           ? `${query.date_from} 至 ${query.date_to_exclusive}（不含结束日）`
           : '全部日期'}
         {query.category ? ` · ${query.category}` : ''}
+        {query.group_by === 'category' ? ' · 按费用类别分组' : ''}
       </p>
       {page.groups.length > 0 && (
         <div>
