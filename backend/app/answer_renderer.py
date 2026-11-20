@@ -748,7 +748,9 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
                         reply.cards.append({**card, "reference_label": f"来源{number}"})
                     texts.append(f"{claim.text.strip()}（来源{'、'.join(dict.fromkeys(labels))}）")
                     accepted += 1
-            if not accepted:
+            if any(item.get("degraded_reason") == "KNOWLEDGE_VERSION_BOUNDARY" for item in knowledge):
+                texts.append("该月份内资料适用版本或有效期发生变化，请按具体日期拆开查询。")
+            elif not accepted:
                 if any(item.get("status") == "unavailable" for item in knowledge):
                     texts.append("知识资料暂时无法检索，请稍后再试。")
                 elif (verified_knowledge or {}).get("status") not in ("checked", "not_needed") or (

@@ -25,6 +25,7 @@ REQUIRED_VERSIONS = {
     26,
     27,
     28,
+    29,
 }
 
 _COLUMNS = {
@@ -54,6 +55,14 @@ _COLUMNS = {
         "config_fingerprint": "text",
     },
     "turns": {"default_model_version": "bigint"},
+    "knowledge_publications": {
+        "document_id": "uuid",
+        "publication_revision": "bigint",
+        "version_id": "uuid",
+        "scope": "text",
+        "origin": "text",
+        "recorded_at": "timestamp with time zone",
+    },
 }
 
 _CONSTRAINTS = {
@@ -104,6 +113,14 @@ _CONSTRAINTS = {
     "turns_default_model_version_fkey": (
         "turns",
         "FOREIGN KEY (default_model_version) REFERENCES default_model_versions(version)",
+    ),
+    "knowledge_publications_pkey": (
+        "knowledge_publications",
+        "PRIMARY KEY (document_id, publication_revision)",
+    ),
+    "knowledge_publications_document_id_version_id_fkey": (
+        "knowledge_publications",
+        "FOREIGN KEY (document_id, version_id) REFERENCES knowledge_versions(document_id, version_id) ON DELETE CASCADE",
     ),
 }
 
@@ -156,7 +173,11 @@ def semifinal_schema_issues(conn):
     for table, fields in _COLUMNS.items():
         for field, data_type in fields.items():
             required = table not in ("write_plans", "schema_migrations", "turns")
-            default = {"agent_scope": "''::text", "created_at": "clock_timestamp()"}.get(field)
+            default = {
+                "agent_scope": "''::text",
+                "created_at": "clock_timestamp()",
+                "recorded_at": "clock_timestamp()",
+            }.get(field)
             if columns.get((table, field)) != (data_type, required, default):
                 issues.append(f"{table}.{field}")
     constraints = {
@@ -185,6 +206,10 @@ def semifinal_schema_issues(conn):
         if constraints.get((table, name)) != definition
     )
     issues.extend(name for name, definition in _INDEXES.items() if indexes.get(name) != definition)
+    if not conn.execute(
+        "SELECT to_regprocedure('public.knowledge_version_at(uuid,date,date,text)') AS selector"
+    ).fetchone()["selector"]:
+        issues.append("knowledge_version_at(uuid,date,date,text)")
     active_index = conn.execute(
         "SELECT pg_get_indexdef(indexrelid) AS definition FROM pg_index "
         "WHERE indrelid=to_regclass('public.tasks') "

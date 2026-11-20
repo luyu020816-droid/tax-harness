@@ -3,11 +3,13 @@
 import hashlib
 from datetime import date
 
+from app import business_dates
 from app.agent_authority import authorize_tool, restrict_knowledge
 from app.errors import AppError
 from app.execution import guard
 from app.knowledge import document_in
 from app.knowledge_parser import MEDIA, parse_isolated
+from app.knowledge_versions import selected_in, timing
 from app.sources import read_source
 from app.turns import mentioned_companies
 from app.values import jsonb, safe_json, uid
@@ -17,33 +19,40 @@ from app.xlsx_workbooks import PARSER_VERSION, calculate
 PREVIEW_LIMIT = 12
 
 
-def active_version(conn, auth, document_id, version_id, *, lock=False):
+def active_version(conn, auth, document_id, version_id=None, *, as_of=None, lock=False):
     document = document_in(conn, auth, document_id)
+    if lock:
+        conn.execute(
+            "SELECT 1 FROM knowledge_documents WHERE document_id=%s FOR SHARE", (document_id,)
+        )
     if document["status"] == "disabled":
         raise AppError("WORKBOOK_UNAVAILABLE", "表格已停用，请重新选择有效资料。", 409)
-    if document["active_version_id"] and str(document["active_version_id"]) != str(version_id):
-        raise AppError("WORKBOOK_UNAVAILABLE", "表格已换版，请重新选择当前有效版本。", 409)
+    day = date.fromisoformat(as_of) if isinstance(as_of, str) else as_of or business_dates.business_today()
+    selected = selected_in(conn, auth, document_id, day)
+    if selected and version_id is not None and str(selected["version_id"]) != str(version_id):
+        raise AppError("WORKBOOK_UNAVAILABLE", "表格已换版，请重新选择该时点的有效版本。", 409)
+    if not selected:
+        raise AppError("WORKBOOK_UNAVAILABLE", "该时点没有有效表格，请重新选择资料或日期。", 409)
     row = conn.execute(
-        "SELECT d.document_id,d.company_id,v.version_id,v.edition,v.parser_version,f.original_name "
-        "FROM knowledge_documents d JOIN knowledge_versions v ON v.version_id=d.active_version_id "
+        "SELECT v.document_id,v.company_id,v.version_id,v.edition,v.parser_version,f.original_name,f.file_id,f.sha256 "
+        "FROM knowledge_versions v "
         "JOIN knowledge_files f USING(file_id) JOIN workbook_snapshots w USING(version_id) "
-        "WHERE d.document_id=%s AND d.status='active' AND v.state='ready' AND v.version_id=%s "
-        "AND v.effective_from<=current_date AND (v.effective_to IS NULL OR v.effective_to>current_date)"
-        + (" FOR SHARE OF d" if lock else ""),
-        (document["document_id"], version_id),
+        "WHERE v.document_id=%s AND v.version_id=%s",
+        (document["document_id"], selected["version_id"]),
     ).fetchone()
     if not row:
         raise AppError(
             "WORKBOOK_UNAVAILABLE", "表格尚未就绪或不在有效期内，请重新选择有效资料。", 409
         )
-    return safe_json(row)
+    return safe_json({**row, "version_as_of": day, "publication_revision": selected["publication_revision"]})
 
 
 def validate_dependency(conn, auth, turn_id, dependency, *, lock=False):
     authorize_tool(conn, turn_id, dependency["tool"], {})
     restrict_knowledge(conn, turn_id, [str(dependency["document_id"])])
     return active_version(
-        conn, auth, dependency["document_id"], dependency["version_id"], lock=lock
+        conn, auth, dependency["document_id"], dependency["version_id"],
+        as_of=dependency.get("version_as_of"), lock=lock,
     )
 
 
@@ -78,12 +87,28 @@ def snapshot_in(conn, version_id):
         raise _recheck_required() from exc
 
 
-def candidates(conn, execution, company_id, knowledge_attachments):
+def previous_user_source(conn, execution, company_id):
+    prior = conn.execute(
+        "SELECT s.source_id FROM turns t JOIN sources s USING(turn_id) "
+        "WHERE t.session_id=%s AND t.user_id=%s AND t.source_seq<%s "
+        "AND t.request_kind<>'compact' AND s.role='user' AND s.source_seq=t.source_seq "
+        "ORDER BY t.source_seq DESC LIMIT 1",
+        (execution.session_id, execution.auth.user_id, execution.source_seq),
+    ).fetchone()
+    return read_source(conn, execution.auth, prior["source_id"], company_id=company_id) if prior else None
+
+
+def candidates(conn, execution, company_id, knowledge_attachments, *, source):
     if not company_id:
         return [], False
     if knowledge_attachments:
         return [
-            {key: item[key] for key in ("document_id", "version_id", "original_name", "state")}
+            {
+                key: item[key] for key in (
+                    "document_id", "version_id", "original_name", "state", "version_as_of",
+                    "version_basis", "version_fragments",
+                ) if key in item
+            }
             for item in knowledge_attachments
             if item["media_type"] == MEDIA[".xlsx"]
         ], False
@@ -107,12 +132,19 @@ def candidates(conn, execution, company_id, knowledge_attachments):
     ).fetchone()
     if previous["agent_id"] != (binding or {}).get("agent_id"):
         return [], had_workbook
+    if not had_workbook:
+        return [], False
+    _, requested_day, fragments = business_dates.workbook_reference(source["content"])
+    default_day = business_dates.business_today(source["created_at"])
     if previous["status"] == "waiting_user" and previous["knowledge_upload_ids"]:
         from app.knowledge import upload_metadata
 
         try:
+            prior = previous_user_source(conn, execution, company_id)
             item = upload_metadata(
-                conn, execution.auth, previous["knowledge_upload_ids"][0], company_id
+                conn, execution.auth, previous["knowledge_upload_ids"][0], company_id,
+                question=source["content"] if requested_day else (prior or {}).get("content", ""),
+                requested_at=source["created_at"],
             )
             if item["media_type"] == MEDIA[".xlsx"] and item["state"] == "ready":
                 validate_dependency(
@@ -142,6 +174,8 @@ def candidates(conn, execution, company_id, knowledge_attachments):
     ).fetchall()
     available = []
     for row in rows:
+        carried = row["query"].get("version_basis") == "explicit"
+        reference_day = requested_day or (row["query"].get("version_as_of") if carried else None) or default_day
         try:
             meta = validate_dependency(
                 conn,
@@ -150,6 +184,8 @@ def candidates(conn, execution, company_id, knowledge_attachments):
                 {
                     **safe_json(row),
                     "tool": "query_workbook",
+                    "version_as_of": reference_day,
+                    "version_id": None if requested_day else row["version_id"],
                 },
             )
         except AppError:
@@ -158,7 +194,9 @@ def candidates(conn, execution, company_id, knowledge_attachments):
             {
                 **meta,
                 "state": "ready",
-                "previous_query": row["query"],
+                "previous_query": row["query"] if meta["version_id"] == str(row["version_id"]) else {},
+                "version_basis": "explicit" if requested_day or carried else "business_default",
+                "version_fragments": fragments if requested_day else row["query"].get("version_fragments", []),
             }
         )
     return available, not available
@@ -181,10 +219,12 @@ def dispatch(db, execution, name, args):
             "SELECT knowledge_upload_ids FROM turns WHERE turn_id=%s", (execution.turn_id,)
         ).fetchone()
         attachments = [
-            upload_metadata(conn, execution.auth, value, company)
+            upload_metadata(
+                conn, execution.auth, value, company, question=text, requested_at=source["created_at"],
+            )
             for value in turn["knowledge_upload_ids"]
         ]
-        visible, unavailable = candidates(conn, execution, company, attachments)
+        visible, unavailable = candidates(conn, execution, company, attachments, source=source)
         match = [item for item in visible if item["document_id"] == args["document_id"]]
         if len(match) != 1:
             if unavailable:
@@ -198,7 +238,12 @@ def dispatch(db, execution, name, args):
         version_id = args.get("version_id", selected["version_id"])
         if version_id != selected["version_id"]:
             raise AppError("WORKBOOK_UNAVAILABLE", "表格版本已变化，请重新选择有效资料。", 409)
-        dependency = {"document_id": args["document_id"], "version_id": version_id, "tool": name}
+        if args.get("version_as_of") and args["version_as_of"] != selected.get("version_as_of"):
+            raise AppError("WORKBOOK_SCOPE_MISMATCH", "工具的工作簿版本日期与原话不符。", 422)
+        dependency = {
+            "document_id": args["document_id"], "version_id": version_id, "tool": name,
+            "version_as_of": selected.get("version_as_of"),
+        }
         meta = validate_dependency(conn, execution.auth, execution.turn_id, dependency, lock=True)
         snapshot = snapshot_in(conn, version_id)
         meta["parser_version"] = snapshot["parser_version"]
@@ -212,27 +257,23 @@ def dispatch(db, execution, name, args):
                     for sheet in snapshot["sheets"]
                 ],
             }
-        query = {
-            key: value for key, value in args.items() if key not in ("document_id", "version_id")
-        }
         earlier = None
         if selected.get("continuing_clarification"):
-            prior = conn.execute(
-                "SELECT s.source_id FROM turns t JOIN sources s USING(turn_id) "
-                "WHERE t.session_id=%s AND t.user_id=%s AND t.source_seq<%s "
-                "AND t.request_kind<>'compact' AND s.role='user' AND s.source_seq=t.source_seq "
-                "ORDER BY t.source_seq DESC LIMIT 1",
-                (execution.session_id, execution.auth.user_id, execution.source_seq),
-            ).fetchone()
-            if prior:
-                earlier = read_source(conn, execution.auth, prior["source_id"], company_id=company)
+            earlier = previous_user_source(conn, execution, company)
+            if earlier:
+                earlier = {**earlier, "content": business_dates.workbook_reference(earlier["content"])[0]}
         query = validate_request(
-            query,
+            args,
             snapshot,
-            text,
+            business_dates.workbook_reference(text)[0],
             selected.get("previous_query", {}),
             created_at=source["created_at"],
             prior_source=earlier,
+        )
+        query.update(
+            version_as_of=meta["version_as_of"],
+            version_basis=selected.get("version_basis", "business_default"),
+            version_fragments=selected.get("version_fragments", []),
         )
         result = calculate(
             snapshot,
@@ -256,6 +297,7 @@ def dispatch(db, execution, name, args):
             "workbook_dependency": dependency,
             "result_id": result_id,
             "query": query,
+            "version_timing": timing(date.fromisoformat(meta["version_as_of"])),
             "currency": result["currency"],
             "total": result["total"],
             "count": result["count"],
@@ -269,7 +311,8 @@ def dispatch(db, execution, name, args):
 def validate_result(conn, auth, result_id, *, run_id=None, include_result=False):
     fields = ",w.result,w.query" if include_result else ""
     row = conn.execute(
-        "SELECT w.run_id,w.version_id,v.document_id,r.turn_id,w.result->>'parser_version' AS parser_version"
+        "SELECT w.run_id,w.version_id,v.document_id,r.turn_id,w.result->>'parser_version' AS parser_version,"
+        "w.query->>'version_as_of' AS version_as_of"
         + fields
         + " FROM workbook_results w JOIN runs r USING(run_id) "
         "JOIN turns t USING(turn_id) JOIN sessions s USING(session_id) JOIN knowledge_versions v USING(version_id) "
@@ -286,6 +329,7 @@ def validate_result(conn, auth, result_id, *, run_id=None, include_result=False)
             "document_id": row["document_id"],
             "version_id": row["version_id"],
             "tool": "query_workbook",
+            "version_as_of": row["version_as_of"],
         },
     )
     if row["parser_version"] != PARSER_VERSION:
@@ -300,6 +344,7 @@ def read_result(conn, auth, result_id, *, run_id=None, offset=0, group_offset=0)
         **meta,
         "result_id": str(result_id),
         "query": row["query"],
+        "version_timing": timing(date.fromisoformat(meta["version_as_of"])),
         "parser_version": result["parser_version"],
         "currency": result["currency"],
         "total": result["total"],

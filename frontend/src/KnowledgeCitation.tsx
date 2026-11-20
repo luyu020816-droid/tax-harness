@@ -1,7 +1,32 @@
 import { useEffect, useState } from 'react';
 import { FileText, ExternalLink } from 'lucide-react';
 import { api } from './api';
-import type { Detail, KnowledgeEvidence } from './types';
+import type { Detail, KnowledgeEvidence, KnowledgeVersionTiming } from './types';
+
+export function versionTimingLabel(timing: KnowledgeVersionTiming) {
+  const range = timing.end_exclusive
+    ? `${timing.start} 至 ${timing.end_exclusive}（不含结束日）`
+    : timing.start;
+  const label =
+    timing.applicability === 'historical'
+      ? '当时适用'
+      : timing.applicability === 'future'
+        ? '指定日期适用'
+        : '查询时点';
+  return `${label} ${range}`;
+}
+
+export function versionFilePath(
+  document: string,
+  version: string,
+  asOf?: string | null,
+  period?: string | null
+) {
+  const params = new URLSearchParams({ version_id: version });
+  if (period) params.set('period', period);
+  else if (asOf) params.set('as_of', asOf);
+  return `/api/v1/knowledge/documents/${document}/file?${params}`;
+}
 
 export function locatorLabel(items: KnowledgeEvidence['locator']) {
   return [
@@ -83,6 +108,9 @@ export function KnowledgeCitation({
         </span>
         <ExternalLink size={13} />
       </button>
+      {evidence.version_timing && (
+        <p className="muted small">{versionTimingLabel(evidence.version_timing)}</p>
+      )}
       {!compact && <blockquote className="knowledge-excerpt">{evidence.excerpt}</blockquote>}
       {!compact && evidence.locator.some((item) => item.extraction === 'ocr') && (
         <p className="muted small">扫描件识别文字，请对照原PDF核对。</p>

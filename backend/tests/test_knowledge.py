@@ -1,3 +1,4 @@
+from datetime import UTC, date, datetime
 from io import BytesIO
 
 import pytest
@@ -304,6 +305,68 @@ def test_effective_interval_must_cover_whole_business_month(knowledge):
     assert retrieval.search(AUTH, company_id="C001", query="用途", as_of=date(2026, 9, 20))[
         "evidence"
     ]
+
+
+@pytest.mark.parametrize("expression", ["2026-09-20", "2026年9月20日", "2026/09/20"])
+def test_kb02_equivalent_dates_match_the_same_evidence(knowledge, db, execution_factory, expression):
+    from test_runtime import tool
+
+    from app.tools import ToolExecutor
+
+    created = uploaded(knowledge, effective_from=date(2026, 9, 1), effective_to=date(2026, 10, 1))
+    ex = execution_factory(f"请查 {expression} 适用的发票用途制度。")
+    call = tool(
+        "search_knowledge",
+        {"company_id": "C001", "query": "发票用途", "as_of": "2026-09-20"},
+    )["tool_calls"][0]
+    result, _ = ToolExecutor(db, knowledge[2]).execute(ex, call)
+    assert result["ok"], result
+    assert result["data"]["scope_snapshot"]["start"] == "2026-09-20"
+    basis = result["data"]["scope_snapshot"]["date_basis"]
+    assert basis["fragments"] == [expression] and basis["timezone"] == "Asia/Shanghai"
+    assert result["data"]["evidence"][0]["version_id"] == created["version_id"]
+
+
+@pytest.mark.parametrize(
+    ("text", "as_of", "period"),
+    [
+        ("查2026年2月30日的制度", None, None),
+        ("查2026-09-20或2026/09/21的制度", "2026-09-20", None),
+        ("查2026年9月20日的制度", "2026-09-21", None),
+        ("查2026年9月20日的制度", None, "2026-09"),
+        ("查2026年9月和2026/09/20适用的制度", None, None),
+        ("查当前制度", "2026-09-20", None),
+    ],
+)
+def test_kb02_rejects_invalid_or_unsupported_date_scope(text, as_of, period):
+    from app.business_dates import knowledge_date_basis
+
+    with pytest.raises(AppError) as error:
+        knowledge_date_basis({"content": text}, as_of, period)
+    assert error.value.code == "NEEDS_SCOPE_CLARIFICATION"
+
+
+def test_kb02_default_uses_business_clock_at_midnight():
+    from app.business_dates import knowledge_date_basis
+
+    selected, basis = knowledge_date_basis(
+        {"content": "查发票用途制度", "created_at": datetime(2026, 11, 19, 16, 0, tzinfo=UTC),
+         "source_id": uid()},
+        None, None,
+    )
+    assert selected == date(2026, 11, 20)
+    assert basis["kind"] == "business_default" and basis["fragments"] == []
+
+
+def test_kb02_distinguishes_negated_date_from_negated_subject():
+    from app.business_dates import knowledge_point
+
+    point, fragments = knowledge_point("按2026年9月20日的制度查差旅补贴，不是招待费。")
+    assert point == date(2026, 9, 20)
+    assert fragments == ["2026年9月20日"]
+    with pytest.raises(AppError) as error:
+        knowledge_point("不要查 2026年9月20日 的规定。")
+    assert error.value.code == "NEEDS_SCOPE_CLARIFICATION"
 
 
 def test_shared_publication_hides_drafts_and_is_idempotent(knowledge, admin, settings):

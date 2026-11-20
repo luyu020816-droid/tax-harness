@@ -495,6 +495,8 @@ export function KnowledgeView({
               ' 本次仅展示待核对的候选原文，尚不能确认足以回答。'}
             {bundle.degraded_reason === 'EVIDENCE_BUDGET_INSUFFICIENT' &&
               ' 必要条款超出本轮容量，请限定一条制度或缩小问题；未展示不完整条款。'}
+            {bundle.degraded_reason === 'KNOWLEDGE_VERSION_BOUNDARY' &&
+              ' 本月内适用版本或有效期发生变化，请按具体日期拆开查询。'}
           </p>
           {bundle.evidence.map((evidence) => (
             <KnowledgeCitation
@@ -531,10 +533,14 @@ export function KnowledgeView({
                     ? '已停用'
                     : document.active_edition
                       ? `当前第${document.active_edition}版`
-                      : '尚未发布'}
+                      : document.latest?.published
+                        ? '当前无适用版本'
+                        : '尚未发布'}
                   {document.latest &&
                     document.latest.version_id !== document.active_version_id &&
-                    ` · 新版本${stageName(document.latest.state)}`}
+                    (document.latest.published
+                      ? ` · 新版已发布 · ${document.latest.effective_from} 起生效`
+                      : ` · 新版本${stageName(document.latest.state)}`)}
                 </p>
                 {document.latest?.error && (
                   <p className="error-note small">
@@ -564,7 +570,8 @@ export function KnowledgeView({
                       上传新版
                     </button>
                     {document.latest?.state === 'ready' &&
-                      (document.latest.version_id !== document.active_version_id ||
+                      ((!document.latest.published &&
+                        document.latest.version_id !== document.active_version_id) ||
                         document.status === 'disabled') && (
                         <button
                           className="text-button"

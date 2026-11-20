@@ -1,5 +1,10 @@
 import { companyName } from './api';
-import { locatorLabel, useKnowledgeEvidence } from './KnowledgeCitation';
+import {
+  locatorLabel,
+  useKnowledgeEvidence,
+  versionFilePath,
+  versionTimingLabel,
+} from './KnowledgeCitation';
 import { stageName } from './KnowledgeView';
 import { useResource } from './useResource';
 import type { KnowledgeDocument } from './types';
@@ -17,10 +22,14 @@ export function KnowledgeDocumentDetails({ id }: { id: string }) {
       <h3>{data.title}</h3>
       <p className="muted">
         {companyName(data.company_id)} · {data.scope === 'company' ? '企业共享' : '仅本人'} ·{' '}
-        {data.status === 'active' ? '可用' : '已停用'}
+        {data.status !== 'active' ? '已停用' : data.active_version_id ? '可用' : '当前无适用版本'}
       </p>
       {workbook && data.status === 'active' && (
-        <WorkbookStructure id={id} version={workbook.version_id} />
+        <WorkbookStructure
+          id={id}
+          version={workbook.version_id}
+          asOf={data.version_timing?.as_of}
+        />
       )}
       <div className="memory-list">
         {data.versions?.map((version) => (
@@ -29,6 +38,9 @@ export function KnowledgeDocumentDetails({ id }: { id: string }) {
               <strong>
                 第{version.edition}版
                 {version.version_id === data.active_version_id ? ' · 当前版本' : ''}
+                {version.published && version.version_id !== data.active_version_id
+                  ? ' · 已发布'
+                  : ''}
               </strong>
               <p className="muted small">
                 {version.original_name} · {stageName(version.state)}
@@ -40,11 +52,10 @@ export function KnowledgeDocumentDetails({ id }: { id: string }) {
               )}
               {version.error && <p className="error-note">{version.error.message}</p>}
             </div>
-            {(!/\.xlsx$/i.test(version.original_name) ||
-              (version.version_id === data.active_version_id && data.status === 'active')) && (
+            {version.version_id === data.active_version_id && data.status === 'active' && (
               <a
                 className="text-button"
-                href={`/api/v1/knowledge/documents/${id}/file?version_id=${version.version_id}`}
+                href={versionFilePath(id, version.version_id, data.version_timing?.as_of)}
                 download
               >
                 下载原文件
@@ -57,7 +68,17 @@ export function KnowledgeDocumentDetails({ id }: { id: string }) {
   );
 }
 
-function WorkbookStructure({ id, version }: { id: string; version: string }) {
+function WorkbookStructure({
+  id,
+  version,
+  asOf,
+}: {
+  id: string;
+  version: string;
+  asOf?: string | null;
+}) {
+  const search = new URLSearchParams({ version_id: version });
+  if (asOf) search.set('as_of', asOf);
   const { data, error } = useResource<{
     sheets: {
       name: string;
@@ -65,7 +86,7 @@ function WorkbookStructure({ id, version }: { id: string; version: string }) {
       reason: string | null;
       columns: Record<string, Record<string, string>>;
     }[];
-  }>(`/knowledge/documents/${id}/workbook?version_id=${version}`);
+  }>(`/knowledge/documents/${id}/workbook?${search}`);
   if (error) return <p className="error-note">{error}</p>;
   if (!data) return null;
   return (
@@ -99,13 +120,21 @@ export function EvidenceDetails({ id }: { id: string }) {
       <p className="muted">
         {companyName(data.company_id)} · 第{data.edition}版 · {locatorLabel(data.locator)}
       </p>
+      {data.version_timing && (
+        <p className="muted small">{versionTimingLabel(data.version_timing)}</p>
+      )}
       <blockquote className="knowledge-excerpt">{data.excerpt}</blockquote>
       {data.locator.some((item) => item.extraction === 'ocr') && (
         <p className="muted small">扫描件识别文字，请对照原PDF核对。</p>
       )}
       <a
         className="text-button"
-        href={`/api/v1/knowledge/documents/${data.document_id}/file?version_id=${data.version_id}`}
+        href={versionFilePath(
+          data.document_id,
+          data.version_id,
+          data.version_timing?.as_of,
+          data.period
+        )}
         download
       >
         下载引用版本原文件

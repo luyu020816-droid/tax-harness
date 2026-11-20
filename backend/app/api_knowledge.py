@@ -158,17 +158,17 @@ def knowledge_router(store, retrieval, auth_dependency, history=None):
         return store.list(current, company_id, offset)
 
     @router.get("/knowledge/documents/{document_id}")
-    def document(document_id: UUID, current=auth_dependency):
-        return store.get(current, str(document_id))
+    def document(document_id: UUID, as_of: date | None = None, current=auth_dependency):
+        return store.get(current, str(document_id), as_of=as_of)
 
     @router.get("/knowledge/documents/{document_id}/workbook")
-    def workbook(document_id: UUID, version_id: UUID, current=auth_dependency):
+    def workbook(document_id: UUID, version_id: UUID, as_of: date | None = None, current=auth_dependency):
         from app.workbook_queries import active_version, snapshot_in
 
         with store.db.transaction(readonly=True) as conn:
-            active_version(conn, current, document_id, version_id)
+            meta = active_version(conn, current, document_id, version_id, as_of=as_of)
             snapshot = snapshot_in(conn, version_id)
-            return {"sheets": [
+            return {"version_as_of": meta["version_as_of"], "sheets": [
                 {key: value for key, value in sheet.items() if key != "rows"}
                 for sheet in snapshot["sheets"]
             ]}
@@ -183,8 +183,14 @@ def knowledge_router(store, retrieval, auth_dependency, history=None):
             return read_result(conn, current, result_id, offset=offset, group_offset=group_offset)
 
     @router.get("/knowledge/documents/{document_id}/file")
-    def file(document_id: UUID, version_id: UUID | None = None, current=auth_dependency):
-        original = store.file(current, str(document_id), str(version_id) if version_id else None)
+    def file(
+        document_id: UUID, version_id: UUID | None = None, as_of: date | None = None,
+        period: str | None = None, current=auth_dependency,
+    ):
+        original = store.file(
+            current, str(document_id), str(version_id) if version_id else None,
+            as_of=as_of, period=period,
+        )
         return Response(
             content=bytes(original["file_bytes"]),
             media_type=original["media_type"],

@@ -50,7 +50,7 @@ def read(conn, auth, source_id, *, reader_turn_id=None):
             (source_id,),
         ).fetchall():
             manifest = record["manifest"]
-            validate_retrievals(conn, auth, manifest.get("retrieval_refs", []))
+            validate_retrievals(conn, auth, manifest.get("retrieval_refs", []), historical=True)
             for dependency in manifest.get("knowledge_dependencies", []):
                 read_evidence_group_in(conn, auth, dependency["citation_id"])
     return {**source, "session_id": str(row["session_id"])}

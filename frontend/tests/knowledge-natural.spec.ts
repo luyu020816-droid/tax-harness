@@ -18,11 +18,19 @@ test('natural knowledge answer identifies its evidence and insufficient answer h
     if (path === '/me') return reply({ user_id: 'U001', display_name: '一', companies: [{ company_id: 'C001', name: '甲', can_update: true }], model_ready: true, model_mode: 'test', dataset_profile: 'competition' });
     if (path === '/sessions') return reply([{ session_id: 's1', selected_company_id: 'C001', title: '测试会话', updated_at: '2026-11-01' }]);
     if (path.endsWith('/messages')) return reply({ turns, has_more: false });
-    if (path === '/tasks') return reply([]);
+    if (path === '/tasks' || path === '/agents') return reply([]);
     if (path.endsWith('/context-usage')) return reply({ status: 'no_calls', input_tokens: 0, effective_window: 100000 });
     if (path === '/evidence/e1') return expired
       ? route.fulfill({ status: 409, json: { code: 'SOURCE_INVALIDATED', message: '资料已停用' } })
-      : reply({ citation_id: 'e1', title: '差旅制度', edition: 1, locator: [{ type: 'docx_paragraph', paragraph: 1 }], excerpt: '南京住宿每人每晚437元。' });
+      : reply({
+          citation_id: 'e1', document_id: 'd1', version_id: 'v1', company_id: 'C001',
+          title: '差旅制度', edition: 1, locator: [{ type: 'docx_paragraph', paragraph: 1 }],
+          excerpt: '南京住宿每人每晚437元。',
+          version_timing: {
+            as_of: '2026-09-20', start: '2026-09-20', end_exclusive: null,
+            timezone: 'Asia/Shanghai', applicability: 'historical',
+          },
+        });
     return reply({});
   });
   await page.goto('/showcase.html');
@@ -30,6 +38,12 @@ test('natural knowledge answer identifies its evidence and insufficient answer h
   await expect(first.locator('.prose')).toContainText('南京住宿上限');
   await expect(first.locator('.knowledge-citation')).toContainText('来源1');
   await expect(first.locator('.knowledge-citation')).toContainText('南京住宿每人每晚437元');
+  await expect(first.locator('.knowledge-citation')).toContainText('当时适用 2026-09-20');
+  await first.locator('.knowledge-citation button').click();
+  await expect(page.getByRole('link', { name: '下载引用版本原文件' })).toHaveAttribute(
+    'href', '/api/v1/knowledge/documents/d1/file?version_id=v1&as_of=2026-09-20'
+  );
+  await page.getByRole('button', { name: '关闭', exact: true }).click();
   const second = page.locator('.turn').nth(1);
   await expect(second.locator('.prose')).toContainText('没有找到足以确认答案');
   await expect(second.locator('.knowledge-citation')).toHaveCount(0);

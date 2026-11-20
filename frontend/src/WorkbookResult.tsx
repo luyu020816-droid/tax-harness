@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
+import { versionFilePath, versionTimingLabel } from './KnowledgeCitation';
 import { useResource } from './useResource';
+import type { KnowledgeVersionTiming } from './types';
 
 type WorkbookPage = {
   document_id: string;
   version_id: string;
   original_name: string;
   edition: number;
+  version_timing?: KnowledgeVersionTiming;
   total: string;
   count: number;
   headers: { amount: string };
@@ -57,6 +60,9 @@ export function WorkbookResult({ id }: { id: string }) {
       <strong>
         合计 {page.total} 元 · {page.count} 行
       </strong>
+      {page.version_timing && (
+        <p className="muted small">文件版本 · {versionTimingLabel(page.version_timing)}</p>
+      )}
       <p>
         {query.date_from && query.date_to_exclusive
           ? `${query.date_from} 至 ${query.date_to_exclusive}（不含结束日）`
@@ -124,10 +130,8 @@ function WorkbookSources({ id }: { id: string }) {
         ))}
       </ul>
       <Pager offset={offset} next={page.next_offset} onPage={setOffset} label="来源行" />
-      <a
-        href={`/api/v1/knowledge/documents/${page.document_id}/file?version_id=${page.version_id}`}
-      >
-        下载当前有效原表
+      <a href={versionFilePath(page.document_id, page.version_id, page.version_timing?.as_of)}>
+        下载计算所用原表
       </a>
     </div>
   );

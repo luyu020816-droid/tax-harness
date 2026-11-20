@@ -47,7 +47,7 @@ test('manual knowledge and conversation management', async ({ page }, info) => {
           .filter((s) => !s.archived_at && !s.deleted_at)
           .sort((a, b) => Number(!!b.pinned_at) - Number(!!a.pinned_at))
       );
-    if (path === '/tasks') return reply([]);
+    if (path === '/tasks' || path === '/agents') return reply([]);
     if (path.endsWith('/messages')) return reply({ turns: [], has_more: false });
     if (path === '/sessions/history')
       return reply({
@@ -69,6 +69,8 @@ test('manual knowledge and conversation management', async ({ page }, info) => {
     }
     if (path === '/knowledge/documents')
       return reply({ documents: [], has_more: false, next_offset: null });
+    if (path === '/knowledge/strategies/C001')
+      return reply({ revision: 0, config: null, can_manage: false, versions: [] });
     if (path === '/rules/catalog') return reply({ company_id: 'C001', rules: [] });
     if (path === '/knowledge/text') {
       submissions.push(route.request().postDataJSON());

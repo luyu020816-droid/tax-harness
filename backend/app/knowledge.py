@@ -4,9 +4,11 @@ import hashlib
 from datetime import date
 from pathlib import Path
 
+from app import business_dates
 from app.errors import AppError
 from app.identity import assert_access
 from app.knowledge_parser import inspect_file
+from app.knowledge_versions import record_publication, selected_in, timing, window
 from app.memory_changes import begin_change, finish_change
 from app.values import safe_json, uid
 
@@ -66,7 +68,7 @@ def upload_access(conn, auth, company_id):
         raise AppError("KNOWLEDGE_ACCESS_DENIED", "当前用户没有该企业的知识上传权限。", 403)
 
 
-def upload_metadata(conn, auth, file_id, company_id):
+def upload_metadata(conn, auth, file_id, company_id, *, question="", requested_at=None):
     row = conn.execute(
         "SELECT f.file_id,f.original_name,f.media_type,f.sha256,f.company_id,v.version_id,v.state,v.edition,d.document_id,d.title "
         "FROM knowledge_files f JOIN knowledge_versions v USING(file_id) JOIN knowledge_documents d USING(document_id) "
@@ -76,10 +78,20 @@ def upload_metadata(conn, auth, file_id, company_id):
     if not row:
         raise AppError("RESOURCE_NOT_FOUND", "知识附件不存在或与当前企业不一致。", 404)
     assert_access(conn, auth, company_id)
-    if row["original_name"].lower().endswith(".xlsx") and row["state"] == "ready":
+    if row["original_name"].lower().endswith(".xlsx"):
         from app.workbook_queries import active_version
 
-        active_version(conn, auth, row["document_id"], row["version_id"])
+        _, as_of, fragments = business_dates.workbook_reference(question)
+        if as_of or row["state"] == "ready":
+            meta = active_version(
+                conn, auth, row["document_id"], None if as_of else row["version_id"],
+                as_of=as_of or business_dates.business_today(requested_at),
+            )
+            row = {
+                **row, **meta, "state": "ready", "attachment_file_id": str(file_id),
+                "version_basis": "explicit" if as_of else "business_default",
+                "version_fragments": fragments,
+            }
     return safe_json(row)
 
 
@@ -152,6 +164,7 @@ def publish_in(conn, document, version, expected_revision, *, notify=True):
     ).fetchone()
     if not row:
         raise AppError("KNOWLEDGE_VERSION_CONFLICT", "候选版本发布冲突，原有效版本保持不变。", 409)
+    record_publication(conn, row, version["version_id"])
     if notify:
         bump(conn, row["owner_id"], row["company_id"], row["scope"])
     return row
@@ -166,15 +179,15 @@ class Knowledge:
         row = conn.execute(
             "SELECT d.document_id,d.title,v.version_id,v.file_id,j.job_id,v.state,"
             "d.status AS document_status,(d.status='active' AND v.state='ready' "
-            "AND coalesce(d.active_version_id=v.version_id,false) AND v.effective_from<=current_date "
-            "AND (v.effective_to IS NULL OR v.effective_to>current_date)) AS usable "
+            "AND coalesce(v.version_id=a.version_id,false)) AS usable "
             "FROM knowledge_files f JOIN knowledge_versions v USING(file_id) "
             "JOIN knowledge_documents d USING(document_id) JOIN retrieval_jobs j USING(version_id) "
+            "LEFT JOIN LATERAL knowledge_version_at(d.document_id,%s,NULL,%s) a ON a.full_coverage "
             "WHERE f.owner_id=%s AND f.company_id=%s AND f.media_type=%s AND f.sha256=%s "
             "AND f.submission_kind='file' AND d.scope='user_private' "
             "AND (%s::uuid IS NULL OR v.version_id=%s) "
             "ORDER BY usable DESC,v.created_at DESC,v.version_id DESC LIMIT 1",
-            (auth.user_id, company_id, media, sha, version_id, version_id),
+            (business_dates.business_today(), auth.user_id, auth.user_id, company_id, media, sha, version_id, version_id),
         ).fetchone()
         if not row:
             return None
@@ -362,13 +375,19 @@ class Knowledge:
         with self.db.transaction(readonly=True) as conn:
             assert_access(conn, auth, company_id)
             rows = conn.execute(
-                "SELECT d.*,v.edition AS active_edition,v.state AS active_state,"
-                "(SELECT jsonb_build_object('version_id',x.version_id,'edition',x.edition,'state',x.state,'job_id',j.job_id,'error',x.error) "
-                "FROM knowledge_versions x JOIN retrieval_jobs j USING(version_id) WHERE x.document_id=d.document_id AND (d.owner_id=%s OR x.version_id=d.active_version_id) ORDER BY x.edition DESC LIMIT 1) AS latest "
-                "FROM knowledge_documents d LEFT JOIN knowledge_versions v ON v.version_id=d.active_version_id WHERE d.company_id=%s "
+                "SELECT d.*,a.version_id AS applicable_version_id,v.edition AS active_edition,v.state AS active_state,"
+                "(SELECT jsonb_build_object('version_id',x.version_id,'edition',x.edition,'state',x.state,'job_id',j.job_id,'error',x.error,"
+                "'effective_from',x.effective_from,'effective_to',x.effective_to,"
+                "'published',EXISTS(SELECT 1 FROM knowledge_publications p WHERE p.document_id=d.document_id "
+                "AND p.version_id=x.version_id AND (p.scope=d.scope OR (d.owner_id=%s AND p.scope='user_private')))) "
+                "FROM knowledge_versions x JOIN retrieval_jobs j USING(version_id) WHERE x.document_id=d.document_id AND (d.owner_id=%s OR x.version_id=a.version_id) ORDER BY x.edition DESC LIMIT 1) AS latest "
+                "FROM knowledge_documents d LEFT JOIN LATERAL knowledge_version_at(d.document_id,%s,NULL,%s) a ON a.full_coverage "
+                "LEFT JOIN knowledge_versions v ON v.version_id=a.version_id WHERE d.company_id=%s "
                 "AND (d.scope='company' OR d.owner_id=%s) ORDER BY d.created_at DESC,d.document_id LIMIT 21 OFFSET %s",
-                (auth.user_id, company_id, auth.user_id, offset),
+                (auth.user_id, auth.user_id, business_dates.business_today(), auth.user_id, company_id, auth.user_id, offset),
             ).fetchall()
+            for row in rows:
+                row["active_version_id"] = row.pop("applicable_version_id")
             return safe_json(
                 {
                     "documents": rows[:20],
@@ -377,29 +396,40 @@ class Knowledge:
                 }
             )
 
-    def get(self, auth, document_id):
+    def get(self, auth, document_id, *, as_of=None):
         with self.db.transaction(readonly=True) as conn:
             document = document_in(conn, auth, document_id)
+            day, _ = window(as_of)
+            selected = selected_in(conn, auth, document_id, day)
+            document["active_version_id"] = selected["version_id"] if selected else None
+            can_manage = document["owner_id"] == auth.user_id
             versions = conn.execute(
-                "SELECT v.*,f.original_name,f.sha256,j.job_id,j.stage,j.progress FROM knowledge_versions v JOIN knowledge_files f USING(file_id) "
+                "SELECT v.*,f.original_name,f.sha256,j.job_id,j.stage,j.progress,"
+                "EXISTS(SELECT 1 FROM knowledge_publications p WHERE p.document_id=v.document_id AND p.version_id=v.version_id "
+                "AND (p.scope=%s OR (%s AND p.scope='user_private'))) AS published "
+                "FROM knowledge_versions v JOIN knowledge_files f USING(file_id) "
                 "JOIN retrieval_jobs j USING(version_id) WHERE v.document_id=%s AND (%s OR v.version_id=%s) ORDER BY v.edition DESC",
                 (
+                    document["scope"],
+                    can_manage,
                     document_id,
-                    document["owner_id"] == auth.user_id,
+                    can_manage,
                     document["active_version_id"] if document["status"] == "active" else None,
                 ),
             ).fetchall()
-            return safe_json({**document, "versions": versions})
+            return safe_json({**document, "versions": versions, "version_timing": timing(day)})
 
-    def file(self, auth, document_id, version_id=None):
+    def file(self, auth, document_id, version_id=None, *, as_of=None, period=None):
         with self.db.transaction(readonly=True) as conn:
-            document = document_in(conn, auth, document_id)
-            version_id = version_id or document["active_version_id"]
-            if document["owner_id"] != auth.user_id and (
-                document["status"] != "active"
-                or str(version_id) != str(document["active_version_id"])
+            document_in(conn, auth, document_id)
+            start, end = window(as_of, period)
+            selected = selected_in(conn, auth, document_id, start, end)
+            if (
+                not selected or not selected["full_coverage"]
+                or (version_id is not None and str(version_id) != str(selected["version_id"]))
             ):
-                raise AppError("RESOURCE_NOT_FOUND", "未发布或停用的资料版本不可访问。", 404)
+                raise AppError("RESOURCE_NOT_FOUND", "指定时点没有可访问的对应资料版本。", 404)
+            version_id = selected["version_id"]
             row = conn.execute(
                 "SELECT f.* FROM knowledge_versions v JOIN knowledge_files f USING(file_id) WHERE v.document_id=%s AND v.version_id=%s",
                 (document_id, version_id),
@@ -409,7 +439,7 @@ class Knowledge:
             if row["original_name"].lower().endswith(".xlsx"):
                 from app.workbook_queries import active_version
 
-                active_version(conn, auth, document_id, version_id)
+                active_version(conn, auth, document_id, version_id, as_of=start)
             if hashlib.sha256(bytes(row["file_bytes"])).hexdigest() != row["sha256"]:
                 raise AppError("SOURCE_INVALIDATED", "原文件完整性校验失败，暂停读取。", 503)
             return row

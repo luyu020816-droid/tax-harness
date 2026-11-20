@@ -3,6 +3,7 @@
 from app.errors import AppError
 from app.knowledge import _in_use, bump, cancel_pending_in, require_ready_version
 from app.knowledge_parser import text_hash
+from app.knowledge_versions import record_publication
 from app.values import digest, jsonb, safe_json
 
 
@@ -57,6 +58,7 @@ def publish_company(conn, document_id, version_id, expected_revision, request_id
         "UPDATE knowledge_documents SET scope='company',active_version_id=%s,status='active',revision=revision+1,updated_at=now() WHERE document_id=%s RETURNING *",
         (version_id, document_id),
     ).fetchone()
+    record_publication(conn, row, version_id)
     if document["scope"] == "user_private":
         bump(conn, document["owner_id"], document["company_id"], "user_private")
     bump(conn, document["owner_id"], document["company_id"], "company")

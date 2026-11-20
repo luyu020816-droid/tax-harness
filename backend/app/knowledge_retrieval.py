@@ -2,16 +2,17 @@
 
 import re
 import time
-from datetime import datetime, timedelta, timezone
 from threading import BoundedSemaphore
 
+from app.business_dates import BUSINESS_ZONE, knowledge_point
 from app.errors import AppError
 from app.evidence_selection import choose_groups, load_policy
 from app.identity import assert_access, owned
 from app.knowledge import document_in
 from app.knowledge_parser import text_hash
+from app.knowledge_versions import recorded_window, selected_in, timing, window
 from app.retrieval_engine import terms, vector_literal
-from app.values import jsonb, month_bounds, safe_json, uid
+from app.values import jsonb, safe_json, uid
 
 
 def fuse(dense, lexical):
@@ -30,16 +31,22 @@ def fuse(dense, lexical):
 
 def read_evidence_in(conn, auth, citation_id, *, lock=False):
     evidence = conn.execute(
-        "SELECT e.*,q.user_id,q.profile_id,q.scope_snapshot,d.title,d.scope,d.owner_id,d.company_id,d.status,d.active_version_id,d.revision AS current_revision, "
+        "SELECT e.*,q.user_id,q.profile_id,q.scope_snapshot,d.title,d.scope,d.owner_id,d.company_id,d.status, "
         "v.edition,v.state,v.effective_from,v.effective_to,c.content,c.content_hash AS current_hash,p.status AS profile_status "
         "FROM retrieval_evidence e JOIN retrieval_queries q USING(query_id) JOIN knowledge_documents d USING(document_id) "
-        "JOIN knowledge_versions v USING(version_id) JOIN knowledge_chunks c USING(chunk_id) JOIN retrieval_profiles p ON p.profile_id=q.profile_id "
+        "JOIN knowledge_versions v USING(version_id) JOIN knowledge_chunks c ON c.chunk_id=e.chunk_id AND c.version_id=e.version_id "
+        "JOIN retrieval_profiles p ON p.profile_id=q.profile_id "
         "WHERE e.citation_id=%s AND q.user_id=%s" + (" FOR SHARE OF d,v,p" if lock else ""),
         (citation_id, auth.user_id),
     ).fetchone()
     if not evidence:
         raise AppError("RESOURCE_NOT_FOUND", "引用不存在或不可访问。", 404)
     document_in(conn, auth, str(evidence["document_id"]))
+    try:
+        start, end = recorded_window(evidence["scope_snapshot"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AppError("SOURCE_INVALIDATED", "原引用缺少可核实的查询日期，请重新检索。", 409) from exc
+    chosen = selected_in(conn, auth, evidence["document_id"], start, end)
     from app.knowledge_strategy import read_in
 
     current_strategy = read_in(conn, auth, evidence["company_id"])
@@ -53,8 +60,9 @@ def read_evidence_in(conn, auth, citation_id, *, lock=False):
         evidence["status"] != "active"
         or evidence["state"] != "ready"
         or evidence["profile_status"] != "ready"
-        or evidence["active_version_id"] != evidence["version_id"]
-        or evidence["document_revision"] != evidence["current_revision"]
+        or not chosen
+        or not chosen["full_coverage"]
+        or chosen["version_id"] != evidence["version_id"]
         or evidence["excerpt_hash"] != evidence["current_hash"]
         or text_hash(evidence["excerpt"]) != evidence["excerpt_hash"]
         or evidence["excerpt"] != evidence["content"]
@@ -64,8 +72,7 @@ def read_evidence_in(conn, auth, citation_id, *, lock=False):
         )
     return safe_json(
         {
-            k: evidence[k]
-            for k in (
+            **{k: evidence[k] for k in (
                 "citation_id",
                 "query_id",
                 "document_id",
@@ -81,7 +88,10 @@ def read_evidence_in(conn, auth, citation_id, *, lock=False):
                 "locator",
                 "profile_id",
                 "rank",
-            )
+            )},
+            "version_timing": timing(start, end),
+            "period": evidence["scope_snapshot"].get("period"),
+            "publication_revision": evidence["document_revision"],
         }
     )
 
@@ -217,19 +227,27 @@ class KnowledgeRetrieval:
         session_id=None,
         turn_id=None,
         rerank=True,
+        date_basis=None,
     ):
         if not query.strip() or len(query) > 2000:
             raise AppError("INVALID_ARGUMENT", "知识问题需为1—2000字符。", 422)
-        if as_of and period:
-            raise AppError("INVALID_ARGUMENT", "资料生效日期与业务月份不能同时指定。", 422)
         entities = list(dict.fromkeys(entities or []))
         if len(entities) > 8 or any(not re.fullmatch(r"[FRC]\d{3,12}", e) for e in entities):
             raise AppError("INVALID_ARGUMENT", "检索实体需为明确票号、规则号或企业号。", 422)
         if any(e.startswith("C") and e != company_id for e in entities):
             raise AppError("INVALID_ARGUMENT", "检索企业实体与当前企业范围不一致。", 422)
         entities = [e for e in entities if not e.startswith("C")]
-        current_date = as_of or datetime.now(timezone(timedelta(hours=8))).date()
-        start, end = month_bounds(period) if period else (current_date, current_date)
+        if date_basis is None:
+            explicit, fragments = knowledge_point(query, period)
+            if explicit and as_of and explicit != as_of:
+                raise AppError("NEEDS_SCOPE_CLARIFICATION", "资料生效日期与问题中的日期不一致。", 422)
+            as_of = explicit or as_of
+            date_basis = {
+                "kind": "period" if period else "explicit" if explicit else "explicit_parameter" if as_of else "business_default",
+                "fragments": fragments,
+                "timezone": BUSINESS_ZONE,
+            }
+        start, end = window(as_of, period)
         started = time.monotonic()
         timings = {}
         with self.db.transaction(readonly=True) as conn:
@@ -245,8 +263,9 @@ class KnowledgeRetrieval:
                 "strategy": strategy,
                 "company_id": company_id,
                 "start": str(start),
-                "end": str(end),
+                "end": str(end or start),
                 "period": period,
+                "date_basis": {**date_basis, "as_of": str(start) if not period else None},
                 "memory_epoch": conn.execute(
                     "SELECT memory_epoch FROM users WHERE user_id=%s", (auth.user_id,)
                 ).fetchone()["memory_epoch"],
@@ -287,26 +306,28 @@ class KnowledgeRetrieval:
             timings["query_embedding_ms"] = round((time.monotonic() - stage_started) * 1000)
             stage_started = time.monotonic()
             with self.db.transaction(readonly=True) as conn:
-                base, params = self._scope(
-                    auth, company_id, start, end, period, entities, document_ids
-                )
+                base, params = self._scope(auth, company_id, document_ids)
                 coverage = conn.execute(
-                    "SELECT count(*) AS eligible,count(*) FILTER(WHERE v.state='ready' AND v.profile_id=%s) AS ready "
-                    "FROM knowledge_documents d LEFT JOIN knowledge_versions v ON v.version_id=d.active_version_id WHERE "
+                    "SELECT count(*) FILTER (WHERE a.full_coverage) AS eligible,"
+                    "count(*) FILTER (WHERE a.full_coverage AND v.profile_id=%s) AS ready,"
+                    "count(*) FILTER (WHERE NOT a.full_coverage) AS version_boundary "
+                    "FROM knowledge_documents d "
+                    "JOIN LATERAL knowledge_version_at(d.document_id,%s,%s,%s) a ON true "
+                    "JOIN knowledge_versions v ON v.version_id=a.version_id WHERE "
                     + base + " AND left(coalesce(v.parser_version,''),9)<>'workbook-'",
-                    [profile_id, *params],
+                    [profile_id, start, end, auth.user_id, *params],
                 ).fetchone()
                 coverage["pending"] = conn.execute(
                     "SELECT count(*) AS n FROM knowledge_versions v JOIN knowledge_documents d USING(document_id) WHERE d.company_id=%s "
-                    "AND d.status='active' AND (d.scope='company' OR d.owner_id=%s) AND v.state NOT IN ('ready','cancelled') "
+                    "AND d.status='active' AND d.owner_id=%s AND v.state NOT IN ('ready','cancelled') "
                     "AND v.edition>COALESCE((SELECT a.edition FROM knowledge_versions a WHERE a.version_id=d.active_version_id),0) "
                     "AND (%s::uuid[] IS NULL OR d.document_id=ANY(%s::uuid[])) "
                     "AND NOT EXISTS(SELECT 1 FROM knowledge_files f WHERE f.file_id=v.file_id "
                     "AND f.media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')",
                     (company_id, auth.user_id, document_ids or None, document_ids or None),
                 ).fetchone()["n"]
-                base += " AND v.state='ready' AND v.profile_id=%s"
-                params.append(profile_id)
+                base += " AND v.version_id=(SELECT a.version_id FROM knowledge_version_at(d.document_id,%s,%s,%s) a WHERE a.full_coverage) AND v.profile_id=%s"
+                params.extend((start, end, auth.user_id, profile_id))
                 if entities:
                     base += " AND c.retrieval_text ~ %s"
                     params.append(
@@ -428,6 +449,7 @@ class KnowledgeRetrieval:
             status = (
                 "partial"
                 if coverage["pending"]
+                or coverage["version_boundary"]
                 or coverage["ready"] < coverage["eligible"]
                 or coverage["unrepresented_entities"]
                 or not coverage["selection_calibrated"]
@@ -438,12 +460,15 @@ class KnowledgeRetrieval:
                 status = (
                     "partial"
                     if coverage["pending"]
+                    or coverage["version_boundary"]
                     or coverage["budget_incomplete"]
                     or (mode != "hybrid" and coverage["eligible"] > 0)
                     or (candidates and not coverage["selection_calibrated"])
                     else "not_found"
                 )
-            if coverage["budget_incomplete"]:
+            if coverage["version_boundary"]:
+                reason = "KNOWLEDGE_VERSION_BOUNDARY"
+            elif coverage["budget_incomplete"]:
                 reason = "EVIDENCE_BUDGET_INSUFFICIENT"
             elif not coverage["selection_calibrated"] and candidates:
                 reason = reason or policy_reason or "RETRIEVAL_MODE_NOT_CALIBRATED"
@@ -508,10 +533,9 @@ class KnowledgeRetrieval:
             evidence = []
             for rank, candidate in enumerate(selected, 1):
                 document = document_in(conn, auth, str(candidate["document_id"]), lock=True)
+                chosen = selected_in(conn, auth, document["document_id"], start, end)
                 if (
-                    document["revision"] != candidate["document_revision"]
-                    or document["active_version_id"] != candidate["version_id"]
-                    or document["status"] != "active"
+                    not chosen or not chosen["full_coverage"] or chosen["version_id"] != candidate["version_id"]
                 ):
                     raise AppError("STALE_CONTEXT", "资料候选已失效，请重新检索。", 409)
                 citation_id = uid()
@@ -521,7 +545,7 @@ class KnowledgeRetrieval:
                         citation_id,
                         query_id,
                         candidate["document_id"],
-                        candidate["document_revision"],
+                        chosen["publication_revision"],
                         candidate["version_id"],
                         candidate["chunk_id"],
                         candidate["content"],
@@ -540,6 +564,7 @@ class KnowledgeRetrieval:
                     "retrieval_mode": mode,
                     "profile_id": profile_id,
                     "scope_snapshot": snapshot,
+                    "version_timing": timing(start, end),
                     "coverage": {
                         **{
                             k: v
@@ -564,21 +589,16 @@ class KnowledgeRetrieval:
                 }
             )
 
-    def _scope(self, auth, company_id, start, end, period, entities, document_ids):
-        base = "d.company_id=%s AND d.status='active' AND (d.scope='company' OR d.owner_id=%s) AND v.version_id=d.active_version_id "
-        base += (
-            "AND v.effective_from<=%s AND (v.effective_to IS NULL OR v.effective_to"
-            + (">=" if period else ">")
-            + "%s)"
-        )
-        params = [company_id, auth.user_id, start, end]
+    def _scope(self, auth, company_id, document_ids):
+        base = "d.company_id=%s AND d.status='active' AND (d.scope='company' OR d.owner_id=%s)"
+        params = [company_id, auth.user_id]
         if document_ids:
             base += " AND d.document_id=ANY(%s::uuid[])"
             params.append(document_ids)
         return base, params
 
 
-def validate_retrievals(conn, auth, query_ids, *, lock=False):
+def validate_retrievals(conn, auth, query_ids, *, lock=False, historical=False):
     for query_id in query_ids:
         row = conn.execute(
             "SELECT * FROM retrieval_queries WHERE query_id=%s AND user_id=%s",
@@ -592,9 +612,10 @@ def validate_retrievals(conn, auth, query_ids, *, lock=False):
             + (" FOR SHARE" if lock else ""),
             (row["company_id"],),
         ).fetchone()
-        if head["knowledge_epoch"] != row["scope_snapshot"]["knowledge_epoch"]:
-            raise AppError("STALE_CONTEXT", "企业知识已发布或撤权，原检索不能继续答复。", 409)
-        for citation in conn.execute(
+        citations = conn.execute(
             "SELECT citation_id FROM retrieval_evidence WHERE query_id=%s", (query_id,)
-        ).fetchall():
+        ).fetchall()
+        if (not historical or not citations) and head["knowledge_epoch"] != row["scope_snapshot"]["knowledge_epoch"]:
+            raise AppError("STALE_CONTEXT", "企业知识已发布或撤权，原检索不能继续答复。", 409)
+        for citation in citations:
             read_evidence_in(conn, auth, str(citation["citation_id"]), lock=lock)

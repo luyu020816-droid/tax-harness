@@ -1,6 +1,8 @@
 """Upgrade disposable legacy databases while preserving representative records."""
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
+from hashlib import sha256
 from types import SimpleNamespace
 
 import psycopg
@@ -21,11 +23,14 @@ from app.identity import Identity, create_session
 from app.importer import import_samples
 from app.knowledge import Knowledge
 from app.knowledge_jobs import KnowledgeJobs
+from app.knowledge_parser import MEDIA
 from app.knowledge_strategy import Strategy, publish, read_in
+from app.knowledge_versions import selected_in
 from app.runtime import Runtime
 from app.sources import add_source, next_sequence
 from app.values import digest, jsonb, uid
 from app.workbook_queries import dispatch, read_result
+from app.xlsx_workbooks import PARSER_VERSION, calculate, parse_workbook
 
 AUTH = Identity("U001")
 MIGRATIONS = ROOT / "backend/migrations"
@@ -132,7 +137,80 @@ def _seed_turn(db, session_id, text, *, legacy, knowledge_upload_ids=None):
     return turns.accept_turn(db, AUTH, session_id, uid(), text, knowledge_upload_ids=knowledge_upload_ids)
 
 
-def _workbook_result(db, settings, *, legacy=False):
+def _legacy_workbook(db, document_id=None, *, effective_from=date.min, publication=None):
+    """Seed the pre-ledger file and publication signals from schema 024."""
+    content = workbook()
+    file_id, version_id = uid(), uid()
+    with db.transaction() as conn:
+        if document_id is None:
+            document_id = uid()
+            conn.execute(
+                "INSERT INTO knowledge_documents(document_id,owner_id,company_id,scope,title) "
+                "VALUES(%s,'U001','C001','user_private','报销')",
+                (document_id,),
+            )
+        revision = conn.execute(
+            "SELECT revision FROM knowledge_documents WHERE document_id=%s", (document_id,)
+        ).fetchone()["revision"]
+        edition = conn.execute(
+            "SELECT count(*)+1 AS edition FROM knowledge_versions WHERE document_id=%s", (document_id,)
+        ).fetchone()["edition"]
+        conn.execute(
+            "INSERT INTO knowledge_files(file_id,owner_id,company_id,original_name,media_type,"
+            "file_bytes,byte_size,sha256,request_id,request_hash) "
+            "VALUES(%s,'U001','C001','报销.xlsx',%s,%s,%s,%s,%s,%s)",
+            (file_id, MEDIA[".xlsx"], content, len(content), sha256(content).hexdigest(), uid(), digest(file_id)),
+        )
+        conn.execute(
+            "INSERT INTO knowledge_versions(version_id,document_id,owner_id,company_id,file_id,"
+            "edition,effective_from,expected_document_revision,state,parser_version) "
+            "VALUES(%s,%s,'U001','C001',%s,%s,%s,%s,'ready',%s)",
+            (version_id, document_id, file_id, edition, effective_from, revision, PARSER_VERSION),
+        )
+        conn.execute(
+            "INSERT INTO workbook_snapshots(version_id,snapshot) VALUES(%s,%s)",
+            (version_id, jsonb(parse_workbook(content))),
+        )
+        conn.execute(
+            "INSERT INTO retrieval_jobs(job_id,user_id,version_id,state,stage,progress) "
+            "VALUES(%s,'U001',%s,'done','ready',%s)",
+            (uid(), version_id, jsonb({"published": publication == "automatic"})),
+        )
+        if publication:
+            conn.execute(
+                "UPDATE knowledge_documents SET active_version_id=%s,revision=revision+1 WHERE document_id=%s",
+                (version_id, document_id),
+            )
+    return {"document_id": document_id, "file_id": file_id, "version_id": version_id}
+
+
+def _legacy_workbook_result(db, settings):
+    file = _legacy_workbook(db, publication="automatic")
+    session_id = str(create_session(db, AUTH, "C001")["session_id"])
+    turn = _legacy_turn(
+        db, session_id, "2026年10月实付报销合计多少", knowledge_upload_ids=[file["file_id"]]
+    )
+    execution = Runtime(db, model_settings(settings), ScriptedModel([])).claim()
+    assert execution.turn_id == turn["turn_id"]
+    start, end = date(2026, 10, 1), date(2026, 11, 1)
+    query = {
+        "sheet": "报销明细", "columns": COLUMNS, "date_from": start.isoformat(),
+        "date_to_exclusive": end.isoformat(), "category": None, "group_by": "none",
+    }
+    result = calculate(
+        parse_workbook(workbook()), sheet=query["sheet"], columns=COLUMNS,
+        start=start, end=end, category=None, group_by="none",
+    )
+    result_id = uid()
+    with db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workbook_results(result_id,run_id,version_id,query,result) VALUES(%s,%s,%s,%s,%s)",
+            (result_id, execution.run_id, file["version_id"], jsonb(query), jsonb(result)),
+        )
+    return result_id
+
+
+def _workbook_result(db, settings):
     file = Knowledge(db, settings).upload(
         AUTH,
         name="报销.xlsx",
@@ -144,12 +222,13 @@ def _workbook_result(db, settings, *, legacy=False):
     jobs = KnowledgeJobs(db, settings, None)
     jobs.run(jobs.claim())
     session_id = str(create_session(db, AUTH, "C001")["session_id"])
-    turn = _seed_turn(
+    turn = turns.accept_turn(
         db,
+        AUTH,
         session_id,
+        uid(),
         "2026年10月实付报销合计多少",
         knowledge_upload_ids=[file["file_id"]],
-        legacy=legacy,
     )
     ex = Runtime(db, model_settings(settings), ScriptedModel([])).claim()
     assert ex.turn_id == turn["turn_id"]
@@ -236,7 +315,7 @@ def test_int01_databases_upgrade_and_run_all_four_business_paths(
     old_db.open()
     try:
         assert not old_db.ready()
-        old_workbook = _workbook_result(old_db, settings, legacy=True) if family == "A" else None
+        old_workbook = _legacy_workbook_result(old_db, settings) if family == "A" else None
         old_plan = _purpose_plan(old_db, legacy=True) if (family, through) == ("A", 25) else None
         old_summary = _scoped_summary(old_db) if (family, through) == ("B", 25) else None
     finally:
@@ -289,6 +368,34 @@ def test_int01_databases_upgrade_and_run_all_four_business_paths(
         assert invoice_write.get(db, AUTH, plan["plan_id"])["status"] == "revoked"
         with db.transaction(readonly=True) as conn:
             assert not conn.execute("SELECT 1 FROM operations").fetchone()
+    finally:
+        db.close()
+
+
+def test_kb01_legacy_upgrade_keeps_proven_publications_only(semifinal_database):
+    settings = semifinal_database
+    _install_legacy(settings, "A", 25)
+    old_db = Database(settings.admin_database_url)
+    old_db.open()
+    try:
+        first = _legacy_workbook(old_db, publication="automatic")
+        doc = first["document_id"]
+        second = _legacy_workbook(
+            old_db, doc, effective_from=date(2026, 12, 1), publication="manual"
+        )
+        draft = _legacy_workbook(old_db, doc, effective_from=date(2026, 9, 1))
+    finally:
+        old_db.close()
+    initialize(settings)
+    db = Database(settings.database_url)
+    db.open()
+    try:
+        with db.transaction(readonly=True) as conn:
+            assert str(selected_in(conn, AUTH, doc, date(2026, 11, 19))["version_id"]) == first["version_id"]
+            assert str(selected_in(conn, AUTH, doc, date(2026, 12, 1))["version_id"]) == second["version_id"]
+            assert not conn.execute(
+                "SELECT 1 FROM knowledge_publications WHERE version_id=%s", (draft["version_id"],)
+            ).fetchone()
     finally:
         db.close()
 

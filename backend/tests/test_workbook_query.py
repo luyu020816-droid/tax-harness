@@ -468,6 +468,55 @@ async def test_file02_old_snapshots_use_original_bytes_and_old_answers_require_n
 
 
 @pytest.mark.asyncio
+async def test_kb01_workbook_version_day_is_distinct_from_row_filter(db, settings, excel_turn, monkeypatch):
+    from app import business_dates
+
+    auth, attach = excel_turn
+    today = date(2026, 11, 19)
+    monkeypatch.setattr(business_dates, "business_today", lambda _at=None: today)
+    old, query = attach(workbook())
+    store = Knowledge(db, settings)
+    document = store.get(auth, old["document_id"])
+    changed = (*ROWS[:2], ("2026-10-08", "交通费", 179.90), *ROWS[3:])
+    newest = store.upload(
+        auth, name="新版.xlsx", title="报销明细", company_id="C001", content=workbook(changed),
+        request_id=uid(), document_id=old["document_id"], expected_revision=document["revision"],
+        effective_from=date(2026, 12, 1),
+    )
+    jobs = KnowledgeJobs(db, settings, None)
+    jobs.run(jobs.claim())
+    assert store.get(auth, old["document_id"])["active_version_id"] == old["version_id"]
+    first = await query("2026年10月实付报销合计")
+    old_result = _result_card(first)["result_id"]
+    today = date(2026, 12, 1)
+    assert store.get(auth, old["document_id"])["active_version_id"] == newest["version_id"]
+    assert str(store.file(auth, old["document_id"])["file_id"]) == newest["file_id"]
+    with db.transaction(readonly=True) as conn:
+        saved = read_result(conn, auth, old_result)
+        assert saved["version_timing"]["as_of"] == "2026-11-19"
+        assert saved["version_timing"]["applicability"] == "historical"
+        assert saved["total"] == "617.00"
+    historical = await query(
+        "使用工作簿版本日期为2026/09/20，统计2026年10月实付金额",
+        changes={"version_as_of": "2026-09-20"},
+    )
+    future = await query(
+        "按2026年12月1日有效的工作簿版本，统计2026年10月实付金额",
+        changes={"version_as_of": "2026-12-01", "version_id": newest["version_id"]},
+    )
+    for turn, version, day, total in (
+        (historical, old["version_id"], "2026-09-20", "617.00"),
+        (future, newest["version_id"], "2026-12-01", "717.00"),
+    ):
+        with db.transaction(readonly=True) as conn:
+            result = read_result(conn, auth, _result_card(turn)["result_id"])
+        assert result["version_id"] == version
+        assert result["version_timing"]["as_of"] == day
+        assert result["query"]["date_from"] == "2026-10-01"
+        assert result["total"] == total
+
+
+@pytest.mark.asyncio
 async def test_workbook_upload_agent_followup_and_evidence_revocation(db, settings):
     auth = Identity("U001")
     store = Knowledge(db, settings)

@@ -4,13 +4,10 @@ import re
 from datetime import date, timedelta, timezone
 from itertools import groupby
 
+from app.business_dates import DAY, calendar_day
 from app.errors import AppError
 from app.xlsx_workbooks import clean
 
-DAY = re.compile(
-    r"(?<!\d)(?:(\d{4})([-/])(\d{1,2})\2(\d{1,2})(?!\d)"
-    r"|(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*[日号])"
-)
 MONTH = re.compile(
     r"(?<!\d)(?:(\d{4})\s*(?:年\s*|[-/])\s*(\d{1,2})\s*月?"
     r"|(?:(\d{4})\s*年\s*)?([一二三四五六七八九十]{1,2}|\d{1,2})\s*月)(?!\d)"
@@ -94,11 +91,9 @@ def _date_scope(text, previous, created_at):
                 _clarify("请确认明确的起止日。")
             bounds = []
             for match in days:
-                year, _, month, day, cn_year, cn_month, cn_day = match.groups()
-                year = year or cn_year or (str(bounds[0].year) if bounds else None)
-                if not year:
+                if not (match[1] or match[5] or bounds):
                     _clarify("请确认起始日的年份。")
-                bounds.append(date(int(year), int(month or cn_month), int(day or cn_day)))
+                bounds.append(calendar_day(match, bounds[0].year if bounds else None))
             if bounds[0] > bounds[-1]:
                 _clarify("起始日不能晚于结束日，请确认日期范围。")
             return False, bounds[0].isoformat(), (bounds[-1] + timedelta(days=1)).isoformat()

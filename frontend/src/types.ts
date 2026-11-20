@@ -273,9 +273,17 @@ export interface KnowledgeVersion {
   job_id: string;
   stage: string;
   effective_from: string;
+  published?: boolean;
   effective_to: string | null;
   error: { code: string; message: string } | null;
 }
+export type KnowledgeVersionTiming = {
+  as_of: string | null;
+  start: string;
+  end_exclusive: string | null;
+  timezone: string;
+  applicability: 'historical' | 'current' | 'future';
+};
 export interface KnowledgeDocument {
   document_id: string;
   company_id: string;
@@ -292,8 +300,11 @@ export interface KnowledgeDocument {
     state: string;
     job_id: string;
     error: { message: string } | null;
+    effective_from?: string;
+    published?: boolean;
   };
   versions?: KnowledgeVersion[];
+  version_timing?: KnowledgeVersionTiming;
 }
 export interface KnowledgeAttachment {
   file_id: string;
@@ -311,6 +322,8 @@ export interface KnowledgeEvidence {
   edition: number;
   excerpt: string;
   locator: Record<string, string | number | boolean>[];
+  period?: string | null;
+  version_timing?: KnowledgeVersionTiming;
 }
 export interface KnowledgeBundle {
   query_id: string;

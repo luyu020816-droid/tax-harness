@@ -149,7 +149,10 @@ def assemble(
         from app.knowledge import upload_metadata as knowledge_metadata
 
         knowledge_attachments = [
-            knowledge_metadata(conn, execution.auth, str(file_id), core["selected_company_id"])
+            knowledge_metadata(
+                conn, execution.auth, str(file_id), core["selected_company_id"],
+                question=source["content"], requested_at=source["created_at"],
+            )
             for file_id in knowledge_files
         ]
         knowledge_candidates = recent_knowledge_documents(
@@ -158,7 +161,7 @@ def assemble(
         from app.workbook_queries import candidates as workbook_candidates_for
 
         workbook_candidates, workbook_followup_unavailable = workbook_candidates_for(
-            conn, execution, core["selected_company_id"], knowledge_attachments
+            conn, execution, core["selected_company_id"], knowledge_attachments, source=source,
         )
         if agent_config and agent_config["snapshot"]["knowledge_mode"] != "authorized":
             scope = agent_config["snapshot"]
@@ -255,6 +258,7 @@ def assemble(
         "用 query_workbook 计算。多表、多候选列、未明确时间或口径时先追问；实付仅用明确实付字段。"
         "用户给出含结束日的起止日期时，把次日填入 date_to_exclusive。类别用原表名称，分组须来自用户要求。"
         "明确要求全部日期才能填 all_dates。续问更改条件时保留未更改的上次条件并重新计算。"
+        "工作簿版本日期使用候选的 version_as_of，表内报销日期使用 date_from 与 date_to_exclusive。"
         "成功必须交付 type=result、view=workbook_result 和本轮工具信封中的 result_ref；"
         "精确金额和证据由程序放入结果卡。WORKBOOK_SCOPE_MISMATCH 按 details 的字段核对后重试。"
         "NEEDS_CLARIFICATION 用 waiting_user，intent=other、missing_fields=[\"target\"]，程序生成具体追问。"
@@ -581,7 +585,8 @@ def validate(db, execution: Execution, payload: dict, manifest: dict, *, conn=No
 
         for attachment in manifest["current_knowledge_attachments"]:
             current = knowledge_metadata(
-                c, execution.auth, attachment["file_id"], manifest["company_id"]
+                c, execution.auth, attachment.get("attachment_file_id", attachment["file_id"]),
+                manifest["company_id"], question=original["content"], requested_at=original["created_at"],
             )
             if current != attachment:
                 raise AppError("STALE_CONTEXT", "知识附件处理状态已变化，请重新装配。", 409)

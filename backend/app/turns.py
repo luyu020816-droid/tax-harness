@@ -64,7 +64,7 @@ def accept_turn(
             if not session["selected_company_id"]:
                 raise AppError("NEEDS_SCOPE_CLARIFICATION", "请先选择知识资料所属企业。", 422)
             for file_id in knowledge_upload_ids:
-                knowledge_metadata(conn, auth, file_id, session["selected_company_id"])
+                knowledge_metadata(conn, auth, file_id, session["selected_company_id"], question=text)
         if upload_ids:
             from app.invoice_imports import upload_metadata
 

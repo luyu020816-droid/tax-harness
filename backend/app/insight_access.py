@@ -44,7 +44,7 @@ def content_allowed(conn, auth, run_id):
         ).fetchall():
             from app.knowledge_retrieval import validate_retrievals
 
-            validate_retrievals(conn, auth, row["manifest"].get("retrieval_refs", []))
+            validate_retrievals(conn, auth, row["manifest"].get("retrieval_refs", []), historical=True)
             for dependency in row["manifest"].get("workbook_dependencies", []):
                 validate_workbook(conn, auth, turn["turn_id"], dependency)
             from app.preference_access import validate_dependencies

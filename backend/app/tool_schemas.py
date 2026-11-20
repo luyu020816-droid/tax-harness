@@ -370,6 +370,7 @@ class GetInvoiceImport(StrictModel):
 
 class InspectWorkbook(StrictModel):
     document_id: UUID
+    version_as_of: date | None = None
 
 
 class WorkbookColumns(StrictModel):

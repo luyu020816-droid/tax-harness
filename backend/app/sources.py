@@ -133,7 +133,7 @@ def read_source(
         elif data.get("kind") == "knowledge_search":
             from app.knowledge_retrieval import validate_retrievals
 
-            validate_retrievals(conn, auth, [data["query_id"]])
+            validate_retrievals(conn, auth, [data["query_id"]], historical=True)
         elif data.get("kind") == "knowledge_evidence":
             from app.knowledge_retrieval import read_evidence_group_in
 

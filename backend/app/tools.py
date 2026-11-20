@@ -1,6 +1,5 @@
 import json
 import re
-from datetime import date, timedelta, timezone
 
 from pydantic import ValidationError
 
@@ -366,6 +365,7 @@ class ToolExecutor:
                     restrict_knowledge(conn, execution.turn_id, [e["document_id"] for e in group])
             return self.retrieval.read(auth, args["citation_id"])
         if name == "search_knowledge":
+            from app.business_dates import knowledge_date_basis
             from app.knowledge import recent_knowledge_documents, upload_metadata
 
             follow_up = args.pop("follow_up", False)
@@ -376,7 +376,8 @@ class ToolExecutor:
                 ).fetchone()
                 if turn["knowledge_upload_ids"]:
                     metadata = upload_metadata(
-                        conn, auth, str(turn["knowledge_upload_ids"][0]), args["company_id"]
+                        conn, auth, str(turn["knowledge_upload_ids"][0]), args["company_id"],
+                        question=source["content"], requested_at=source["created_at"],
                     )
                     args["document_ids"] = [metadata["document_id"]]
                 elif follow_up:
@@ -394,27 +395,20 @@ class ToolExecutor:
                             "SOURCE_INVALIDATED", "上次的资料已停用或没有有效版本。", 409
                         )
                     args["document_ids"] = [candidates[0]["document_id"]]
+                as_of, date_basis = knowledge_date_basis(source, args.get("as_of"), args.get("period"))
                 if args.get("period"):
                     validate_scope(
                         conn, execution, args.get("scope_ref"), args["company_id"], args["period"]
                     )
                     require_period(conn, execution, args["company_id"], args["period"])
-                if args.get("as_of") and args["as_of"] not in source["content"]:
-                    raise AppError(
-                        "NEEDS_SCOPE_CLARIFICATION", "指定的资料生效日期需要本轮明确原话。", 422
-                    )
-                current_date = source["created_at"].astimezone(timezone(timedelta(hours=8))).date()
                 from app.agent_authority import restrict_knowledge
 
                 args["document_ids"] = restrict_knowledge(
                     conn, execution.turn_id, args.get("document_ids")
                 )
             args = {k: v for k, v in args.items() if k != "scope_ref"}
-            args["as_of"] = (
-                date.fromisoformat(args["as_of"])
-                if args.get("as_of")
-                else (None if args.get("period") else current_date)
-            )
+            args["as_of"] = as_of
+            args["date_basis"] = date_basis
             args["entities"] = list(
                 dict.fromkeys(
                     re.findall(r"(?<![A-Za-z0-9])[FR]\d{3,12}(?![A-Za-z0-9])", source["content"])
