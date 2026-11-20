@@ -83,6 +83,7 @@ export interface OperationCard extends CardBase {
   patch: Record<string, string | null>;
   saved_values: Record<string, string | null> | null;
   current_values?: Record<string, string | null>;
+  error?: { code: string; message: string };
 }
 export interface RulesCard extends CardBase {
   kind: 'rules';
@@ -142,10 +143,11 @@ export interface Turn {
   status: string;
   final_message: string | null;
   final_cards: ResultCard[];
+  invoice_operations?: OperationCard[];
   next_event_seq: number;
   active_run_generation: number;
   selected_company_id?: string | null;
-  error: { code: string; message: string } | null;
+  error: { code: string; message: string; details?: Record<string, unknown> } | null;
   runs?: { run_id: string; state: string }[];
 }
 export interface Task {

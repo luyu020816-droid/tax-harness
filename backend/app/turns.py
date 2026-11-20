@@ -143,7 +143,13 @@ def read_turn(db, auth: Identity, turn_id: str) -> dict:
 
         turn = project_turn(conn, auth, turn)
         return safe_json(
-            {**turn, "runs": runs, "operations": operations, "selected_company_id": selected}
+            {
+                **turn,
+                "runs": runs,
+                "operations": operations,
+                "invoice_operations": _operation_cards(turn, operations),
+                "selected_company_id": selected,
+            }
         )
 
 
@@ -181,6 +187,10 @@ def retry_turn(
         if len(sources) != 1:
             raise AppError("SOURCE_INVALIDATED", "原任务执行来源不完整。", 409)
         source_id = str(sources[0]["source_id"])
+        if conn.execute(
+            "SELECT 1 FROM operations WHERE source_id=%s AND state='prepared'", (source_id,)
+        ).fetchone():
+            raise AppError("OPERATION_REVIEW_REQUIRED", "请先在原轮核实原操作。", 409)
         read_source(conn, auth, source_id)
         from app.admission import check
 
@@ -341,16 +351,28 @@ def session_messages(db, auth: Identity, session_id: str, before_seq=None) -> di
 
         visible = [project_turn(conn, auth, row) for row in rows[:20]]
         by_turn = {}
+        operations = {}
         if visible:
+            ids = [row["turn_id"] for row in visible]
             runs = conn.execute(
                 "SELECT turn_id,run_id,generation,state,started_at,finished_at FROM runs "
                 "WHERE turn_id=ANY(%s::uuid[]) ORDER BY turn_id,generation",
-                ([row["turn_id"] for row in visible],),
+                (ids,),
             ).fetchall()
             for run in runs:
                 by_turn.setdefault(run["turn_id"], []).append(run)
+            rows_by_turn = conn.execute(
+                "SELECT o.*,s.turn_id FROM operations o JOIN sources s USING(source_id) "
+                "JOIN user_company_grants g ON g.user_id=o.user_id AND g.company_id=o.company_id "
+                "WHERE s.turn_id=ANY(%s::uuid[]) AND o.user_id=%s AND g.can_read "
+                "ORDER BY o.committed_at,o.operation_id",
+                (ids, auth.user_id),
+            ).fetchall()
+            for operation in rows_by_turn:
+                operations.setdefault(operation["turn_id"], []).append(operation)
         for row in visible:
             row["runs"] = by_turn.get(row["turn_id"], [])
+            row["invoice_operations"] = _operation_cards(row, operations.get(row["turn_id"], []))
         return safe_json(
             {
                 "turns": list(reversed(visible)),
@@ -358,6 +380,26 @@ def session_messages(db, auth: Identity, session_id: str, before_seq=None) -> di
                 "next_cursor": rows[19]["source_seq"] if len(rows) > 20 else None,
             }
         )
+
+
+def _operation_cards(turn, operations):
+    from app.mutations import operation_result
+
+    delivered = {
+        str(card["operation_id"]): card
+        for card in turn.get("final_cards") or [] if card.get("kind") == "operation"
+    }
+    cards = []
+    for row in operations:
+        existing = delivered.get(str(row["operation_id"]))
+        if existing and (
+            row["verification_state"] == "pending"
+            or existing["verification_state"] == row["verification_state"]
+        ):
+            cards.append(existing)
+        else:
+            cards.append(operation_result(row))
+    return cards
 
 
 def _assert_turn_access(conn, auth, turn_id):

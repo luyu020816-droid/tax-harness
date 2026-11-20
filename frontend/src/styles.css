@@ -1086,6 +1086,15 @@ td strong {
   font-size: 13px;
   color: var(--text-secondary);
 }
+.operation-number {
+  overflow-wrap: anywhere;
+}
+.operation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
 .saved-values {
   margin: var(--space-4) 0 0;
   font-size: 14px;

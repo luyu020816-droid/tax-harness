@@ -218,6 +218,10 @@ def validate(
     if not plan_id:
         raise AppError("WRITE_AUTHORIZATION_REQUIRED", "请先生成并授权修改计划，未保存。", 422)
     row = _owned(conn, auth, plan_id, lock=lock)
+    if row["status"] == "revoked":
+        raise AppError("WRITE_PLAN_STALE", "原修改计划已撤销，请重新核对。", 409)
+    if row["status"] == "needs_confirmation":
+        raise AppError("WRITE_AUTHORIZATION_REQUIRED", "请在原修改计划上由本人确认。", 422)
     if row["status"] not in ("authorized", "consumed"):
         raise AppError("WRITE_NOT_AUTHORIZED", "该修改未获得本人授权，未保存。", 422)
     if lock:
@@ -269,6 +273,7 @@ def _commit(db, auth, plan_id, *, execution):
         selection_ref=plan["selection_ref"],
         execution=execution,
         plan_id=plan_id,
+        operation_id=execution.invoice_recovery_id,
     )
 
 

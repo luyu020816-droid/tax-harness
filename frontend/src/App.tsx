@@ -41,6 +41,7 @@ import { ModelConnection } from './ModelConnection';
 import { KnowledgeView } from './KnowledgeView';
 import { KnowledgeAnswerText } from './KnowledgeAnswerText';
 import { Results } from './Results';
+import { InvoiceOperation } from './InvoiceOperation';
 import { RunsView } from './RunsView';
 import { SessionHistory } from './SessionHistory';
 import { OrbitContext, OrbitWelcome } from './OrbitWorkspace';
@@ -790,6 +791,31 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
       </div>
     );
 
+  const renderGeneration = generation.current;
+  const renderInvoiceOperations = (turn: Turn) =>
+    turn.invoice_operations?.map((operation) => (
+      <InvoiceOperation
+        key={operation.operation_id}
+        card={operation}
+        turnId={turn.turn_id}
+        canUpdate={
+          company === operation.company_id &&
+          !!user.companies.find((item) => item.company_id === operation.company_id)?.can_update
+        }
+        disabled={sending || !!activeId || !!session?.archived_at}
+        onQueued={(turnId) => {
+          if (renderGeneration !== generation.current) return;
+          setTurns((previous) =>
+            previous.map((item) =>
+              item.turn_id === turnId ? { ...item, status: 'queued', error: null } : item
+            )
+          );
+          setActiveId(turnId);
+          setStage('正在继续已核实的原操作');
+        }}
+      />
+    ));
+
   return (
     <div className="app-shell">
       {modelSettings}
@@ -1161,20 +1187,29 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                                   text={turn.final_message}
                                   cards={turn.final_cards ?? []}
                                 />
-                                {turn.final_cards?.map((card, index) => (
-                                  <Results
-                                    key={`${card.kind}/${index}`}
-                                    card={card}
-                                    canUpdate={
-                                      user.companies.find((c) => c.company_id === card.company_id)
-                                        ?.can_update ?? false
-                                    }
-                                    onDraft={prepareDraft}
-                                    onDetail={setDetail}
-                                    onConfirm={confirmWrite}
-                                    onPlanChanged={refreshTurns}
-                                  />
-                                ))}
+                                {turn.final_cards
+                                  ?.filter(
+                                    (card) =>
+                                      card.kind !== 'operation' ||
+                                      !turn.invoice_operations?.some(
+                                        (op) => op.operation_id === card.operation_id
+                                      )
+                                  )
+                                  .map((card, index) => (
+                                    <Results
+                                      key={`${card.kind}/${index}`}
+                                      card={card}
+                                      canUpdate={
+                                        user.companies.find((c) => c.company_id === card.company_id)
+                                          ?.can_update ?? false
+                                      }
+                                      onDraft={prepareDraft}
+                                      onDetail={setDetail}
+                                      onConfirm={confirmWrite}
+                                      onPlanChanged={refreshTurns}
+                                    />
+                                  ))}
+                                {renderInvoiceOperations(turn)}
                                 <div className="answer-footer">
                                   <CheckCheck size={13} />
                                   <span>{turnStatusName(turn)}</span>
@@ -1197,6 +1232,9 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                                   <strong>本轮未能完成</strong>
                                   <p>{turn.error.message}</p>
                                   {turn.status === 'failed' &&
+                                    !turn.invoice_operations?.some(
+                                      (op) => op.commit_state === 'prepared'
+                                    ) &&
                                     [
                                       'RUN_LIMIT_EXCEEDED',
                                       'MODEL_UNAVAILABLE',
@@ -1232,6 +1270,7 @@ export default function App({ appearance = 'default' }: { appearance?: 'default'
                                 <span>{turn.turn_id === activeId ? stage : '等待处理'}</span>
                               </div>
                             )}
+                            {!turn.final_message && renderInvoiceOperations(turn)}
                           </div>
                         </div>
                       </article>

@@ -1,10 +1,11 @@
 import json
 
+import psycopg
 import pytest
 from test_runtime import AUTH, ScriptedModel, answer_plan, model_settings, tool
 from test_trusted_writes import candidate
 
-from app import invoice_write, tasks
+from app import invoice_write, mutations, operation_recovery, tasks
 from app.errors import AppError
 from app.identity import create_session, switch_company
 from app.request_evidence import bind_scope
@@ -149,6 +150,188 @@ async def test_queued_confirmation_rechecks_company_before_writing(
     turn = await run(Runtime(db, model_settings(settings), ScriptedModel([])), accepted)
     assert turn["status"] == "failed" and turn["error"]["code"] == "WRITE_PLAN_STALE"
     assert not admin.execute("SELECT 1 FROM operations").fetchone()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalidate", [None, "plan_cancelled", "write_revoked"])
+async def test_rec01_prepared_confirmation_failure_preserves_original_operation(
+    db, admin, settings, execution_factory, monkeypatch, invalidate
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from fastapi.testclient import TestClient
+
+    from app.api import create_app
+
+    origin = execution_factory(CONFIRMABLE)
+    plan = invoice_write.prepare(db, AUTH, **candidate(origin, CONFIRMABLE))
+    admin.execute("UPDATE turns SET status='completed' WHERE turn_id=%s", (origin.turn_id,))
+    admin.execute("UPDATE work_items SET state='done' WHERE work_id=%s", (origin.work_id,))
+    accepted = invoice_write.confirm(
+        db,
+        AUTH,
+        plan["plan_id"],
+        expected_revision=plan["revision"],
+        intent_hash=plan["intent_hash"],
+        request_id=uid(),
+    )
+
+    def lose_connection(*_args):
+        raise psycopg.OperationalError("injected before invoice update")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(mutations, "guard_company", lose_connection)
+        turn = await run(Runtime(db, model_settings(settings), ScriptedModel([])), accepted)
+    row = admin.execute("SELECT operation_id,state,after_revision FROM operations").fetchone()
+    assert row["state"] == "prepared" and row["after_revision"] is None
+    assert turn["status"] == "failed" and turn["error"]["code"] == "COMMIT_STATUS_UNKNOWN"
+    operation_id = str(row["operation_id"])
+    assert turn["error"]["details"]["operation_id"] == operation_id
+    assert turn["error"]["retryable"]
+    assert turn["invoice_operations"][0]["operation_id"] == operation_id
+    path = f"/api/v1/turns/{turn['turn_id']}/operations/{operation_id}"
+    revision_sql = (
+        "SELECT revision,purpose FROM invoices WHERE company_id='C001' AND invoice_id='F002'"
+    )
+    with TestClient(create_app(settings, db=db, start_workers=False)) as client:
+        assert client.post(path + "/verify").status_code == 401
+        client.post("/api/v1/demo/login", json={"user_id": "U002"})
+        assert client.post(path + "/verify").status_code == 404
+        client.post("/api/v1/demo/login", json={"user_id": "U001"})
+        wrong_turn = f"/api/v1/turns/{origin.turn_id}/operations/{operation_id}"
+        assert client.post(wrong_turn + "/verify").status_code == 404
+        with admin.transaction():
+            admin.execute(
+                "SELECT 1 FROM operations WHERE operation_id=%s FOR UPDATE", (operation_id,)
+            )
+            busy = client.post(path + "/verify")
+            assert busy.status_code == 503
+            assert busy.json()["details"]["operation_id"] == operation_id
+        for _ in range(2):
+            checked = client.post(path + "/verify")
+            assert checked.status_code == 200, checked.text
+            assert checked.json()["can_resume"]
+            assert checked.json()["operation"]["commit_state"] == "prepared"
+        assert admin.execute(revision_sql).fetchone() == {"revision": 1, "purpose": None}
+
+        if invalidate == "plan_cancelled":
+            invoice_write.cancel(db, AUTH, plan["plan_id"])
+        elif invalidate == "write_revoked":
+            admin.execute(
+                "UPDATE user_company_grants SET can_update=false WHERE user_id='U001' AND company_id='C001'"
+            )
+        if invalidate:
+            assert not client.post(path + "/verify").json()["can_resume"]
+            assert client.post(path + "/resume").status_code in (403, 409)
+            assert admin.execute(revision_sql).fetchone()["revision"] == 1
+            return
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(lambda _: client.post(path + "/resume"), range(2)))
+        assert sorted(response.status_code for response in responses) == [200, 503]
+        resumed_action = next(
+            response.json() for response in responses if response.status_code == 200
+        )
+        assert resumed_action == {"turn_id": turn["turn_id"], "queued": True}
+        resumed = await run(Runtime(db, model_settings(settings), ScriptedModel([])), accepted)
+        assert resumed["status"] == "completed", resumed["error"]
+        receipt = client.post(path + "/resume").json()
+        assert not receipt["queued"] and receipt["operation"]["operation_id"] == operation_id
+        assert receipt["operation"]["verification_state"] == "verified"
+    assert admin.execute(revision_sql).fetchone() == {"revision": 2, "purpose": "办公耗材采购"}
+    assert len(resumed["operations"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_rec01_worker_reclaim_does_not_resume_a_prepared_write_implicitly(
+    db, admin, settings, monkeypatch
+):
+    session = str(create_session(db, AUTH, "C001")["session_id"])
+    accepted = accept_turn(db, AUTH, session, uid(), DIRECT)
+    model = ScriptedModel([prepare_direct])
+    original = Runtime(db, model_settings(settings), model)
+    execution = original.claim()
+
+    def before_commit(*_args):
+        raise psycopg.OperationalError("injected before update")
+
+    def lose_terminal_notification(*_args):
+        raise psycopg.OperationalError("injected worker lost connection before saving failure")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(mutations, "guard_company", before_commit)
+        fault.setattr(original, "fail", lose_terminal_notification)
+        with pytest.raises(psycopg.OperationalError):
+            await original.run(execution)
+    operation = admin.execute("SELECT operation_id,state FROM operations").fetchone()
+    assert operation["state"] == "prepared"
+    admin.execute(
+        "UPDATE work_items SET lease_until=now()-interval '1 second' WHERE work_id=%s",
+        (execution.work_id,),
+    )
+    replacement = ScriptedModel([])
+    turn = await run(Runtime(db, model_settings(settings), replacement), accepted)
+    assert turn["error"]["code"] == "COMMIT_STATUS_UNKNOWN"
+    assert turn["error"]["details"]["operation_id"] == str(operation["operation_id"])
+    assert not replacement.requests
+    assert (
+        admin.execute(
+            "SELECT revision FROM invoices WHERE company_id='C001' AND invoice_id='F002'"
+        ).fetchone()["revision"]
+        == 1
+    )
+    operation_id = str(operation["operation_id"])
+    assert operation_recovery.verify(db, AUTH, turn["turn_id"], operation_id)["can_resume"]
+    assert operation_recovery.enqueue(db, AUTH, turn["turn_id"], operation_id, limits=settings)[
+        "queued"
+    ]
+    completed = await run(Runtime(db, model_settings(settings), replacement), accepted)
+    assert completed["status"] == "completed", completed["error"]
+    assert not replacement.requests
+    [receipt] = completed["invoice_operations"]
+    assert receipt["operation_id"] == operation_id and receipt["after_revision"] == 2
+
+
+@pytest.mark.asyncio
+async def test_rec01_lost_response_reopens_original_receipt_after_restart(db, admin, settings):
+    from fastapi.testclient import TestClient
+
+    from app.api import create_app
+
+    session = str(create_session(db, AUTH, "C001")["session_id"])
+    endpoint = f"/api/v1/sessions/{session}/turns"
+    request = {"client_request_id": uid(), "text": DIRECT}
+    with TestClient(create_app(settings, db=db, start_workers=False)) as client:
+        client.post("/api/v1/demo/login", json={"user_id": "U001"})
+        # Simulate a client that never receives the acceptance body.
+        assert client.post(endpoint, json=request).status_code == 202
+        runtime = Runtime(
+            db, model_settings(settings), ScriptedModel([prepare_direct, render_receipt])
+        )
+        execution = runtime.claim()
+        await runtime.run(execution)
+    with TestClient(create_app(settings, db=db, start_workers=False)) as reopened:
+        reopened.post("/api/v1/demo/login", json={"user_id": "U001"})
+        feed = reopened.get(f"/api/v1/sessions/{session}/messages").json()
+        assert len(feed["turns"]) == 1
+        turn = feed["turns"][0]
+        assert turn["turn_id"] == execution.turn_id
+        [operation] = turn["invoice_operations"]
+        operation_id = operation["operation_id"]
+        path = f"/api/v1/turns/{execution.turn_id}/operations/{operation_id}"
+        checked = reopened.post(path + "/verify").json()
+        assert not checked["can_resume"]
+        assert checked["operation"]["commit_state"] == "committed"
+        assert checked["operation"]["verification_state"] == "verified"
+        assert reopened.post(endpoint, json=request).json()["turn_id"] == execution.turn_id
+    [row] = admin.execute(
+        "SELECT operation_id,before_revision,after_revision FROM operations"
+    ).fetchall()
+    assert (str(row["operation_id"]), row["before_revision"], row["after_revision"]) == (
+        operation_id,
+        1,
+        2,
+    )
 
 
 def result_block(view):

@@ -146,17 +146,21 @@ def test_F22_business_and_task_rollback_together(db, admin, source_factory, monk
 
 def test_F24_committed_but_readback_unavailable(db, admin, source_factory, monkeypatch):
     source = source_factory("把甲企业F002用途改为办公资料整理")
+    args = request(db, source)
     original = db.transaction
+    transactions = 0
 
     @contextmanager
     def fail_read(*, readonly=False):
-        if readonly:
+        nonlocal transactions
+        transactions += 1
+        if transactions == 3:
             raise psycopg.OperationalError("injected read-back failure")
         with original() as conn:
             yield conn
 
     monkeypatch.setattr(db, "transaction", fail_read)
-    result = mutations.update_invoice(db, AUTH, **request(db, source))
+    result = mutations.update_invoice(db, AUTH, **args)
     assert result["commit_state"] == "committed"
     assert result["verification_state"] == "pending"
     assert (
@@ -165,6 +169,24 @@ def test_F24_committed_but_readback_unavailable(db, admin, source_factory, monke
         ).fetchone()["purpose"]
         == "办公资料整理"
     )
+    verified = mutations.verify_operation(db, AUTH, result["operation_id"])
+    assert verified["verification_state"] == "verified"
+    assert verified["operation_id"] == result["operation_id"]
+
+
+def test_rec01_verification_unavailable_keeps_operation_number(db, monkeypatch):
+    operation_id = uid()
+
+    @contextmanager
+    def unavailable():
+        raise psycopg.OperationalError("injected database outage")
+        yield
+
+    monkeypatch.setattr(db, "transaction", unavailable)
+    with pytest.raises(AppError) as problem:
+        mutations.verify_operation(db, AUTH, operation_id)
+    assert problem.value.code == "VERIFICATION_PENDING"
+    assert problem.value.details == {"operation_id": operation_id}
 
 
 def test_B11_later_change_is_not_falsely_verified(db, source_factory, admin):

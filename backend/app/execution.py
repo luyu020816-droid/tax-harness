@@ -27,6 +27,7 @@ class Execution:
     reference_context: bool = False
     active_tool: tuple[str, dict] | None = field(default=None, repr=False)
     model_configuration: tuple["Settings", "ModelAdapter"] | None = field(default=None, repr=False)
+    invoice_recovery_id: str | None = None
 
 
 def guard(conn, execution: Execution, *, shared=False, receipt_only=False) -> dict:

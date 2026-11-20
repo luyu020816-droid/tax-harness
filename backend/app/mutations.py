@@ -121,20 +121,55 @@ def operation_result(
     return result
 
 
+def operation_in(conn, auth, operation_id, *, turn_id=None, lock=False):
+    if turn_id:
+        owned(conn, "turns", "turn_id", turn_id, auth)
+    row = conn.execute(
+        "SELECT o.* FROM operations o JOIN sources s USING(source_id) "
+        "WHERE o.operation_id=%s AND o.user_id=%s AND (%s::uuid IS NULL OR s.turn_id=%s)"
+        + (" FOR UPDATE OF o NOWAIT" if lock else ""),
+        (operation_id, auth.user_id, turn_id, turn_id),
+    ).fetchone()
+    if not row:
+        raise AppError("RESOURCE_NOT_FOUND", "操作不存在或不可访问。", 404)
+    assert_access(conn, auth, row["company_id"])
+    return row
+
+
+def verification_pending(operation_id):
+    return AppError(
+        "VERIFICATION_PENDING",
+        "当前无法确认操作结果，请按原编号稍后核对。",
+        503,
+        True,
+        {"operation_id": operation_id},
+    )
+
+
 def verify_operation(
-    db, auth: Identity, operation_id: str, *, replayed=False, memory_epoch=None, known_row=None
+    db,
+    auth: Identity,
+    operation_id: str,
+    *,
+    replayed=False,
+    memory_epoch=None,
+    known_row=None,
+    turn_id=None,
 ) -> dict:
     row = known_row
     try:
-        with db.transaction(readonly=True) as conn:
-            row = conn.execute(
-                "SELECT * FROM operations WHERE operation_id=%s AND user_id=%s",
-                (operation_id, auth.user_id),
-            ).fetchone()
-            if not row:
-                raise AppError("RESOURCE_NOT_FOUND", "操作不存在或不可访问。", 404)
-            assert_access(conn, auth, row["company_id"])
+        with db.transaction() as conn:
+            row = operation_in(conn, auth, operation_id, turn_id=turn_id, lock=True)
             if row["state"] not in ("committed", "no_change"):
+                if (
+                    row["state"] == "prepared"
+                    and conn.execute(
+                        "SELECT 1 FROM sources s JOIN turns t USING(turn_id) "
+                        "WHERE s.source_id=%s AND t.status IN ('queued','running')",
+                        (row["source_id"],),
+                    ).fetchone()
+                ):
+                    raise verification_pending(operation_id)
                 return operation_result(row, replayed=replayed)
             current = conn.execute(
                 "SELECT * FROM invoices WHERE company_id=%s AND invoice_id=%s",
@@ -147,8 +182,7 @@ def verify_operation(
             verified = bool(
                 current and all(current[k] == value for k, value in row["patch"].items())
             )
-        state = "verified" if verified else "changed_since_commit"
-        with db.transaction() as conn:
+            state = "verified" if verified else "changed_since_commit"
             row = conn.execute(
                 "UPDATE operations SET verification_state=%s WHERE operation_id=%s AND user_id=%s RETURNING *",
                 (state, operation_id, auth.user_id),
@@ -164,13 +198,7 @@ def verify_operation(
                 replayed=replayed,
                 memory_epoch=memory_epoch,
             )
-        raise AppError(
-            "VERIFICATION_PENDING",
-            "当前无法读取操作结果，请按原编号稍后核对。",
-            503,
-            True,
-            {"operation_id": operation_id},
-        ) from exc
+        raise verification_pending(operation_id) from exc
 
 
 def update_invoice(
@@ -188,6 +216,7 @@ def update_invoice(
     execution: Execution | None = None,
     plan_id: str | None = None,
 ) -> dict:
+    from app.invoice_write import _require_plan_company
     from app.invoice_write import validate as validate_plan
 
     _validate_patch(patch)
@@ -209,6 +238,17 @@ def update_invoice(
         intent_key = digest([auth.user_id, origin_id, company_id, invoice_id])
         fingerprint = digest([auth.user_id, origin_id, company_id, invoice_id, patch])
         row = _existing(conn, auth, intent_key, fingerprint, operation_id)
+        if (
+            execution
+            and execution.invoice_recovery_id
+            and (
+                not row
+                or str(row["operation_id"]) != operation_id
+                or str(row["authorization_plan_id"]) != plan_id
+                or str(row["source_id"]) != source_id
+            )
+        ):
+            raise AppError("WRITE_PLAN_STALE", "原操作与授权计划不一致，请重新核对。", 409)
         if row and row["state"] in ("committed", "no_change", "rejected"):
             terminal = True
         if not row:
@@ -273,6 +313,9 @@ def update_invoice(
                     "SELECT * FROM users WHERE user_id=%s FOR UPDATE", (auth.user_id,)
                 ).fetchone()
             assert_access(conn, auth, company_id, write=True)
+            row = conn.execute(
+                "SELECT * FROM operations WHERE operation_id=%s FOR UPDATE", (operation_id,)
+            ).fetchone()
             guard_company(conn, execution, company_id)
             plan = validate_plan(
                 conn,
@@ -285,6 +328,8 @@ def update_invoice(
                 expected_revision=expected_revision,
                 lock=True,
             )
+            if execution and execution.invoice_recovery_id and plan["status"] != "consumed":
+                _require_plan_company(conn, auth, plan)
             head = conn.execute(
                 "SELECT rules_epoch FROM company_heads WHERE company_id=%s", (company_id,)
             ).fetchone()
@@ -293,9 +338,6 @@ def update_invoice(
             invoice = conn.execute(
                 "SELECT * FROM invoices WHERE company_id=%s AND invoice_id=%s FOR UPDATE",
                 (company_id, invoice_id),
-            ).fetchone()
-            row = conn.execute(
-                "SELECT * FROM operations WHERE operation_id=%s FOR UPDATE", (operation_id,)
             ).fetchone()
             if row["state"] in ("committed", "no_change", "rejected"):
                 terminal = True
@@ -338,7 +380,10 @@ def update_invoice(
                     ),
                 ).fetchone()
                 task = matching_in(
-                    conn, auth, company_id, "complete_purposes",
+                    conn,
+                    auth,
+                    company_id,
+                    "complete_purposes",
                     invoice["invoice_date"].strftime("%Y-%m"),
                 )
                 if changed and task:
@@ -384,13 +429,17 @@ def update_invoice(
                 return verify_operation(db, auth, operation_id)
         except psycopg.Error:
             pass
-        raise AppError(
-            "COMMIT_STATUS_UNKNOWN",
-            "保存结果暂时无法确认，请按原操作编号核对，不要重复修改。",
-            503,
-            True,
-            {"operation_id": operation_id},
-        ) from exc
+        raise commit_status_unknown(operation_id) from exc
     return verify_operation(
         db, auth, operation_id, replayed=terminal, memory_epoch=epoch, known_row=row
+    )
+
+
+def commit_status_unknown(operation_id):
+    return AppError(
+        "COMMIT_STATUS_UNKNOWN",
+        "保存结果暂时无法确认，请按原操作编号核对。",
+        503,
+        True,
+        {"operation_id": str(operation_id)},
     )

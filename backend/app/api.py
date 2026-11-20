@@ -16,6 +16,7 @@ from app import (
     conversation_index,
     identity,
     invoice_write,
+    operation_recovery,
     preferences,
     rules,
     session_management,
@@ -227,6 +228,14 @@ def create_app(
     @app.post("/api/v1/write-plans/{plan_id}/cancel")
     def cancel_write(plan_id: UUID, body: ControlBody, current=auth_dependency):
         return invoice_write.cancel(db, current, str(plan_id))
+
+    @app.post("/api/v1/turns/{turn_id}/operations/{operation_id}/verify")
+    def verify_invoice_operation(turn_id: UUID, operation_id: UUID, current=auth_dependency):
+        return operation_recovery.verify(db, current, str(turn_id), str(operation_id))
+
+    @app.post("/api/v1/turns/{turn_id}/operations/{operation_id}/resume")
+    def resume_invoice_operation(turn_id: UUID, operation_id: UUID, current=auth_dependency):
+        return operation_recovery.enqueue(db, current, str(turn_id), str(operation_id), limits=settings)
 
     @app.middleware("http")
     async def same_origin(request, call_next):

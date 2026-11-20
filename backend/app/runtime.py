@@ -6,7 +6,7 @@ from contextlib import suppress
 import psycopg
 from pydantic import ValidationError
 
-from app import context, tasks
+from app import context, operation_recovery, tasks
 from app.answer_renderer import direct_conversation_topic, render
 from app.config import Settings
 from app.errors import AppError
@@ -314,7 +314,11 @@ class Runtime:
                         "SELECT request_kind,control_ref FROM turns WHERE turn_id=%s",
                         (execution.turn_id,),
                     ).fetchone()
-                if turn["request_kind"] == "write_confirmation":
+                    recovery = operation_recovery.continuation_in(conn, execution)
+                if recovery:
+                    execution.invoice_recovery_id = recovery["operation_id"]
+                    await self._confirm_loop(execution, recovery["plan_id"])
+                elif turn["request_kind"] == "write_confirmation":
                     await self._confirm_loop(execution, str(turn["control_ref"]))
                 elif turn["request_kind"] == "compact":
                     await self._manual_compact(execution)
@@ -847,6 +851,15 @@ class Runtime:
                             422,
                         )
                     output, ref = await asyncio.to_thread(self.tools.execute, execution, call)
+                    error = output.get("error") or {}
+                    if (
+                        call["function"]["name"] == "update_invoice"
+                        and error.get("code") == "COMMIT_STATUS_UNKNOWN"
+                    ):
+                        raise AppError(
+                            error["code"], error["message"], 503,
+                            error["retryable"], error["details"],
+                        )
                     results.append(output)
                     refs.append(ref)
                     tool_messages.append(
@@ -1009,7 +1022,10 @@ class Runtime:
         output, ref = await asyncio.to_thread(self.tools.execute, execution, call)
         if not output.get("ok"):
             error = output["error"]
-            raise AppError(error["code"], error["message"], 409)
+            raise AppError(
+                error["code"], error["message"], 503 if error["retryable"] else 409,
+                error["retryable"], error["details"],
+            )
         group = {
             "messages": [
                 {"role": "assistant", "content": None, "tool_calls": [call]},

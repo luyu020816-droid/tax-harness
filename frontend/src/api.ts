@@ -19,7 +19,8 @@ export class ApiError extends Error {
   constructor(
     public code: string,
     message: string,
-    public status: number
+    public status: number,
+    public details?: Record<string, unknown>
   ) {
     super(message);
   }
@@ -77,7 +78,8 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     throw new ApiError(
       typeof data.code === 'string' ? data.code : 'REQUEST_FAILED',
       typeof data.message === 'string' ? data.message : '请求未能完成，请检查当前状态后重试。',
-      response.status
+      response.status,
+      data.details && typeof data.details === 'object' ? data.details : undefined
     );
   }
   if (data === null || typeof data !== 'object')

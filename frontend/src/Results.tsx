@@ -4,7 +4,8 @@ import { KnowledgeCitation } from './KnowledgeCitation';
 import { HistoryCitation } from './HistoryCitation';
 import { KnowledgeDraftCard } from './KnowledgeText';
 import { WorkbookResult } from './WorkbookResult';
-import { ArrowUpRight, CheckCheck, ChevronRight, CircleAlert } from 'lucide-react';
+import { InvoiceReceipt } from './InvoiceOperation';
+import { ArrowUpRight, ChevronRight } from 'lucide-react';
 import { companyName, dateTime, money } from './api';
 import type { Detail, InvoiceWritePlan, ResultCard, Rule } from './types';
 
@@ -250,43 +251,7 @@ export function Results({
         <RuleLinks rules={card.rule_refs ?? []} onDetail={onDetail} />
       </section>
     );
-  if (card.kind === 'operation') {
-    const verified = card.verification_state === 'verified';
-    const rejected = card.commit_state === 'rejected';
-    const committed = ['committed', 'no_change'].includes(card.commit_state);
-    const label = rejected
-      ? '本项未保存'
-      : !committed
-        ? '保存状态尚未确定，请按原操作编号核验'
-        : card.verification_state === 'changed_since_commit'
-          ? '本次曾提交，当前值已有变化'
-          : verified
-            ? card.commit_state === 'no_change'
-              ? '当前已经是该值，已核验'
-              : '已保存并核验'
-            : '已提交，核验待完成';
-    return (
-      <section className={`result-card receipt-card ${verified ? 'verified' : 'unverified'}`}>
-        {range}
-        <div className="receipt-heading">
-          {verified ? <CheckCheck size={20} /> : <CircleAlert size={20} />}
-          <h3>{label}</h3>
-          <span>{card.invoice_id}</span>
-        </div>
-        <dl className="saved-values">
-          {Object.entries(card.saved_values ?? card.patch).map(([key, value]) => (
-            <div key={key}>
-              <dt>
-                {!committed ? '计划' : ''}
-                {key === 'purpose' ? '用途' : '备注'}
-              </dt>
-              <dd>{value?.trim() ? value : committed ? '已清空' : '清空'}</dd>
-            </div>
-          ))}
-        </dl>
-      </section>
-    );
-  }
+  if (card.kind === 'operation') return <InvoiceReceipt card={card} />;
   if (card.kind === 'rules')
     return (
       <section className="result-card">
