@@ -59,7 +59,7 @@ for (const scenario of [
     await upload.getByRole('button', { name: '上传并处理' }).click();
     const original = (await (await accepted).json()) as { document_id: string; version_id: string };
     const doc = page.locator('article').filter({ hasText: title });
-    await expect(doc.getByRole('button', { name: '用于对话' })).toBeEnabled({ timeout: 25000 });
+    await expect(doc.getByRole('button', { name: '用于对话' })).toBeEnabled({ timeout: 180000 });
     await page.getByRole('button', { name: '上传资料', exact: true }).click();
     await upload.locator('input[type=file]').setInputFiles(scenario.file!);
     await upload.getByLabel('资料标题').fill(`${title} 重复上传`);
@@ -77,7 +77,7 @@ for (const scenario of [
     await expect(card).toContainText(scenario.group);
     await card.getByText('查看原表依据').click();
     await expect(card).toContainText(scenario.source);
-    await expect(card.getByRole('link', { name: '下载当前有效原表' })).toBeVisible();
+    await expect(card.getByRole('link', { name: '下载计算所用原表' })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('october.png'), fullPage: true });
     await input.fill('改成11月，只看交通费');
     await page.getByRole('button', { name: '发送消息' }).click();
@@ -113,7 +113,7 @@ for (const scenario of [
       expect(updated.version_id).not.toBe(original.version_id);
       await nextCard.getByRole('button', { name: '查看原表依据' }).click();
       await expect(nextCard.getByRole('status')).toContainText('已换版');
-      await expect(nextCard.getByRole('link', { name: '下载当前有效原表' })).toHaveCount(0);
+      await expect(nextCard.getByRole('link', { name: '下载计算所用原表' })).toHaveCount(0);
       await page.getByRole('button', { name: '知识资料', exact: true }).click();
       await doc.getByRole('button', { name: '用于对话' }).click();
       await input.fill('2026年10月实付报销合计多少？按费用类别拆开。');

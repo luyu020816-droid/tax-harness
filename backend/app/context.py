@@ -347,6 +347,7 @@ def assemble(
             "\n根据 history_page 状态续页。ready 时用 search_conversations 和 arguments。"
             "end 或 stale 时用 explanation，code=history_page_boundary。"
         )
+    state["agent_capability_unavailable"] = bool(agent_config and not definitions)
     mandatory = [
         {
             "role": "system",
@@ -403,10 +404,10 @@ def assemble(
             # Do not spend a summary call on a tiny history when fixed tool schemas
             # dominate the budget. Never discard mandatory state or tool receipts.
             target = max(int(limit * 0.65), count - history_cost + 1024)
-        if count <= limit and (count <= target or len(selected) <= RECENT_DIALOGUE_TURNS):
+        if count <= limit and (count <= target or (not proactive_compact and len(selected) <= RECENT_DIALOGUE_TURNS)):
             break
         if len(selected) > RECENT_DIALOGUE_TURNS or (
-            selected and count > limit and settings.context_auto_compact
+            selected and count > target and settings.context_auto_compact
         ):
             oldest = selected.pop(0)
             if not oldest.get("covered"):

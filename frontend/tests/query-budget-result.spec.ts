@@ -10,6 +10,7 @@ test('a verified query result stays visible when final reply exceeds budget', as
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '');
     const reply = (json: unknown) => route.fulfill({ status: 200, json });
+    if (path === '/agents') return reply([]);
     if (path === '/me') return reply({ user_id: 'U001', display_name: '一',
       companies: [{ company_id: 'C001', name: '甲', can_update: true }], model_ready: true,
       model_mode: 'test', dataset_profile: 'competition', invoice_import_ready: false });

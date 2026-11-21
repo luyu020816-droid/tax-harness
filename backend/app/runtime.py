@@ -839,6 +839,13 @@ class Runtime:
                     422,
                 )
             execution.observed_heads = manifest["heads"]
+            if (step == 1 and not groups and not payload.get("tools")
+                    and manifest["request_frame"].get("request_items")):
+                state = json.loads(payload["messages"][0]["content"].split("\n正式状态：\n", 1)[1])
+                if state.get("agent_capability_unavailable"):
+                    reply = FinalReply.model_validate({"blocks": [{"type": "explanation", "code": "agent_capability_unavailable"}]})
+                    await asyncio.to_thread(self.finish, execution, reply, payload, manifest)
+                    return
             if step == 1 and not groups:
                 current = payload["messages"][-1]["content"]
                 topic = direct_conversation_topic(current)

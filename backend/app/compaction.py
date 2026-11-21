@@ -132,17 +132,14 @@ async def _complete_candidate(db, model, execution, step, payload, manifest):
 def _decode(response):
     try:
         data = json.loads(response["message"].get("content") or "")
-        # Observed provider shape: [["s1", "s2"]]. A single list wrapper
-        # has an unambiguous equivalent; actual IDs still require exact coverage
-        # below. Never infer missing labels, flatten recursively or accept extras.
+        # Accept one bounded grouping layer only; exact source coverage is
+        # still checked against the captured manifest before publication.
         labels = data["covered_sources"]
-        if (
-            isinstance(labels, list)
-            and len(labels) == 1
-            and isinstance(labels[0], list)
-            and all(isinstance(v, str) for v in labels[0])
+        if isinstance(labels, list) and labels and all(
+            isinstance(group, list) and group and all(isinstance(v, str) for v in group)
+            for group in labels
         ):
-            data["covered_sources"] = labels[0]
+            data["covered_sources"] = [v for group in labels for v in group]
         if (
             response["message"].get("tool_calls")
             or not isinstance(data["summary"], str)

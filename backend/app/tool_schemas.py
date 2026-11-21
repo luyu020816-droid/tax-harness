@@ -240,6 +240,7 @@ class ExplanationBlock(StrictModel):
         "independent_totals",
         "amount_materials",
         "amount_material_unsupported",
+        "agent_capability_unavailable",
         "read_only",
         "access_denied",
         "unsupported_fields",

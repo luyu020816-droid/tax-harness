@@ -480,7 +480,13 @@
   text-align: left;
 }
 @media (max-width: 1000px) {
+  .insights-page {
+    flex: none;
+    min-height: 100%;
+  }
   .insight-workspace {
+    flex: none;
+    min-height: 480px;
     grid-template-columns: 1fr;
   }
   .insight-workspace:not(.has-selection) .insight-trace-pane {

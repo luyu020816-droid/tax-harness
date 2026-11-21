@@ -14,6 +14,7 @@ test('request checklist shows verified, blocked and waiting states after reload 
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '');
     const reply = (json: unknown) => route.fulfill({ json });
+    if (path === '/agents') return reply([]);
     if (path === '/me')
       return reply({
         user_id: 'U001',

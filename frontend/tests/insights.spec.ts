@@ -35,6 +35,7 @@ test('insights: scoped history, chain, unknown usage, refresh, comparison and re
   await page.route('**/api/v1/**', async (route) => {
     const p = new URL(route.request().url()).pathname.replace('/api/v1', '');
     const reply = (json: unknown) => route.fulfill({ json });
+    if (p === '/agents') return reply([]);
     if (p === '/me')
       return reply({
         user_id: 'U001',

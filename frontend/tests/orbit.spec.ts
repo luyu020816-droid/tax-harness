@@ -33,6 +33,7 @@ test('orbit chat: draft, retry identity, polling, history, sessions, and mobile'
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '');
     const method = route.request().method();
     const reply = (json: unknown, status = 200) => route.fulfill({ status, json });
+    if (path === '/agents') return reply([]);
     if (path === '/me')
       return authenticated
         ? reply({

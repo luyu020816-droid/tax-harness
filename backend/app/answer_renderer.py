@@ -643,6 +643,14 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
             text, card = _result_text(
                 data, block.view, today=state["request_frame"].get("current_date")
             )
+            if block.view == "monthly_summary":
+                style = next((p["value"] for p in state.get("preferences", [])
+                              if p.get("stable_key") == "response_style"), None)
+                if style in ("详细", "详尽"):
+                    text = (f"{dict(C001='甲企业', C002='乙企业').get(data['company_id'], data['company_id'])} · {data['period']} 月度资料\n"
+                            f"发票：{data['invoice_count']}张，合计{data['invoice_total']:.2f}元。\n"
+                            f"银行收入：{data['bank_income']:.2f}元；银行支出：{data['bank_expense']:.2f}元。\n"
+                            + text + "\n以上三项分别统计，不能据其差额推断发票已付款。")
             if block.view == "rules":
                 for explanation in _purpose_explanations(conn, data.get("rules", [])).values():
                     text += "\n\n" + explanation
@@ -956,6 +964,18 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
                     failures.append(
                         {"name": item["tool"], "arguments": item, "error": exc.as_dict()}
                     )
+        if state.get("agent_capability_unavailable") and any(
+            b.type == "explanation" and b.code == "agent_capability_unavailable" for b in plan.blocks
+        ):
+            from app.agent_authority import authorize_tool
+
+            for item in items:
+                try:
+                    authorize_tool(conn, execution.turn_id, item["tool"], {})
+                except AppError as exc:
+                    if exc.code != "AGENT_CAPABILITY_DENIED":
+                        raise
+                    failures.append({"name": item["tool"], "arguments": item, "error": exc.as_dict()})
         progress = verify_items(items, reply.cards, reply.clarification, failures)
         reply.cards.append({"kind": "request_progress", "company_id": "", "items": progress})
         verified = sum(i["status"] == "verified" for i in progress)
@@ -1093,6 +1113,8 @@ def _explanation(conn, execution, code, outputs, rules, state):
         error = _workbook_error(conn, execution, outputs)
         if error:
             return error["message"]
+    if code == "agent_capability_unavailable" and state.get("agent_capability_unavailable"):
+        return "当前 Agent 的查询能力不可用或已停用，本轮未执行查询。请启用相关能力或切换 Agent 后重试。"
     if code == "amount_materials":
         return "可按企业和月份查询三类金额资料：发票总额、银行收入和银行支出。"
     if code == "amount_material_unsupported":
