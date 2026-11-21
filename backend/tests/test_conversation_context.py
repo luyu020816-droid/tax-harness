@@ -67,6 +67,52 @@ def test_no_twelve_turn_cutoff(db, admin, execution_factory, settings):
     assert admin.execute("SELECT count(*) n FROM knowledge_documents").fetchone()["n"] == 0
 
 
+@pytest.mark.asyncio
+async def test_ar03_only_answers_using_old_preference_are_invalidated(db, settings):
+    from test_runtime import ScriptedModel, answer_plan
+
+    from app.conversation_log import read
+    from app.preferences import change_preference
+    from app.runtime import Runtime
+    from app.turns import read_turn
+
+    old = change_preference(
+        db, AUTH, action="remember", scope="C001", key="format",
+        value="报表展示习惯为项目符号。", request_id=uid(),
+    )
+    session = str(create_session(db, AUTH, "C001")["session_id"])
+    ordinary = accept_turn(db, AUTH, session, uid(), "你好")
+    preference = accept_turn(db, AUTH, session, uid(), "你还记得我喜欢什么格式吗？")
+    model = ScriptedModel([
+        answer_plan(blocks=[{"type": "explanation", "code": "acknowledged"}]),
+        answer_plan(blocks=[{"type": "chat_answer", "text": "报表展示习惯为项目符号。"}]),
+    ])
+    runtime = Runtime(db, model_settings(settings), model)
+    for turn in (ordinary, preference):
+        await runtime.run(runtime.claim())
+        assert read_turn(db, AUTH, turn["turn_id"])["status"] == "completed"
+    with db.transaction(readonly=True) as conn:
+        ids = {
+            str(row["turn_id"]): str(row["final_response_ref"])
+            for row in conn.execute("SELECT turn_id,final_response_ref FROM turns WHERE session_id=%s", (session,))
+        }
+    assert all("项目符号" in payload["messages"][0]["content"] for payload in model.requests)
+    change_preference(
+        db, AUTH, action="update", scope="C001", target_id=str(old["preference_id"]),
+        expected_revision=old["revision"], value="报表展示习惯为表格。", request_id=uid(),
+    )
+    with db.transaction(readonly=True) as conn:
+        assert read(conn, AUTH, ids[ordinary["turn_id"]])["content"]
+        with pytest.raises(AppError, match="失效"):
+            read(conn, AUTH, ids[preference["turn_id"]])
+    accept_turn(db, AUTH, session, uid(), "继续。")
+    followup = runtime.claim()
+    payload, _, _ = context.assemble(db, model_settings(settings), followup, [])
+    messages = [item["content"] for item in payload["messages"]]
+    assert "你还记得我喜欢什么格式吗？" in messages
+    assert all("项目符号" not in message for message in messages)
+
+
 def test_independent_history_search_exact_read_and_delete(db, execution_factory):
     old = create_session(db, AUTH, "C001")
     source_id, _ = settled(db, old["session_id"], "昨天架构升级方案：先备份再迁移，不自动改数据。")
@@ -81,6 +127,33 @@ def test_independent_history_search_exact_read_and_delete(db, execution_factory)
     assert not search(db, execution, query="架构升级")["matches"]
     with pytest.raises(AppError, match="会话"):
         read_page(db, execution, source_id=source_id)
+
+
+def test_ar06_ordinary_turn_cannot_search_or_read_another_session(db, settings, execution_factory):
+    from test_runtime import tool
+
+    from app.context_preview import preview
+    from app.tools import ToolExecutor
+
+    old = create_session(db, AUTH, "C001")
+    source_id, _ = settled(db, old["session_id"], "历史主题 RECALL-16，先备份再迁移。")
+    config = model_settings(settings)
+    executor = ToolExecutor(db)
+    def call(execution, name, args):
+        return executor.execute(execution, tool(name, args)["tool_calls"][0])[0]
+
+    ordinary = execution_factory("你好")
+    payload, _, _ = context.assemble(db, config, ordinary, [])
+    assert "search_conversations" not in {item["function"]["name"] for item in payload["tools"]}
+    result = call(ordinary, "search_conversations", {"query": "RECALL-16"})
+    assert result["error"]["code"] == "HISTORY_INTENT_REQUIRED"
+    result = call(ordinary, "read_conversation", {"source_id": source_id})
+    assert result["error"]["code"] == "HISTORY_INTENT_REQUIRED"
+    explicit = execution_factory("找我昨天在其他会话说过的 RECALL-16 原话")
+    projected = preview(db, config, AUTH, explicit.session_id, "回顾我昨天在其他会话说的话")
+    assert "search_conversations" in projected["tool_names"]
+    result = call(explicit, "search_conversations", {"query": "RECALL-16"})
+    assert [item["source_id"] for item in result["data"]["matches"]] == [source_id]
 
 
 def test_history_never_reads_another_user(db, execution_factory):

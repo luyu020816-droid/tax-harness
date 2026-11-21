@@ -1,7 +1,13 @@
 from app.errors import AppError
 from app.execution import Execution
 from app.identity import Identity, assert_access, owned
-from app.memory_changes import assert_newer, begin_change, finish_change, suppress_old_history
+from app.memory_changes import (
+    assert_newer,
+    begin_change,
+    bump_task_memory,
+    finish_change,
+    suppress_old_history,
+)
 from app.sources import read_source
 from app.task_commands import (
     authorize_task_addition,
@@ -398,10 +404,12 @@ def change_task(
                 _revision(conn, result, "updated", change["refs"], change["source_seq"])
                 return finish_change(conn, auth, change, result)
             if action == "replace":
-                if old["company_id"] != company_id and slot["current_task_id"]:
-                    raise AppError(
-                        "NEEDS_CLARIFICATION", "目标企业也有未完成任务，需要先明确如何处理。", 422
-                    )
+                if old["company_id"] != company_id:
+                    if slot["current_task_id"]:
+                        raise AppError(
+                            "NEEDS_CLARIFICATION", "目标企业也有未完成任务，需要先明确如何处理。", 422
+                        )
+                    change["memory_scope"] = (old["company_id"], company_id)
                 _end(conn, old, "replaced", change["source_seq"], change["refs"])
                 slot = _slot(conn, auth, company_id)
         elif execution and action == "replace":
@@ -526,9 +534,5 @@ def apply_result(
                 "WHERE user_id=%s AND company_id=%s",
                 (source_seq, auth.user_id, task["company_id"]),
             )
-        epoch = conn.execute(
-            "UPDATE users SET memory_epoch=memory_epoch+1 WHERE user_id=%s RETURNING memory_epoch",
-            (auth.user_id,),
-        ).fetchone()["memory_epoch"]
-        conn.execute("UPDATE summaries SET status='invalidated' WHERE user_id=%s", (auth.user_id,))
+        epoch = bump_task_memory(conn, auth, task["company_id"], result_source_id)
         return {**updated, "memory_epoch": epoch}

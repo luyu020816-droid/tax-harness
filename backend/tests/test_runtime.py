@@ -182,6 +182,31 @@ def answer_plan(**plan):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("changed_company,expected", [("C001", "completed"), ("C002", "interrupted")])
+async def test_ar04_only_overlapping_memory_changes_fence_an_answer(
+    db, settings, changed_company, expected,
+):
+    session = str(create_session(db, AUTH, "C002")["session_id"])
+    turn = accept_turn(db, AUTH, session, uid(), "你好")
+
+    def after_send(_payload):
+        change_preference(
+            db, AUTH, action="remember", scope=changed_company, key="safety_rule",
+            value="不得外发财务资料。", request_id=uid(),
+        )
+        return answer_plan(blocks=[{"type": "explanation", "code": "acknowledged"}])
+
+    model = ScriptedModel([after_send])
+    runtime = Runtime(db, model_settings(settings), model)
+    await runtime.run(runtime.claim())
+    result = read_turn(db, AUTH, turn["turn_id"])
+    assert len(model.requests) == 1
+    assert result["status"] == expected, result
+    if expected == "interrupted":
+        assert result["error"]["code"] == "STALE_CONTEXT"
+
+
+@pytest.mark.asyncio
 async def test_chat_question_retries_irrelevant_acknowledgement(db, settings):
     session = create_session(db, AUTH, "C001")
     turn = accept_turn(db, AUTH, str(session["session_id"]), uid(), "我有点无聊，推荐我做点事")

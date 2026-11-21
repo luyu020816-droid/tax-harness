@@ -4,6 +4,23 @@ test('memory history and knowledge strategy use the real isolated backend', asyn
   await page.goto('/showcase.html');
   await page.getByRole('button', { name: /测试用户一/ }).click();
   await expect(page.getByRole('button', { name: '退出登录', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: /上下文用量.*点击查看详情/ }).click();
+  const composer = page.getByRole('textbox', { name: '输入办理需求' });
+  for (const [draft, expected] of [
+    ['你好', false],
+    ['回顾我昨天在其他会话说过的话', true],
+  ] as const) {
+    const forecast = page.waitForResponse(
+      (response) =>
+        response.url().endsWith('/context-preview') &&
+        response.request().method() === 'POST' &&
+        response.request().postDataJSON().draft === draft
+    );
+    await composer.fill(draft);
+    const preview = await (await forecast).json();
+    expect(preview.tool_names.includes('search_conversations')).toBe(expected);
+  }
+  await composer.clear();
   const key = `audit_${Date.now()}`;
   const created = await page.request.post('/api/v1/preferences', {
     data: { key, value: '回复简洁', request_id: crypto.randomUUID() },

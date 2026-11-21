@@ -69,6 +69,7 @@ class RenderedReply:
     cards: list = field(default_factory=list)
     preference_action: str | None = None
     preference_status: str = "not_requested"
+    preference_dependencies: list = field(default_factory=list)
 
 
 def _results(conn, execution, payload):
@@ -467,10 +468,34 @@ def _uncovered_public_queries(outputs, selected_refs):
     return required - delivered
 
 
+def _preference_dependency(item):
+    return {
+        "kind": "preference", "id": str(item["preference_id"]),
+        "revision": item["revision"], "generation": item["generation"],
+    }
+
+
 def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None):
     outputs = _results(conn, execution, payload)
     state = json.loads(payload["messages"][0]["content"].split("\n正式状态：\n", 1)[1])
     reply = RenderedReply("", plan.status, plan.clarification, plan.resume_turn_id)
+    if any(block.type in ("chat_answer", "knowledge_answer") for block in plan.blocks):
+        from app.preference_access import answer_input_dependencies
+
+        reply.preference_dependencies.extend(
+            ref for ref in manifest.get("dependencies", []) if ref["kind"] == "preference"
+        )
+        reply.preference_dependencies.extend(
+            answer_input_dependencies(conn, execution.auth, manifest.get("sources", []))
+        )
+        for output in outputs.values():
+            if output.get("ok"):
+                data = output.get("data") or {}
+                if "preferences" in data or "preference_id" in data:
+                    reply.preference_dependencies.extend(
+                        _preference_dependency(item) for item in data.get("preferences", [data])
+                        if item.get("status") == "active"
+                    )
     texts, rule_rows = [], []
     legacy_insufficient = any(
         (block.type == "explanation" and block.code == "knowledge_insufficient")
@@ -526,6 +551,10 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
                     },
                 )
             data = output["data"]
+            if block.view == "preferences":
+                reply.preference_dependencies.extend(
+                    _preference_dependency(item) for item in data.get("preferences", [])
+                )
             if block.view == "workbook_result":
                 if data.get("kind") != "workbook_result":
                     missing("表格结果必须来自本轮真实计算。")
@@ -584,6 +613,10 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
                         "kind": "history_page",
                         "company_id": data.get("scope_snapshot", {}).get("company_id"),
                         "query_id": data["query_id"],
+                        **(
+                            {"next_cursor": data.get("next_cursor")}
+                            if data["kind"] == "conversation_search" else {}
+                        ),
                     }
                 )
                 continue
@@ -807,6 +840,8 @@ def render(conn, execution, plan, payload, manifest, *, verified_knowledge=None)
             if not output.get("ok") or not op:
                 missing("缺少本轮偏好操作提交证据。")
             reply.preference_action, reply.preference_status = block.action, "committed"
+            if block.action != "delete":
+                reply.preference_dependencies.append(_preference_dependency(op["result_ref"]))
             texts.append(
                 "已删除该长期偏好。"
                 if block.action == "delete"
@@ -1065,7 +1100,15 @@ def _explanation(conn, execution, code, outputs, rules, state):
             "当前系统未提供你问的这类金额资料。支持按企业和月份查询发票总额、银行收入和银行支出。"
         )
     if code == "conversation_boundary" and state.get("conversation_retrieval") == "disabled":
-        return "普通聊天不会自动进入知识库，也不自动检索其他会话。请打开原会话继续，或手动提交相关资料到知识库；明确保存的任务和偏好独立保留。"
+        return "当前 Agent 无权检索其他会话。你可以打开原会话，或选择具有历史检索权限的 Agent。"
+    if code == "conversation_boundary" and state.get("conversation_retrieval") == "current_session":
+        return "本轮仅使用当前会话。需要回顾其他会话时，请明确说明要找的时间或话题。"
+    if code == "history_page_boundary" and state.get("conversation_retrieval") == "explicit":
+        status = state.get("history_page", {}).get("status")
+        if status == "end":
+            return "已到本次历史浏览末页。"
+        if status == "stale":
+            return "原历史查询范围已变化，请重新说明要回顾的会话或话题。"
     errors = {o.get("error", {}).get("code") for o in outputs.values() if not o.get("ok")}
     knowledge = [
         o.get("data") or {}

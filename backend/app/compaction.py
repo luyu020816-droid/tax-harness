@@ -7,7 +7,8 @@ from app.events import emit
 from app.execution import guard
 from app.model_requests import build_request
 from app.sources import read_source
-from app.summary_evidence import collect, pack, unpack
+from app.summary_evidence import collect, pack
+from app.summary_evidence import validate as validate_summary
 from app.trace import record_context
 from app.values import canonical, digest, jsonb, safe_json, uid
 
@@ -170,14 +171,18 @@ async def compact(db, settings, model, execution, groups, step: int, *, manual=F
         scope_key = summary_key(conn, execution)
         previous = find_summary(conn, execution, scope, execution.expected_epoch)
         if previous:
-            previous_id, previous_content = previous["summary_id"], previous["content"]
-            for ref in previous["covered_sources"]:
-                source = read_source(conn, execution.auth, ref["source_id"])
-                if source["revision"] != ref["revision"]:
-                    raise AppError("SOURCE_INVALIDATED", "旧摘要来源已变化。", 409)
-            packet = unpack(previous["content"])
-            text = packet["navigation"] if packet else previous["content"]
-            processed = previous["covered_sources"]
+            previous_id = previous["summary_id"]
+            try:
+                packet = validate_summary(
+                    conn, execution, previous["content"], previous["covered_sources"],
+                )
+            except AppError as exc:
+                if exc.code not in ("SUMMARY_INVALID", "SOURCE_INVALIDATED", "ACCESS_DENIED"):
+                    raise
+            else:
+                previous_content = previous["content"]
+                text = packet["navigation"]
+                processed = previous["covered_sources"]
     refs = list({ref["source_id"]: ref for ref in [*processed, *refs]}.values())
     with db.transaction() as conn:
         guard(conn, execution)
@@ -295,7 +300,8 @@ async def compact(db, settings, model, execution, groups, step: int, *, manual=F
             + [m for group in groups for m in group["messages"]]
         }
     )
-    after = estimate_tokens({"messages": [{"role": "system", "content": pack(text, protected)}]})
+    content = pack(text, protected)
+    after = estimate_tokens({"messages": [{"role": "system", "content": content}]})
     if after >= before:
         raise AppError("COMPACTION_NO_GAIN", "摘要未减少上下文，原文与旧摘要仍保留。", 422)
     with db.transaction() as conn:
@@ -320,6 +326,7 @@ async def compact(db, settings, model, execution, groups, step: int, *, manual=F
             source = read_source(conn, execution.auth, ref["source_id"])
             if source["revision"] != ref["revision"]:
                 raise AppError("SOURCE_INVALIDATED", "摘要生成期间来源变化，候选已废弃。", 409)
+        validate_summary(conn, execution, content, refs)
         generation = conn.execute(
             "SELECT coalesce(max(generation),0)+1 AS n FROM summaries WHERE user_id=%s AND session_id=%s AND scope=%s",
             (execution.auth.user_id, execution.session_id, scope),
@@ -342,7 +349,7 @@ async def compact(db, settings, model, execution, groups, step: int, *, manual=F
                 scope,
                 jsonb(refs),
                 execution.expected_epoch,
-                pack(text, protected),
+                content,
                 generation,
                 scope_key,
             ),

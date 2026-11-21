@@ -251,6 +251,7 @@ class ExplanationBlock(StrictModel):
         "history_insufficient",
         "history_unavailable",
         "conversation_boundary",
+        "history_page_boundary",
         "no_tasks",
         "write_not_authorized",
         "purpose_all",
@@ -546,6 +547,9 @@ def reference_definitions(definitions):
         if function["name"] in REFERENCE_MUTATIONS:
             continue
         if function["name"] == "manage_preference":
+            actions = function["parameters"].get("properties", {}).get("action", {}).get("enum", [])
+            if "list" not in actions:
+                continue
             definition = {
                 **definition,
                 "function": {

@@ -5,7 +5,13 @@ from app.errors import AppError
 from app.execution import Execution
 from app.identity import Identity, assert_access, owned
 from app.memory_changes import assert_newer, begin_change, finish_change, suppress_old_history
-from app.preference_rules import preference_evidence, preference_identity, value_identity
+from app.preference_rules import (
+    applies_to_request,
+    preference_evidence,
+    preference_identity,
+    report_scope,
+    value_identity,
+)
 from app.sources import read_source
 from app.values import jsonb, uid
 
@@ -46,7 +52,10 @@ def history(db, auth, preference_id, *, before_revision=None, limit=20):
         )
 
 
-def visible_in(conn, auth, company_id, *, turn_id=None, binding=None, management=False):
+def visible_in(
+    conn, auth, company_id, *, turn_id=None, binding=None, management=False,
+    request_text=None, excluded=None,
+):
     if company_id:
         assert_access(conn, auth, company_id)
     if not preference_access.can_read(conn, turn_id=turn_id, binding=binding):
@@ -66,6 +75,14 @@ def visible_in(conn, auth, company_id, *, turn_id=None, binding=None, management
         except AppError as exc:
             if not preference_access.invalid_source(exc):
                 raise
+            continue
+        report = report_scope(preference["value"])
+        if not applies_to_request(report, request_text):
+            if excluded is not None:
+                excluded.append({
+                    "id": str(preference["preference_id"]),
+                    "reason": "report_scope_not_requested",
+                })
             continue
         identity = (
             preference["scope_key"],

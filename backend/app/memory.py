@@ -2,14 +2,17 @@ import json
 
 from app.errors import AppError
 from app.identity import Identity, assert_access, owned
-from app.preference_rules import preference_identity
+from app.preference_rules import preference_identity, report_continuation
 from app.preferences import visible_in
 from app.sources import read_source
 from app.tasks import active_in, current_in, task_summary
 from app.values import safe_json
 
 
-def load_core(db, auth: Identity, session_id: str, *, turn_id=None, binding=None) -> dict:
+def load_core(
+    db, auth: Identity, session_id: str, *, turn_id=None, binding=None, request_text=None,
+    excluded_preferences=None,
+) -> dict:
     with db.transaction(readonly=True) as conn:
         session = owned(conn, "sessions", "session_id", session_id, auth)
         company = session["selected_company_id"]
@@ -26,6 +29,24 @@ def load_core(db, auth: Identity, session_id: str, *, turn_id=None, binding=None
         user = conn.execute(
             "SELECT memory_epoch FROM users WHERE user_id=%s", (auth.user_id,)
         ).fetchone()
+        if report_continuation(request_text):
+            prior = conn.execute(
+                "SELECT s.source_id FROM turns t JOIN sources s USING(turn_id) "
+                "WHERE t.session_id=%s AND t.user_id=%s AND s.role='user' "
+                "AND t.status IN ('completed','resolved','waiting_user') "
+                "AND t.source_seq<coalesce((SELECT source_seq FROM turns WHERE turn_id=%s),9223372036854775807) "
+                "ORDER BY t.source_seq DESC LIMIT 1",
+                (session_id, auth.user_id, turn_id),
+            ).fetchone()
+            if prior:
+                try:
+                    source = read_source(conn, auth, prior["source_id"], company_id=company)
+                except AppError as exc:
+                    if exc.code not in ("SOURCE_INVALIDATED", "ACCESS_DENIED"):
+                        raise
+                else:
+                    if company or source["scope_kind"] == "user_private":
+                        request_text += "\n" + source["content"]
         task = current_in(conn, auth, company) if company else None
         candidates = [
             task_summary(item)
@@ -34,7 +55,10 @@ def load_core(db, auth: Identity, session_id: str, *, turn_id=None, binding=None
         ]
         effective = {}
         dependencies = []
-        for pref, evidence in visible_in(conn, auth, company, turn_id=turn_id, binding=binding):
+        for pref, evidence in visible_in(
+            conn, auth, company, turn_id=turn_id, binding=binding, request_text=request_text,
+            excluded=excluded_preferences,
+        ):
             entry = {
                 k: pref[k]
                 for k in (

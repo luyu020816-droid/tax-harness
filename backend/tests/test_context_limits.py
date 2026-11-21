@@ -61,3 +61,55 @@ def test_cache_metrics_never_treat_missing_usage_as_zero():
         "miss_tokens": 65,
         "hit_ratio": 115 / 180,
     }
+
+
+def test_ar05_report_templates_are_selected_for_the_current_request(db, execution_factory):
+    from app.agent_authority import bind_turn
+    from app.agent_profiles import AgentDraft, create_draft, publish, set_enabled
+    from app.context import assemble
+    from app.context_preview import preview
+    from app.identity import Identity
+    from app.preferences import change_preference
+    from app.values import uid
+
+    auth = Identity("U001")
+    agent = create_draft(
+        db, auth,
+        AgentDraft(name="报表事务", model_profile_id="default",
+                   tool_grants={"manage_preference": ["list"], "get_rules": ["invoke"]}),
+    )
+    agent = publish(db, auth, agent["agent_id"], agent["revision"])
+    set_enabled(db, auth, agent["agent_id"], agent["revision"], True)
+
+    def request(text):
+        execution = execution_factory(text)
+        with db.transaction() as conn:
+            conn.execute("UPDATE turns SET status='queued' WHERE turn_id=%s", (execution.turn_id,))
+            binding = bind_turn(conn, auth, execution.turn_id, agent["agent_id"])
+            conn.execute("UPDATE turns SET status='running' WHERE turn_id=%s", (execution.turn_id,))
+        return execution, {**binding, "agent_version": binding["version"]}
+
+    for n in range(1, 21):
+        change_preference(
+            db, auth, action="remember", scope="C001", key=f"report_{n}",
+            value=f"仅适用于第{n}类年度附表：模板{n}须列出核对结果。" + "分录汇总。" * 90,
+            request_id=uid(),
+        )
+    change_preference(
+        db, auth, action="remember", scope="C001", key="report_limit",
+        value="适用于所有报告：不得外发财务资料。", request_id=uid(),
+    )
+    config = settings(input_budget=16000, model_id="scripted")
+    ordinary, binding = request("一周有几天？")
+    payload, manifest, dropped = assemble(db, config, ordinary, [])
+    assert not dropped
+    assert len(manifest["excluded_preferences"]) == 20
+    assert "模板3须" not in payload["messages"][0]["content"]
+    assert "不得外发财务资料" in payload["messages"][0]["content"]
+    estimate = preview(db, config, auth, ordinary.session_id, "一周有几天？", binding=binding)
+    assert estimate["input_estimate"] < estimate["input_limit"]
+    report, _ = request("请办理第三类年度附表")
+    payload, _, _ = assemble(db, config, report, [])
+    state = payload["messages"][0]["content"]
+    assert "模板3须" in state and "模板4须" not in state
+    assert "不得外发财务资料" in state

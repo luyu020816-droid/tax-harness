@@ -435,8 +435,8 @@ def test_reference_input_contains_only_currently_callable_tools(db, settings, ex
     assert {
         "get_invoice_operation",
         "read_conversation",
-        "search_conversations",
     } <= available.keys()
+    assert "search_conversations" not in available
     assert available["manage_preference"]["parameters"]["properties"]["action"]["enum"] == ["list"]
     assert len(str(after["tools"])) < len(str(before["tools"]))
 

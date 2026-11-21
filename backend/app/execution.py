@@ -28,6 +28,16 @@ class Execution:
     active_tool: tuple[str, dict] | None = field(default=None, repr=False)
     model_configuration: tuple["Settings", "ModelAdapter"] | None = field(default=None, repr=False)
     invoice_recovery_id: str | None = None
+    memory_companies: frozenset[str] = field(default_factory=frozenset)
+    history_companies: tuple[str, ...] | None = None
+
+
+def memory_is_current(conn, execution, epoch):
+    from app.memory_changes import compatible_epoch
+
+    return compatible_epoch(
+        conn, execution.auth, execution.memory_companies, execution.expected_epoch, epoch,
+    )
 
 
 def guard(conn, execution: Execution, *, shared=False, receipt_only=False) -> dict:
@@ -70,7 +80,7 @@ def guard(conn, execution: Execution, *, shared=False, receipt_only=False) -> di
     valid = valid and session and not session["deleted_at"]
     if not valid:
         raise AppError("SOURCE_INVALIDATED", "本次执行已取消、超时或由新执行接管。", 409)
-    if user["memory_epoch"] != execution.expected_epoch:
+    if not memory_is_current(conn, execution, user["memory_epoch"]):
         raise AppError("STALE_CONTEXT", "任务或记忆已更新，本次旧上下文不能继续提交。", 409)
     from app.agent_authority import authorize_tool, policy_for_turn, validate_snapshot
 

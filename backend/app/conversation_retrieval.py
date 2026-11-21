@@ -9,6 +9,7 @@ from contextlib import contextmanager, nullcontext
 from app import conversation_index as index
 from app.conversation_log import read
 from app.errors import AppError
+from app.history_policy import cursor_scope
 from app.resource_access import SESSION_VISIBLE
 from app.retrieval_engine import terms, vector_literal
 from app.values import digest, jsonb, uid
@@ -265,7 +266,10 @@ def search(db, execution, arguments, settings, engine):
                         "accepted": [c["source_id"] for c in accepted],
                     }
                 ),
-                jsonb({"before_source_seq": execution.source_seq, "through_event_id": through}),
+                jsonb({
+                    "before_source_seq": execution.source_seq, "through_event_id": through,
+                    "history_scope": cursor_scope(execution),
+                }),
                 "ok" if coverage["complete"] else "partial",
                 profile_id,
                 jsonb(coverage),
@@ -289,6 +293,7 @@ def page(db, execution, arguments, cursor, settings, engine):
             not row
             or row["query_plan"].get("version") != VERSION
             or row["query_plan"]["arguments"] != arguments
+            or row["scope_snapshot"].get("history_scope") != cursor_scope(execution)
         ):
             raise AppError("INVALID_ARGUMENT", "聊天候选游标与查询不一致。", 422)
         if settings is None or settings.conversation_semantic_mode != "on":

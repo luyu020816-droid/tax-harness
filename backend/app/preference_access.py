@@ -7,6 +7,7 @@ from app.errors import AppError
 from app.identity import assert_access
 from app.preference_rules import clean, display_format, preference_evidence
 from app.sources import add_source, assess, read_source
+from app.values import jsonb
 
 _GLOBAL = "@user"
 
@@ -155,6 +156,25 @@ def invalid_source(exc):
     return exc.code in ("ACCESS_DENIED", "SOURCE_INVALIDATED", "STATE_SOURCE_UNAVAILABLE")
 
 
+def answer_input_dependencies(conn, auth, sources):
+    rows = conn.execute(
+        "WITH input_sources AS (SELECT source_id,revision FROM sources WHERE user_id=%s "
+        "AND role='assistant' AND source_id=ANY(%s::uuid[])), "
+        "assessed AS (SELECT i.source_id,a.result_refs->'dependencies' AS refs FROM input_sources i "
+        "JOIN source_assessments a USING(source_id,revision) "
+        "WHERE a.purpose='answer_preferences' AND a.processor_version='1') "
+        "SELECT refs FROM assessed UNION ALL "
+        "SELECT c.manifest->'dependencies' FROM input_sources i JOIN runs r ON r.final_source_id=i.source_id "
+        "JOIN context_snapshots c USING(run_id) WHERE NOT EXISTS "
+        "(SELECT 1 FROM assessed a WHERE a.source_id=i.source_id)",
+        (auth.user_id, [ref["source_id"] for ref in sources]),
+    )
+    return [
+        dependency for row in rows for dependency in (row["refs"] or [])
+        if dependency.get("kind") == "preference"
+    ]
+
+
 def validate_dependencies(
     conn, auth, dependencies, company, *, reader_turn_id=None, historical=False
 ):
@@ -183,7 +203,28 @@ def validate_dependencies(
             raise AppError("SOURCE_INVALIDATED", "回答使用的偏好来源已失效。", 409) from exc
 
 
+def record_answer(conn, source, preferences, company):
+    unique = list({(ref["id"], ref["revision"]): ref for ref in preferences}.values())
+    conn.execute(
+        "INSERT INTO source_assessments(source_id,revision,purpose,processor_version,state,result_refs) "
+        "VALUES(%s,%s,'answer_preferences','1','accepted',%s)",
+        (source["source_id"], source["revision"], jsonb({"company_id": company, "dependencies": unique})),
+    )
+
+
 def validate_answer(conn, auth, source_id, *, company=None, reader_turn_id=None, historical=False):
+    record = conn.execute(
+        "SELECT a.result_refs FROM source_assessments a JOIN sources s USING(source_id,revision) "
+        "WHERE source_id=%s AND s.user_id=%s AND a.purpose='answer_preferences' AND a.processor_version='1'",
+        (source_id, auth.user_id),
+    ).fetchone()
+    if record:
+        result = record["result_refs"]
+        validate_dependencies(
+            conn, auth, result["dependencies"], company or result["company_id"],
+            reader_turn_id=reader_turn_id, historical=historical,
+        )
+        return
     for record in conn.execute(
         "SELECT c.manifest FROM context_snapshots c JOIN runs r USING(run_id) "
         "WHERE r.final_source_id=%s",

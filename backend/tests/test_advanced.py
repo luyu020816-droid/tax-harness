@@ -355,10 +355,10 @@ def test_context_ablation_cannot_call_disabled_search(db, settings, execution_fa
     runtime = Runtime(db, actual, ScriptedModel([]))
     execution = execution_factory("甲企业过去的用途是什么？")
     payload, manifest, _ = context.assemble(db, actual, execution, [])
-    assert manifest["context_policy"]["history_search"] is True
+    assert manifest["context_policy"]["history_search"] is False
     assert manifest["context_policy"]["policy"] == "conversation-log-v1"
     names = {d["function"]["name"] for d in payload["tools"]}
-    assert "search_history" not in names and "read_summary_source" not in names
+    assert not {"search_history", "search_conversations", "read_summary_source"} & names
     output, _ = runtime.tools.execute(
         execution, tool("search_history", {"company_id": "C001", "query": "用途"})["tool_calls"][0]
     )

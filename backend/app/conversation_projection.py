@@ -51,8 +51,13 @@ def groups(db, execution, covered=(), *, excluded=None, preserve_recent=0):
                 refs = []
                 user_text = None
                 assistant_text = None
-                try:
-                    for source in sources:
+                assistant_unavailable = False
+                for source in sources:
+                    if source["role"] == "assistant" and str(source["source_id"]) != str(
+                        row["final_response_ref"]
+                    ):
+                        continue
+                    try:
                         if (
                             not session["selected_company_id"]
                             and source["scope_kind"] != "user_private"
@@ -69,10 +74,6 @@ def groups(db, execution, covered=(), *, excluded=None, preserve_recent=0):
                             from app.conversation_log import read
 
                             read(conn, execution.auth, str(source["source_id"]))
-                        if source["role"] == "assistant" and str(source["source_id"]) != str(
-                            row["final_response_ref"]
-                        ):
-                            continue
                         if source["role"] == "user":
                             user_text = source["content"]
                         else:
@@ -80,16 +81,18 @@ def groups(db, execution, covered=(), *, excluded=None, preserve_recent=0):
                         refs.append(
                             {"source_id": str(source["source_id"]), "revision": source["revision"]}
                         )
-                except AppError as exc:
-                    if exc.code not in (
-                        "SOURCE_INVALIDATED",
-                        "RESOURCE_NOT_FOUND",
-                        "SCOPE_MISMATCH",
-                        "ACCESS_DENIED",
-                    ):
-                        raise
-                    excluded.append({"turn_id": str(row["turn_id"]), "reason": exc.code})
-                    continue
+                    except AppError as exc:
+                        if exc.code not in (
+                            "SOURCE_INVALIDATED",
+                            "RESOURCE_NOT_FOUND",
+                            "SCOPE_MISMATCH",
+                            "ACCESS_DENIED",
+                        ):
+                            raise
+                        assistant_unavailable |= source["role"] == "assistant"
+                        excluded.append({
+                            "turn_id": str(row["turn_id"]), "reason": exc.code, "role": source["role"],
+                        })
                 if user_text is None or not refs:
                     continue
                 is_covered = all(r["source_id"] in covered for r in refs)
@@ -100,7 +103,7 @@ def groups(db, execution, covered=(), *, excluded=None, preserve_recent=0):
                 # Historical tools are historical evidence, never replayed side effects.
                 events = (
                     []
-                    if is_covered
+                    if is_covered or assistant_unavailable
                     else conn.execute(
                         "SELECT e.payload,e.run_id FROM run_events e JOIN runs r USING(run_id) "
                         "WHERE e.turn_id=%s AND e.kind='model_finished' AND r.final_source_id IS NOT NULL ORDER BY e.event_seq",
@@ -179,6 +182,8 @@ def groups(db, execution, covered=(), *, excluded=None, preserve_recent=0):
                         "role": "assistant",
                         "content": assistant_text
                         if assistant_text is not None
+                        else "（该轮最终答复当前不可作为上下文，原有效提问仍可核对。）"
+                        if assistant_unavailable
                         else f"（该轮状态为{row['status']}，没有可核验的最终助手回复；不得据此推断操作成功。）",
                     }
                 )

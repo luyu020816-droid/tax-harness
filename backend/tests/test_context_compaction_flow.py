@@ -5,7 +5,7 @@ import pytest
 from test_runtime import ScriptedModel, final, model_settings
 
 from app import compaction_requests, turns
-from app.context import assemble
+from app.context import assemble, estimate_tokens
 from app.context_preview import preview
 from app.errors import AppError
 from app.identity import Identity, create_session
@@ -105,3 +105,40 @@ async def test_pressure_starts_automatic_compaction(db, settings):
             "SELECT 1 FROM run_events WHERE turn_id=%s AND kind='context_compacted'",
             (turn["turn_id"],),
         ).fetchone()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("manual", [False, True])
+async def test_ctx01_recent_five_can_be_compacted_under_the_hard_limit(db, settings, manual):
+    from test_conversation_context import settled
+
+    from app.agent_profiles import AgentDraft, create_draft, publish, set_enabled
+
+    auth = Identity("U001")
+    session = str(create_session(db, auth, "C001")["session_id"])
+    draft = create_draft(
+        db, auth, AgentDraft(
+            name="上下文测试", model_profile_id="default", knowledge_mode="authorized",
+        ),
+    )
+    agent = publish(db, auth, draft["agent_id"], draft["revision"])
+    set_enabled(db, auth, agent["agent_id"], agent["revision"], True)
+    for index in range(5):
+        prefix = "不得外发。票号F002尚待核对。" if index == 0 else ""
+        settled(db, session, prefix + "普通交流" * 550)
+    config = model_settings(settings).model_copy(update={"input_budget": 16000})
+    model = ScriptedModel([final("收到。")], auto_summary=True)
+    runtime = Runtime(db, config, model, agent_runtime_enabled=True)
+    if manual:
+        turn = compaction_requests.accept(db, auth, session, uid(), config, agent_id=agent["agent_id"])
+    else:
+        turn = turns.accept_turn(db, auth, session, uid(), "继续。", agent_id=agent["agent_id"])
+    execution = runtime.claim()
+    assert execution and execution.turn_id == turn["turn_id"]
+    await runtime.run(execution)
+    if manual:
+        assert compaction_requests.read(db, auth, session, turn["turn_id"])["result"]["outcome"] == "succeeded"
+    else:
+        assert turns.read_turn(db, auth, turn["turn_id"])["status"] == "completed"
+        assert "票号F002尚待核对。" in json.dumps(model.requests[-1], ensure_ascii=False)
+    assert model.requests and all(estimate_tokens(payload) <= 16000 for payload in model.requests)

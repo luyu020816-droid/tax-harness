@@ -73,6 +73,65 @@ def summary_message(source):
 
 
 @pytest.mark.asyncio
+async def test_ctx02_long_prefix_does_not_hide_prohibitions_and_open_items(
+    db, settings, source_factory, execution_factory,
+):
+    from app.context_scope import find_summary
+    from app.summary_evidence import pack, validate
+
+    source = source_factory("普通背景" * 200 + "。不得外发。票号F002尚待核对。")
+    group = closed_group(db, source)
+    execution = execution_factory("继续")
+    assert await compact(
+        db, model_settings(settings), ScriptedModel([summary_message(source)]),
+        execution, [group], 1,
+    )
+    with db.transaction(readonly=True) as conn:
+        summary = find_summary(conn, execution, "C001", execution.expected_epoch)
+        data = validate(conn, execution, summary["content"], summary["covered_sources"])
+        assert {"不得外发。", "票号F002尚待核对。"} <= {
+            anchor["quote"] for anchor in data["protected_excerpts"]
+        }
+        with pytest.raises(AppError, match="必需"):
+            validate(conn, execution, pack("已覆盖所有来源。", []), summary["covered_sources"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed_company", ["C001", "C002"])
+async def test_ar04_summary_publication_is_fenced_by_its_company(
+    db, settings, source_factory, execution_factory, changed_company,
+):
+    from app.context_scope import find_summary
+
+    source = source_factory("禁止外发。背景材料。" * 110)
+    group = closed_group(db, source)
+    execution = execution_factory("继续")
+    execution.memory_companies = frozenset({"C001"})
+    saved = None
+
+    def change_during_summary(_payload):
+        nonlocal saved
+        saved = change_preference(
+            db, execution.auth, action="remember", scope=changed_company,
+            key="report_limit", value="金额必须由财务复核。", request_id=str(source["source_id"]),
+        )
+        return summary_message(source)
+
+    pending = compact(
+        db, model_settings(settings), ScriptedModel([change_during_summary]),
+        execution, [group], 1,
+    )
+    if changed_company == "C001":
+        with pytest.raises(AppError) as error:
+            await pending
+        assert error.value.code == "STALE_CONTEXT"
+    else:
+        assert await pending
+        with db.transaction(readonly=True) as conn:
+            assert find_summary(conn, execution, "C001", saved["memory_epoch"])
+
+
+@pytest.mark.asyncio
 async def test_M11_summary_is_derived_and_original_remains(
     db, settings, admin, source_factory, execution_factory
 ):

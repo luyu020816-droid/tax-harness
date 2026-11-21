@@ -61,6 +61,28 @@ def test_global_tool_switch_filters_legacy_context_and_invalidates_old_payload(
     assert "get_rules" not in names and "lookup_knowledge" not in names
 
 
+@pytest.mark.asyncio
+async def test_ar06_agent_without_history_can_explain_the_boundary(db, settings):
+    from test_runtime import ScriptedModel, answer_plan
+
+    from app.identity import create_session
+    from app.runtime import Runtime
+    from app.turns import accept_turn, read_turn
+
+    auth = Identity("U001")
+    draft = create_draft(db, auth, AgentDraft(name="限制历史检索", model_profile_id="default"))
+    agent = publish(db, auth, draft["agent_id"], draft["revision"])
+    set_enabled(db, auth, agent["agent_id"], agent["revision"], True)
+    session = str(create_session(db, auth, "C001")["session_id"])
+    turn = accept_turn(db, auth, session, uid(), "回顾我昨天在其他会话说的话", agent_id=agent["agent_id"])
+    model = ScriptedModel([answer_plan(blocks=[{"type": "explanation", "code": "conversation_boundary"}])])
+    runtime = Runtime(db, model_settings(settings), model, agent_runtime_enabled=True)
+    await runtime.run(runtime.claim())
+    result = read_turn(db, auth, turn["turn_id"])
+    assert result["status"] == "completed", result["error"]
+    assert "当前 Agent 无权检索其他会话" in result["final_message"]
+
+
 def test_context_uses_pinned_agent_and_skill_and_filters_tools(db, settings, execution_factory):
     auth = Identity("U001")
     skill = publish_skill(

@@ -29,8 +29,8 @@ def summary_key(conn, execution, binding=None):
 
 
 def find_summary(conn, execution, scope, epoch, *, lock=False, binding=None):
-    return conn.execute(
-        "SELECT * FROM summaries WHERE user_id=%s AND session_id=%s AND scope=%s AND memory_epoch=%s AND agent_scope=%s AND status='active' ORDER BY generation DESC LIMIT 1"
+    row = conn.execute(
+        "SELECT * FROM summaries WHERE user_id=%s AND session_id=%s AND scope=%s AND memory_epoch<=%s AND agent_scope=%s AND status='active' ORDER BY generation DESC LIMIT 1"
         + (" FOR UPDATE" if lock else ""),
         (
             execution.auth.user_id,
@@ -40,6 +40,13 @@ def find_summary(conn, execution, scope, epoch, *, lock=False, binding=None):
             summary_key(conn, execution, binding),
         ),
     ).fetchone()
+    from app.memory_changes import compatible_epoch
+
+    if row and compatible_epoch(
+        conn, execution.auth, {scope} if scope != "@user" else (), row["memory_epoch"], epoch,
+    ):
+        return row
+    return None
 
 
 def filter_history(conn, snapshot, groups, excluded=None):

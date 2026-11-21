@@ -24,7 +24,7 @@ test('history quote preserves role, continues exact text, opens original session
         companies: [{ company_id: 'C001', name: '甲企业', can_read: true, can_update: true }],
       });
     if (path === '/sessions') return reply([session]);
-    if (path === '/tasks') return reply([]);
+    if (path === '/tasks' || path === '/agents') return reply([]);
     if (path.endsWith('/context-usage'))
       return reply({ status: 'no_calls', input_tokens: 0, effective_window: 100000 });
     if (path === '/conversations/sessions/original') return reply(session);

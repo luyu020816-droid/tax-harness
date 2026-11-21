@@ -11,7 +11,7 @@ from app.answer_renderer import direct_conversation_topic, render
 from app.config import Settings
 from app.errors import AppError
 from app.events import emit
-from app.execution import Execution, guard
+from app.execution import Execution, guard, memory_is_current
 from app.identity import Identity, assert_access, owned
 from app.model import ModelAdapter
 from app.model_connection import DefaultModelConnection, default_version_in
@@ -304,6 +304,9 @@ class Runtime:
                 model_configuration=(model_settings, model)
                 if self.model_connection or binding
                 else None,
+                memory_companies=frozenset(
+                    (*mentioned_companies(conn, turn["text"]), session["selected_company_id"])
+                ) - {None},
             )
 
     async def _worker(self):
@@ -404,9 +407,15 @@ class Runtime:
 
             summary = find_summary(conn, execution, scope, execution.expected_epoch)
             if summary:
-                validate_summary(conn, execution, summary["content"], summary["covered_sources"])
+                try:
+                    validate_summary(conn, execution, summary["content"], summary["covered_sources"])
+                except AppError as exc:
+                    if exc.code not in ("SUMMARY_INVALID", "SOURCE_INVALIDATED", "ACCESS_DENIED"):
+                        raise
+                    summary = None
         history = conversation_groups(
-            self.db, execution, summary["covered_sources"] if summary else [], preserve_recent=5
+            self.db, execution, summary["covered_sources"] if summary else [],
+            preserve_recent=context.RECENT_DIALOGUE_TURNS,
         )
         from app.agent_authority import context_configuration
         from app.context_scope import filter_history
@@ -414,7 +423,21 @@ class Runtime:
         with self.db.transaction(readonly=True) as conn:
             config = context_configuration(conn, execution.turn_id)
             history = filter_history(conn, config["snapshot"] if config else None, history)
-        candidates = [group for group in history[:-5] if not group["covered"]]
+        candidates = [
+            group for group in history[:-context.RECENT_DIALOGUE_TURNS] if not group["covered"]
+        ]
+        if any(not group["covered"] for group in history):
+            _, _, over_budget = context.assemble(
+                self.db,
+                settings.model_copy(update={"context_auto_compact": True}),
+                execution,
+                [],
+                proactive_compact=False,
+            )
+            candidates = sorted(
+                {group["turn_id"]: group for group in [*candidates, *over_budget]}.values(),
+                key=lambda group: group["source_seq"],
+            )
         if not candidates:
             with self.db.transaction() as conn:
                 guard(conn, execution)
@@ -744,8 +767,8 @@ class Runtime:
                             "SELECT memory_epoch FROM users WHERE user_id=%s",
                             (execution.auth.user_id,),
                         ).fetchone()["memory_epoch"]
-                    if epoch != execution.expected_epoch:
-                        raise
+                        if not memory_is_current(conn, execution, epoch):
+                            raise
                     groups = []
                     stale_retry = True
                     payload, manifest, _dropped = await asyncio.to_thread(
@@ -1139,10 +1162,9 @@ class Runtime:
         tasks._revision(
             conn, task, "waiting_user", [{"source_id": execution.source_id}], execution.source_seq
         )
-        conn.execute(
-            "UPDATE users SET memory_epoch=memory_epoch+1 WHERE user_id=%s",
-            (execution.auth.user_id,),
-        )
+        from app.memory_changes import bump_task_memory
+
+        bump_task_memory(conn, execution.auth, company, execution.source_id, event="waiting")
         return {**pending, "task_id": str(task["task_id"]), "task_generation": task["generation"]}
 
     def finish(self, execution, reply: FinalReply, payload, manifest, verified_knowledge=None):
@@ -1199,13 +1221,11 @@ class Runtime:
                     "UPDATE turns SET continuation_of_turn_id=%s WHERE turn_id=%s",
                     (reply.resume_turn_id, execution.turn_id),
                 )
-                conn.execute(
-                    "UPDATE users SET memory_epoch=memory_epoch+1 WHERE user_id=%s",
-                    (execution.auth.user_id,),
-                )
-                conn.execute(
-                    "UPDATE summaries SET status='invalidated' WHERE user_id=%s AND status='active'",
-                    (execution.auth.user_id,),
+                from app.memory_changes import bump_task_memory
+
+                bump_task_memory(
+                    conn, execution.auth, (old["pending_clarification"] or {}).get("company_id"),
+                    execution.source_id, event="resolved",
                 )
             pending = None
             if reply.status == "waiting_user":
@@ -1259,6 +1279,9 @@ class Runtime:
                 source_seq=execution.source_seq,
                 companies=answer_companies,
             )
+            from app.preference_access import record_answer
+
+            record_answer(conn, source, reply.preference_dependencies, manifest["company_id"])
             assess(conn, str(source["source_id"]), "no_change")
             assess(conn, execution.source_id, "accepted" if pending else "no_change")
             advance_progress(conn, execution.auth)

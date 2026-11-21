@@ -56,7 +56,7 @@ explanation: {"type":"explanation","code":"acknowledged/no_changes/independent_t
 search_knowledge的ok只说明检索与范围状态正常，不代表候选一定回答了问题。若原文不支持答案，使用knowledge_answer的insufficient与空claims，不要引用无关内容；检索不可用或覆盖不完整应据真实状态说明。
 本轮知识检索成功后不要附加chat_answer：程序会说明证据不足；确需补充用户信息时使用waiting_user和clarification，由程序生成追问。其他已完成事项仍用对应结果块交付。
 对于宽泛的制度问题，先检查本轮检索到的全部候选证据，挑选直接相关且适用的条款，再组织分别带引用的事实和条件；不要因只写了住宿就声称检索结果没有交通条款。没有检索到不等于整份资料不存在，范围不完整应说明本次检索不足。
-用户问其他会话说过什么时，使用explanation的conversation_boundary说明普通会话不自动参与召回；不要声称过去没有说过，不反复追问月份，也不搜索其他会话。当前会话追问仍使用当前上下文，正式任务和明确保存的偏好仍可读取。
+历史检索按本轮 conversation_retrieval 模式处理。当前会话追问使用现有上下文，正式任务和明确保存的偏好仍可读取。
 prepare_knowledge_text成功后，最终必须用{"type":"result","result_ref":"实际草稿结果引用","view":"knowledge_draft"}展示草稿，不能用acknowledged/no_changes代替卡片；草稿仅待用户提交，绝不是已入库。
 """
 
@@ -92,7 +92,13 @@ def validate_tool_pairs(messages: list[dict]) -> None:
 
 
 def _valid_group(conn, execution, group, epoch):
-    if group.get("memory_epoch", epoch) != epoch:
+    from app.memory_changes import compatible_epoch
+
+    companies = execution.memory_companies | {
+        data["company_id"] for result in group.get("results", [])
+        if (data := result.get("data") or {}).get("company_id")
+    }
+    if not compatible_epoch(conn, execution.auth, companies, group.get("memory_epoch", epoch), epoch):
         return False
     for ref in group.get("sources", []):
         try:
@@ -121,15 +127,23 @@ def assemble(
     budget=None,
     proactive_compact=True,
 ) -> tuple:
-    core = load_core(db, execution.auth, execution.session_id, turn_id=execution.turn_id)
-    if core["memory_epoch"] != execution.expected_epoch:
-        raise AppError("STALE_CONTEXT", "本轮执行期间记忆或任务已变更，请使用新状态继续。", 409)
+    with db.transaction(readonly=True) as conn:
+        source = read_source(conn, execution.auth, execution.source_id, allow_suppressed=True)
+    excluded_preferences = []
+    core = load_core(
+        db, execution.auth, execution.session_id, turn_id=execution.turn_id,
+        request_text=source["content"], excluded_preferences=excluded_preferences,
+    )
+    from app.execution import memory_is_current
+
+    with db.transaction(readonly=True) as conn:
+        if not memory_is_current(conn, execution, core["memory_epoch"]):
+            raise AppError("STALE_CONTEXT", "本轮执行期间记忆或任务已变更，请使用新状态继续。", 409)
     frame = prepare_frame(db, execution, core)
     with db.transaction(readonly=True) as conn:
         from app.agent_authority import context_configuration, restrict_knowledge
 
         agent_config = context_configuration(conn, execution.turn_id)
-        source = read_source(conn, execution.auth, execution.source_id, allow_suppressed=True)
         from app.invoice_imports import upload_metadata
 
         dataset_profile = conn.execute(
@@ -186,7 +200,12 @@ def assemble(
             (execution.auth.user_id, execution.session_id),
         ).fetchone()
         groups = [g for g in tool_groups if _valid_group(conn, execution, g, core["memory_epoch"])]
-        history_navigation = None  # No cross-session conversation navigation enters model input.
+        from app.history_policy import next_page, requests_other_sessions
+
+        history_requested = requests_other_sessions(
+            conn, execution.auth, execution.session_id, execution.source_seq, source["content"],
+        )
+        history_page = next_page(conn, execution, source["content"]) if history_requested else None
         from app.context_scope import find_summary, summary_key
 
         assembled_summary_scope = summary_key(conn, execution)
@@ -228,7 +247,6 @@ def assemble(
         )
     state = {
         **core,
-        "conversation_retrieval": "independent_history_tools",
         "history_coverage": {
             "excluded_groups": len(excluded_history),
             "complete": not excluded_history,
@@ -244,8 +262,6 @@ def assemble(
         **({"workbook_followup_unavailable": True} if workbook_followup_unavailable else {}),
         "last_visible_view": safe_json(view),
     }
-    if history_navigation:
-        state["history_navigation"] = history_navigation
     checklist_prompt = (
         "\nrequest_frame.request_items仅核对明确事项，不是写授权或完整需求识别。"
         "逐项交付对应企业月份的真实结果；漏项须补办，范围缺失才追问，失败如实反馈。"
@@ -270,20 +286,6 @@ def assemble(
             "\n上一轮 Excel 资料在当前版本、企业或 Agent 权限下不能继续查询。"
             "如果用户要追问该表格，直接请用户从知识资料中重新选择一个有效 Excel，"
             "不要根据旧结果或其他工具给出该表的数字。无关的新任务仍按原流程办理。"
-        )
-    mandatory = [
-        {
-            "role": "system",
-            "content": SYSTEM_PROMPT + checklist_prompt + workbook_prompt + "\n正式状态：\n" + canonical(state),
-        }
-    ]
-    if summary:
-        mandatory.append(
-            {
-                "role": "system",
-                "content": "历史导航摘要（必要时回原文，不能覆盖当前正式状态）："
-                + summary["content"],
-            }
         )
     current = {"role": "user", "content": source["content"]}
     extras = [message for group in groups for message in group["messages"]]
@@ -321,18 +323,44 @@ def assemble(
             for d in definitions
             if d["function"]["name"] not in ("prepare_invoice_import", "get_invoice_import")
         ]
-    definitions = [
-        d for d in definitions if d["function"]["name"] not in ("search_history", "read_history")
-    ]
+    unavailable = {"search_history", "read_history"}
+    if not history_requested:
+        unavailable.add("search_conversations")
+    definitions = [d for d in definitions if d["function"]["name"] not in unavailable]
     if not summary:
         definitions = [d for d in definitions if d["function"]["name"] != "read_summary_source"]
     if (
-        execution.reference_context
+        history_requested
+        or execution.reference_context
         or execution.import_context
         or attachments
         or knowledge_attachments
     ):
         definitions = reference_definitions(definitions)
+    from app.history_policy import availability, instruction
+
+    state["conversation_retrieval"] = availability(history_requested, definitions)
+    history_prompt = instruction(state["conversation_retrieval"])
+    if history_page and state["conversation_retrieval"] == "explicit":
+        state["history_page"] = history_page
+        history_prompt += (
+            "\n根据 history_page 状态续页。ready 时用 search_conversations 和 arguments。"
+            "end 或 stale 时用 explanation，code=history_page_boundary。"
+        )
+    mandatory = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT + checklist_prompt + workbook_prompt + history_prompt
+            + "\n正式状态：\n" + canonical(state),
+        }
+    ]
+    if summary:
+        mandatory.append(
+            {
+                "role": "system",
+                "content": "历史导航摘要（必要时回原文，不能覆盖当前正式状态）：" + summary["content"],
+            }
+        )
     if agent_config:
         from app.agent_capabilities import missing_actions, offered_actions
 
@@ -377,8 +405,12 @@ def assemble(
             target = max(int(limit * 0.65), count - history_cost + 1024)
         if count <= limit and (count <= target or len(selected) <= RECENT_DIALOGUE_TURNS):
             break
-        if len(selected) > RECENT_DIALOGUE_TURNS:
-            dropped.append(selected.pop(0))
+        if len(selected) > RECENT_DIALOGUE_TURNS or (
+            selected and count > limit and settings.context_auto_compact
+        ):
+            oldest = selected.pop(0)
+            if not oldest.get("covered"):
+                dropped.append(oldest)
             continue
         from app.telemetry import input_composition
 
@@ -483,14 +515,25 @@ def assemble(
                 "priority_dialogue_turns": RECENT_DIALOGUE_TURNS,
                 "use_summary": settings.context_use_summary,
                 "auto_compact": settings.context_auto_compact,
-                "history_search": True,
+                "history_search": state["conversation_retrieval"] == "explicit",
             },
+            "conversation_retrieval": state["conversation_retrieval"],
             "request_frame": frame,
             "company_id": core["selected_company_id"],
             "memory_epoch": core["memory_epoch"],
+            "memory_companies": sorted(
+                execution.memory_companies | set(heads)
+                | {scope["company_id"] for scope in scope_refs}
+                | {
+                    data["company_id"]
+                    for group in groups for result in group.get("results", [])
+                    if (data := result.get("data") or {}).get("company_id")
+                }
+            ),
             "task": core["task"],
             "task_evidence": core.get("task_evidence"),
             "preferences": core["preferences"],
+            "excluded_preferences": excluded_preferences,
             "pending_imports": core["pending_imports"],
             "current_attachments": safe_json(attachments),
             "current_knowledge_attachments": safe_json(knowledge_attachments),
@@ -521,7 +564,14 @@ def assemble(
 
 def validate(db, execution: Execution, payload: dict, manifest: dict, *, conn=None) -> None:
     def check(c):
-        guard(c, execution, shared=True)
+        user = guard(c, execution, shared=True)
+        from app.memory_changes import compatible_epoch
+
+        if not compatible_epoch(
+            c, execution.auth, set(manifest.get("memory_companies", [])),
+            manifest["memory_epoch"], user["memory_epoch"],
+        ):
+            raise AppError("STALE_CONTEXT", "输入依赖的任务或记忆已变化，请重新装配。", 409)
         from app.context_scope import summary_key
 
         if "agent_summary_scope" in manifest and manifest["agent_summary_scope"] != summary_key(

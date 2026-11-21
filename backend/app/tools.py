@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from app import business, invoice_write, preferences, rules, tasks
 from app.errors import AppError
 from app.events import emit
-from app.execution import Execution, guard
+from app.execution import Execution, guard, memory_is_current
 from app.identity import assert_access
 from app.request_evidence import bind_scope, require_period, require_task_company, validate_scope
 from app.sources import add_source, assess, read_source
@@ -232,6 +232,33 @@ class ToolExecutor:
             return public_web.search(request)
         if name in ("search_conversations", "read_conversation"):
             from app import conversation_history
+            from app.history_policy import (
+                can_search_other_sessions,
+                company_scope,
+                next_page,
+                requests_other_sessions,
+            )
+
+            with db.transaction(readonly=True) as conn:
+                source = read_source(conn, auth, execution.source_id, allow_suppressed=True)
+                cross_session = requests_other_sessions(
+                    conn, auth, execution.session_id, execution.source_seq, source["content"],
+                )
+                if name == "search_conversations" and not cross_session:
+                    raise AppError(
+                        "HISTORY_INTENT_REQUIRED", "需要用户明确要求回顾其他会话。", 403,
+                    )
+                if name == "search_conversations":
+                    page = next_page(conn, execution, source["content"])
+                    if page and page["status"] != "ready":
+                        raise AppError(
+                            "HISTORY_PAGE_BOUNDARY", "历史页已读完或续页范围已失效。", 409,
+                        )
+                    if page:
+                        args = page["arguments"]
+                if cross_session and name == "read_conversation":
+                    cross_session = can_search_other_sessions(conn, execution.turn_id)
+                execution.history_companies = company_scope(conn, execution, source["content"])
 
             execution.reference_context = True
             result = (
@@ -243,7 +270,9 @@ class ToolExecutor:
                     **args,
                 )
                 if name == "search_conversations"
-                else conversation_history.read_page(db, execution, **args)
+                else conversation_history.read_page(
+                    db, execution, current_session_only=not cross_session, **args,
+                )
             )
             # API evidence includes excerpt; avoid sending the same text twice to the model.
             result.pop("excerpt", None)
@@ -283,6 +312,12 @@ class ToolExecutor:
                 source = read_source(conn, auth, execution.source_id, allow_suppressed=True)
                 if name in ("get_task", "change_task", "check_purposes"):
                     require_task_company(conn, execution, args["company_id"], source)
+                    execution.memory_companies |= {args["company_id"]}
+                    epoch = conn.execute(
+                        "SELECT memory_epoch FROM users WHERE user_id=%s", (auth.user_id,)
+                    ).fetchone()["memory_epoch"]
+                    if not memory_is_current(conn, execution, epoch):
+                        raise AppError("STALE_CONTEXT", "目标企业的任务或记忆已变化，请重新办理。", 409)
                 elif (
                     (requested := mentioned_companies(conn, source["content"]))
                     and args["company_id"] not in requested
@@ -317,12 +352,18 @@ class ToolExecutor:
         if name in REFERENCE_MUTATIONS or (
             name == "manage_preference" and args.get("action") != "list"
         ):
+            from app.history_policy import requests_other_sessions
+
             with db.transaction(readonly=True) as conn:
                 attached = conn.execute(
                     "SELECT cardinality(upload_ids)+cardinality(knowledge_upload_ids)>0 AS attached FROM turns WHERE turn_id=%s",
                     (execution.turn_id,),
                 ).fetchone()["attached"]
-            if attached or execution.import_context or execution.reference_context:
+                source = read_source(conn, auth, execution.source_id, allow_suppressed=True)
+                history_requested = requests_other_sessions(
+                    conn, auth, execution.session_id, execution.source_seq, source["content"],
+                )
+            if attached or history_requested or execution.import_context or execution.reference_context:
                 raise AppError(
                     "NEEDS_CLARIFICATION",
                     "资料或附件问答轮次只读。请在单独消息中明确修改任务、偏好或既有发票。",

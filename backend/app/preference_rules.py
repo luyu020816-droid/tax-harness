@@ -33,6 +33,49 @@ _LENGTH_MODES = {
 }
 _LENGTH_KEYS = {"response_length", "answer_length", "response_style", "reply_style"}
 _SCENE_KEYS = {"body": "body_response_length", "appendix": "appendix_response_length"}
+_REPORT_NAME = r"(?:第(?:[0-9]{1,6}|[零一二三四五六七八九十]{1,4})类(?:年度)?附表|月报)"
+_EXCLUSIVE_REPORT = re.compile(rf"^(?:仅|只)(?:适用于|用于|限于|适用)?({_REPORT_NAME})(?:[:：，,]|$)")
+_REPORT_FORMAT = re.compile(r"^(月报)(?:输出)?格式(?:用|采用|为|[:：])")
+_REPORT_DIGITS = "零一二三四五六七八九"
+_REPORT_CONTINUATION = re.compile(r"^(?:请)?(?:继续|接着|按原口径|按上次口径|沿用上次口径)")
+
+
+def _report_key(name):
+    if name == "月报":
+        return name
+    index = name[1:name.index("类")]
+    if index.isdigit():
+        return int(index)
+    if "十" in index:
+        tens, _, units = index.partition("十")
+        if len(tens) <= 1 and len(units) <= 1 and "十" not in units:
+            return 10 * (_REPORT_DIGITS.index(tens) if tens else 1) + (
+                _REPORT_DIGITS.index(units) if units else 0
+            )
+    return _REPORT_DIGITS.index(index) if len(index) == 1 else index
+
+
+def report_scope(value):
+    if not isinstance(value, str):
+        return None
+    if match := _EXCLUSIVE_REPORT.match(clean(value)) or _REPORT_FORMAT.match(clean(value)):
+        return _report_key(match[1])
+    return None
+
+
+def applies_to_request(report, text):
+    if report is None or text is None:
+        return True
+    text = clean(text)
+    names = re.findall(_REPORT_NAME, text)
+    return report in {_report_key(name) for name in names} or (
+        report != "月报" and "附表" in text and not names
+    )
+
+
+def report_continuation(text):
+    text = clean(text) if text else ""
+    return bool(_REPORT_CONTINUATION.match(text) and not re.search(_REPORT_NAME, text))
 
 
 def clean(text):

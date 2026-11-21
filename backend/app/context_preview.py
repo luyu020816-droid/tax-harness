@@ -5,11 +5,12 @@ from dataclasses import dataclass
 from app.context import RECENT_DIALOGUE_TURNS, SYSTEM_PROMPT, estimate_tokens
 from app.conversation_projection import groups as conversation_groups
 from app.errors import AppError
+from app.history_policy import availability, instruction, requests_other_sessions
 from app.identity import Identity, owned
 from app.memory import load_core
 from app.model_requests import build_request
 from app.summary_evidence import validate as validate_summary
-from app.tool_schemas import tool_definitions
+from app.tool_schemas import reference_definitions, tool_definitions
 from app.values import canonical
 
 
@@ -54,13 +55,16 @@ def actual_usage(db, settings, auth, session_id):
 
 def preview(db, settings, auth, session_id, draft, *, binding=None):
     """Estimate without creating sources, bindings, turns or an Execution."""
-    core = load_core(db, auth, session_id, binding=binding)
+    core = load_core(db, auth, session_id, binding=binding, request_text=draft)
     with db.transaction(readonly=True) as conn:
         session = owned(conn, "sessions", "session_id", session_id, auth)
         user = conn.execute(
             "SELECT next_source_seq FROM users WHERE user_id=%s", (auth.user_id,)
         ).fetchone()
         projection = ProjectionScope(auth, session_id, user["next_source_seq"] + 1)
+        history_requested = requests_other_sessions(
+            conn, auth, session_id, projection.source_seq, draft,
+        )
         from app.context_scope import find_summary
 
         summary = find_summary(
@@ -93,11 +97,15 @@ def preview(db, settings, auth, session_id, draft, *, binding=None):
     from app.context_scope import filter_history
 
     unavailable = {"inspect_workbook", "query_workbook", "search_history", "read_history"}
+    if not history_requested:
+        unavailable.add("search_conversations")
     if not summary:
         unavailable.add("read_summary_source")
     definitions = [
         item for item in tool_definitions() if item["function"]["name"] not in unavailable
     ]
+    if history_requested:
+        definitions = reference_definitions(definitions)
     instructions = ""
     active, inactive = [], []
     with db.transaction(readonly=True) as conn:
@@ -131,7 +139,7 @@ def preview(db, settings, auth, session_id, draft, *, binding=None):
     # Keep these explicit placeholders, not invented real identifiers or facts.
     state = {
         **core,
-        "conversation_retrieval": "independent_history_tools",
+        "conversation_retrieval": availability(history_requested, definitions),
         "history_coverage": {"excluded_groups": 0, "complete": True},
         "request_frame": {"available_scope_refs": [], "estimated": True},
         "current_source": {"source_id": projection.turn_id, "source_seq": projection.source_seq},
@@ -145,7 +153,8 @@ def preview(db, settings, auth, session_id, draft, *, binding=None):
     messages = [
         {
             "role": "system",
-            "content": SYSTEM_PROMPT + instructions + "\n正式状态：\n" + canonical(state),
+            "content": SYSTEM_PROMPT + instructions + instruction(state["conversation_retrieval"])
+            + "\n正式状态：\n" + canonical(state),
         }
     ]
     if summary:

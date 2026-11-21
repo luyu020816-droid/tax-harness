@@ -4,6 +4,7 @@ import re
 
 from app.conversation_log import read
 from app.errors import AppError
+from app.history_policy import cursor_scope
 from app.history_retrieval import date_bound
 from app.resource_access import SESSION_VISIBLE
 from app.retrieval_engine import terms
@@ -69,12 +70,14 @@ def evidence_in(conn, auth, citation_id, *, reader_turn_id=None):
     if source["revision"] != row["source_revision"] or digest(excerpt) != row["excerpt_hash"]:
         raise AppError("SOURCE_INVALIDATED", "历史引用已失效。", 409)
     result = _view(source, str(citation_id), excerpt, row["char_start"], row["char_end"])
+    binding = row["scope_snapshot"].get("history_scope")
     result["neighbors"] = neighbors_in(
         conn,
         auth,
         source,
         row["scope_snapshot"].get("before_source_seq", source["source_seq"] + 1),
         row["query_plan"].get("arguments", {}), reader_turn_id=reader_turn_id,
+        company_scope=binding["companies"] if binding else None,
     )
     return result
 
@@ -132,13 +135,18 @@ def scope_in(conn, execution, arguments, before, through):
         if trusted and companies and not set(companies).issubset(trusted):
             raise AppError("SCOPE_MISMATCH", "历史搜索企业与本轮明确范围不一致。", 409)
         companies = trusted or companies
+    bound = getattr(execution, "history_companies", None)
+    if bound is not None:
+        if companies and not set(companies) <= set(bound):
+            raise AppError("SCOPE_MISMATCH", "搜索范围超出本轮授权企业。", 409)
+        companies = companies or bound
     for company in companies:
         assert_access(conn, execution.auth, company)
-    if companies:
+    if companies or bound is not None:
         conditions.append(
             "NOT EXISTS(SELECT 1 FROM source_scopes z WHERE z.source_id=x.source_id AND NOT(z.company_id=ANY(%(companies)s::text[])))"
         )
-        params["companies"] = companies
+        params["companies"] = list(companies)
     return conditions, params
 
 
@@ -175,7 +183,10 @@ def _lexical_search(
                 "SELECT * FROM history_queries WHERE query_id=%s AND user_id=%s",
                 (cursor, execution.auth.user_id),
             ).fetchone()
-            if not old or old["query_plan"].get("arguments") != normalized:
+            if (
+                not old or old["query_plan"].get("arguments") != normalized
+                or old["scope_snapshot"].get("history_scope") != cursor_scope(execution)
+            ):
                 raise AppError("INVALID_ARGUMENT", "历史游标与查询范围不一致。", 422)
             before = old["scope_snapshot"]["before_source_seq"]
             after = old["pagination"]["after_event_id"]
@@ -207,7 +218,10 @@ def _lexical_search(
                 query_id,
                 execution.auth.user_id,
                 jsonb({"kind": "conversation", "arguments": normalized}),
-                jsonb({"before_source_seq": before, "through_event_id": through}),
+                jsonb({
+                    "before_source_seq": before, "through_event_id": through,
+                    "history_scope": cursor_scope(execution),
+                }),
                 jsonb({"kind": "authorized_lexical", "semantic": False}),
                 jsonb(
                     {
@@ -250,10 +264,18 @@ def _lexical_search(
         }
 
 
-def read_page(db, execution, *, source_id, char_start=0):
+def read_page(db, execution, *, source_id, char_start=0, current_session_only=False):
     with db.transaction() as conn:
         reader_turn_id = getattr(execution, "turn_id", None)
         source = read(conn, execution.auth, source_id, reader_turn_id=reader_turn_id)
+        if current_session_only and source["session_id"] != str(execution.session_id):
+            raise AppError("HISTORY_INTENT_REQUIRED", "需要用户明确要求回读其他会话。", 403)
+        bound = getattr(execution, "history_companies", None)
+        if bound is not None and conn.execute(
+            "SELECT 1 FROM source_scopes WHERE source_id=%s AND NOT(company_id=ANY(%s::text[]))",
+            (source_id, list(bound)),
+        ).fetchone():
+            raise AppError("SCOPE_MISMATCH", "历史原文超出本轮授权企业。", 409)
         if source["source_seq"] >= execution.source_seq:
             raise AppError("SOURCE_INVALIDATED", "不能读取本轮或之后的历史记录。", 409)
         query_id = uid()
@@ -264,12 +286,15 @@ def read_page(db, execution, *, source_id, char_start=0):
                 query_id,
                 execution.auth.user_id,
                 jsonb({"kind": "conversation"}),
-                jsonb({"before_source_seq": execution.source_seq}),
+                jsonb({
+                    "before_source_seq": execution.source_seq, "history_scope": cursor_scope(execution),
+                }),
             ),
         )
         result = _evidence(conn, execution.auth, query_id, source, char_start)
         result["neighbors"] = neighbors_in(
-            conn, execution.auth, source, execution.source_seq, reader_turn_id=reader_turn_id
+            conn, execution.auth, source, execution.source_seq, reader_turn_id=reader_turn_id,
+            company_scope=bound,
         )
         return result
 
@@ -357,7 +382,7 @@ def search(
     return result
 
 
-def neighbors_in(conn, auth, source, before, filters=None, *, reader_turn_id=None):
+def neighbors_in(conn, auth, source, before, filters=None, *, reader_turn_id=None, company_scope=None):
     from app.conversation_index import ELIGIBLE
 
     filters = filters or {}
@@ -373,6 +398,8 @@ def neighbors_in(conn, auth, source, before, filters=None, *, reader_turn_id=Non
             (source["turn_id"],),
         ).fetchall()
     ]
+    if company_scope is not None:
+        companies = sorted(set(companies) & set(company_scope))
     result = []
     for direction, comparison, order in [("previous", "<", "DESC"), ("next", ">", "ASC")]:
         clauses = [

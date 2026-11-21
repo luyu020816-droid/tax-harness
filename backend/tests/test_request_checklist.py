@@ -132,7 +132,7 @@ def test_monthly_tools_require_an_evidenced_scope(
     names = {d["function"]["name"] for d in payload["tools"]}
     monthly = {"query_month", "get_rules", "check_purposes", "resolve_scope"}
     assert monthly <= names if available else not monthly & names
-    assert "search_conversations" in names
+    assert "search_conversations" not in names
 
 
 def test_explicit_months_and_following_rule_request_are_separate_obligations():
